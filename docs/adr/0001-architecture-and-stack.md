@@ -1,6 +1,6 @@
 # ADR-0001: Architecture and stack
 
-- Status: **Proposed** (awaiting Gate 1 owner approval)
+- Status: **Accepted** (Gate 1 approved by owner 2026-06-22)
 - Date: 2026-06-22
 - Decision owners: Technical Lead (proposes) / Product Owner (approves budget, timeline, vendor
   lock-in, product behaviour, risk)

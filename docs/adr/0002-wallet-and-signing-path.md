@@ -1,6 +1,6 @@
 # ADR-0002: Wallet support and signing/authentication path
 
-- Status: **Proposed** (awaiting Gate 1 owner approval; live use gated behind Gate 4 + legal)
+- Status: **Accepted** (Gate 1 approved 2026-06-22; live use still gated behind Gate 4)
 - Date: 2026-06-22
 - Decision owners: Technical Lead / Product Owner / Security owner
 

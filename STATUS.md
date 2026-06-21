@@ -4,7 +4,8 @@ _Last updated: 2026-06-22_
 
 ## Current gate
 
-Gate 0 — Requirements audit: **complete**. Awaiting Gate 1 (architecture & stack) approval.
+Gate 1 — Architecture & stack: **approved** (owner, 2026-06-22; ADR-0001 Option A + ADR-0002).
+Next executable: **Slice 0** (scaffolding) → **Slice 1** (read-only feed + market cockpit).
 
 ## Completed
 
@@ -22,11 +23,10 @@ Gate 0 — Requirements audit: **complete**. Awaiting Gate 1 (architecture & sta
 
 ## Blocked / owner input required
 
-- **A-001 (top blocker):** legal/geo opinion on operating from / serving Polymarket-blocked
-  jurisdictions (RU, US, 35+). **All execution- and identity-touching work is blocked** until this
-  is resolved. Only read-only public-data work may proceed meanwhile.
-- **Gate 1 approval** of the recommended stack (ADR-0001) and wallet path (ADR-0002).
-- `builderCode` (non-secret) to be provided when available.
+- **`builderCode` confirmation:** owner provided a value with the shape of an Ethereum private key
+  (`0x`+64 hex). Held unsaved pending confirmation it is the non-secret builderCode, not a key.
+- **Legal sign-off** still advised before enabling **live** trading (Gate 4); does not block
+  read-only or staging build work.
 
 ## Next checkpoint
 
@@ -38,9 +38,9 @@ the only build work unblocked by the legal status.
 
 | Slice | Gate | Status | Blocked by |
 |---|---|---|---|
-| 0 — scaffolding/CI/health/flags/audit skeleton | — | Pending Gate 1 | Gate 1 |
-| 1 — read-only feed + market cockpit | Gate 2 | Pending | Gate 1 (not legal) |
-| 2 — wallet login + allowlist + geo + profile/PnL | Gate 3 | Pending | A-001 legal |
-| 3 — manual trading (staging-only, flagged) | Gate 4 | Pending | A-001 legal + spike + security review |
-| 4 — conditional rules shadow mode | Gate 5 | Pending | Gate 1 |
+| 0 — scaffolding/CI/health/flags/audit skeleton | — | **Next** | — (Gate 1 approved) |
+| 1 — read-only feed + market cockpit | Gate 2 | Ready after Slice 0 | — |
+| 2 — wallet login + allowlist + profile/PnL (read-only) | Gate 3 | Ready after Slice 1 | — |
+| 3 — manual trading (staging-only, geo-gated, flagged) | Gate 4 | Pending | integration spike + security review + legal sign-off |
+| 4 — conditional rules shadow mode | Gate 5 | Pending | Slice 1 |
 | 5 — beta hardening / release | Gate 6 | Pending | prior slices |

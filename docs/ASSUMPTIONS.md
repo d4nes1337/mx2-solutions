@@ -3,11 +3,11 @@
 Status legend: **OPEN** (needs owner/legal input) · **WORKING** (acting on it until corrected) ·
 **RESOLVED**.
 
-## Top blocker
+## Geo / compliance posture
 
 | ID | Assumption / question | Status | Impact if wrong |
 |---|---|---|---|
-| A-001 | **Legal/geo:** operating a Polymarket terminal from, and serving, jurisdictions Polymarket fully blocks (RU, US, 35+) needs a legal opinion before any execution or identity work. Until then only read-only public-data work proceeds. | **OPEN — blocking** | Could make the whole execution product a no-go for the intended cohort; may also affect read-only hosting/ToS. |
+| A-001 | **Geo posture (owner decision 2026-06-22):** ship the read-only public product without geo gating; enforce Polymarket geoblock fail-closed **only at the trading/execution layer**. Read-only work is fully unblocked. | RESOLVED (D-004) | Read-only proceeds. Residual: a legal sign-off on live trading is still advised before Gate 4. |
 
 ## Product / scope
 
@@ -30,7 +30,7 @@ Status legend: **OPEN** (needs owner/legal input) · **WORKING** (acting on it u
 
 | ID | Assumption | Status |
 |---|---|---|
-| A-030 | Target stack is the TS modular monolith + worker (ADR-0001, Option A), pending Gate 1 approval. | OPEN (Gate 1) |
+| A-030 | Target stack is the TS modular monolith + worker (ADR-0001, Option A). | RESOLVED (Gate 1, 2026-06-22) |
 | A-031 | Infra target ~ EU Ireland single VPS + managed PostgreSQL, ~$120–130/mo (per `…/docs/07`). | WORKING |
 | A-032 | Owner manages all secrets (encryption master key, session secret, DB password, relayer key). None are shared with Claude. | RESOLVED (doc) |
 | A-033 | The 8 product brief docs stay in the gitignored inbox and are **not** committed; governance artifacts + ADRs are committed at root. | RESOLVED (owner) |
