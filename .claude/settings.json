@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(docker compose up *)",
+      "Bash(docker compose down *)",
+      "Bash(npm install *)",
+      "Bash(pnpm install *)",
+      "Bash(yarn install *)",
+      "Bash(bun install *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.production)",
+      "Read(./.env.production.local)",
+      "Read(./secrets/**)",
+      "Read(./config/credentials*.json)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Bash(git push *)",
+      "Bash(aws *)",
+      "Bash(terraform apply *)",
+      "Bash(terraform destroy *)",
+      "Bash(kubectl *)",
+      "Bash(printenv *)",
+      "Bash(env *)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": false,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "denyRead": [
+        "~/.aws",
+        "~/.ssh"
+      ],
+      "denyWrite": [
+        "/etc",
+        "/usr/local/bin"
+      ]
+    }
+  }
+}

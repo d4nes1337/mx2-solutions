@@ -1,0 +1,38 @@
+# --- Input inbox (owner-provided requirements kit; kept local, not committed) ---
+polymarket_claude_mvp_kit_v1/
+
+# Secrets and local configuration
+.env
+.env.local
+.env.*.local
+.env.production
+secrets/
+config/credentials*.json
+*.pem
+*.key
+*.p12
+
+# Dependencies / build output
+node_modules/
+.venv/
+venv/
+dist/
+build/
+.next/
+coverage/
+
+# Local databases and exports
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+exports/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude local-only preferences
+CLAUDE.local.md
+.claude/settings.local.json
