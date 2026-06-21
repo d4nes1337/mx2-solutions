@@ -64,10 +64,12 @@ demands. The worker is already a separate process, so the future split is low-co
 ## Consequences
 
 ### Positive
+
 - Fast first demo; shared types reduce contract drift; gasless relayer + V2 CLOB used natively.
 - Evaluator runs as an isolated process from day one.
 
 ### Negative / risks
+
 - Monolith discipline required (enforce module boundaries via lint/import rules).
 - Node money math needs explicit decimal handling and tested rounding (tie to CLOB tick-size model).
 - Single VPS is a single failure domain — acceptable for beta with daily backup + tested restore.

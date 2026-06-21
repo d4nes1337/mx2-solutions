@@ -11,24 +11,24 @@
 
 A **V2 SDK generation** is current. Target it:
 
-| Language | CLOB client | Relayer / builder client |
-|---|---|---|
-| TypeScript | `@polymarket/clob-client-v2` | `@polymarket/builder-relayer-client` |
-| Python | `py-clob-client-v2` | `py-builder-relayer-client` |
-| Rust | `polymarket_client_sdk_v2` (CLOB only) | — (use TS/Python) |
+| Language   | CLOB client                            | Relayer / builder client             |
+| ---------- | -------------------------------------- | ------------------------------------ |
+| TypeScript | `@polymarket/clob-client-v2`           | `@polymarket/builder-relayer-client` |
+| Python     | `py-clob-client-v2`                    | `py-builder-relayer-client`          |
+| Rust       | `polymarket_client_sdk_v2` (CLOB only) | — (use TS/Python)                    |
 
 Relayer operations (wallet deploy, approvals) are only available in TS/Python SDKs.
 
 ## 2. Base URLs
 
-| Surface | URL |
-|---|---|
-| CLOB REST | `https://clob.polymarket.com` |
-| Gamma (events/markets/search/tags/price-history) | `https://gamma-api.polymarket.com` |
-| Market WebSocket (public) | `wss://ws-subscriptions-clob.polymarket.com/ws/market` |
-| User WebSocket (authenticated) | `wss://ws-subscriptions-clob.polymarket.com/ws/user` |
-| Geoblock | `https://polymarket.com/api/geoblock` (note: on `polymarket.com`, not an API host) |
-| Builder registration | `https://polymarket.com/settings?tab=builder` |
+| Surface                                          | URL                                                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| CLOB REST                                        | `https://clob.polymarket.com`                                                      |
+| Gamma (events/markets/search/tags/price-history) | `https://gamma-api.polymarket.com`                                                 |
+| Market WebSocket (public)                        | `wss://ws-subscriptions-clob.polymarket.com/ws/market`                             |
+| User WebSocket (authenticated)                   | `wss://ws-subscriptions-clob.polymarket.com/ws/user`                               |
+| Geoblock                                         | `https://polymarket.com/api/geoblock` (note: on `polymarket.com`, not an API host) |
+| Builder registration                             | `https://polymarket.com/settings?tab=builder`                                      |
 
 ## 3. Authentication & order signing
 
@@ -52,7 +52,7 @@ Relayer operations (wallet deploy, approvals) are only available in TS/Python SD
   - Beacon (Polygon 137): `0x7A18EDfe055488A3128f01F563e5B479D92ffc3a`
 - **Signature type `POLY_1271` (value 3).** Orders are validated on-chain via **ERC-1271** on the
   deposit wallet (gasless, no user gas). Order signatures are **ERC-7739-wrapped** — longer than
-  standard ECDSA and **incompatible with normal EIP-712 order signing**. Wallet *batch* operations
+  standard ECDSA and **incompatible with normal EIP-712 order signing**. Wallet _batch_ operations
   (approvals) use normal 65-byte EIP-712 sigs over the `DepositWallet` `Batch` type.
 - **funder = maker = signer = deposit wallet address** (not the owner EOA).
 - Integration steps: (1) relayer `WALLET-CREATE` (no user signature in payload);

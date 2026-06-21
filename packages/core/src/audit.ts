@@ -1,0 +1,42 @@
+/**
+ * Append-only audit event domain types. Audit events are immutable: never
+ * updated or deleted. They form the backbone of the trading/conditional-rule
+ * trust chain (intent -> signature -> submission -> ack -> fill/cancel) and of
+ * security-relevant actions (auth, allowlist, kill switch, admin).
+ */
+export const AUDIT_ACTIONS = [
+  "auth.login",
+  "auth.wallet_linked",
+  "allowlist.checked",
+  "geoblock.checked",
+  "feature_flag.changed",
+  "kill_switch.toggled",
+  "order.intent",
+  "order.signed",
+  "order.submitted",
+  "order.acknowledged",
+  "order.filled",
+  "order.cancelled",
+  "rule.created",
+  "rule.state_changed",
+  "rule.triggered",
+  "admin.action",
+  "system.startup",
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+export interface AuditEvent {
+  readonly id: string;
+  /** Wallet address or "system"/"admin:<id>"; never a private key. */
+  readonly actor: string;
+  readonly action: AuditAction;
+  /** Stable reference to the affected entity, e.g. "order:<id>", "rule:<id>". */
+  readonly subject: string | null;
+  /** Non-sensitive structured context. Must never contain secrets. */
+  readonly metadata: Record<string, unknown>;
+  readonly createdAt: Date;
+}
+
+/** Input shape for emitting a new audit event (id/createdAt assigned by store). */
+export type NewAuditEvent = Omit<AuditEvent, "id" | "createdAt">;

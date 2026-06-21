@@ -1,0 +1,6 @@
+**/dist/**
+**/build/**
+**/.next/**
+**/coverage/**
+pnpm-lock.yaml
+polymarket_claude_mvp_kit_v1/

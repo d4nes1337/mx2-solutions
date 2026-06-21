@@ -20,6 +20,7 @@ dist/
 build/
 .next/
 coverage/
+*.tsbuildinfo
 
 # Local databases and exports
 *.sqlite

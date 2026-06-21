@@ -1,0 +1,40 @@
+{
+  "name": "mx2-solutions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Non-custodial Polymarket trading terminal — closed beta MVP",
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "pnpm --filter @mx2/db run generate",
+    "db:migrate": "pnpm --filter @mx2/db run migrate",
+    "dev:api": "pnpm --filter @mx2/api run dev",
+    "dev:worker": "pnpm --filter @mx2/worker run dev",
+    "compose:up": "docker compose up -d",
+    "compose:down": "docker compose down",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.31.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}

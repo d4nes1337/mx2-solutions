@@ -13,8 +13,9 @@ gasless validation via a relayer (see `docs/INTEGRATION_VERIFIED.md`). The owner
 
 ## Decision
 
-Support exactly one wallet path in MVP: **Deposit Wallet (ERC-1967 proxy) + `POLY_1271` (sig type 3)
-+ relayer**, via the V2 TS SDK.
+Support exactly one wallet path in MVP: \*\*Deposit Wallet (ERC-1967 proxy) + `POLY_1271` (sig type 3)
+
+- relayer\*\*, via the V2 TS SDK.
 
 ### Auth & signing flow
 
@@ -37,11 +38,11 @@ Support exactly one wallet path in MVP: **Deposit Wallet (ERC-1967 proxy) + `POL
 
 ## Trust boundaries
 
-| Zone | Holds | Never holds |
-|---|---|---|
-| Browser + wallet | primary private key, signs L1 challenge & order payloads | — |
-| Backend | session, encrypted per-user L2 creds, relayer key (backend-only), audit | primary private key, plaintext L2 secret in logs |
-| Polymarket upstream | matches/settles orders | — |
+| Zone                | Holds                                                                   | Never holds                                      |
+| ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------ |
+| Browser + wallet    | primary private key, signs L1 challenge & order payloads                | —                                                |
+| Backend             | session, encrypted per-user L2 creds, relayer key (backend-only), audit | primary private key, plaintext L2 secret in logs |
+| Polymarket upstream | matches/settles orders                                                  | —                                                |
 
 ## Threat-model notes (full model: `…/docs/05`)
 

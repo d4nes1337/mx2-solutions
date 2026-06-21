@@ -1,0 +1,22 @@
+# Local development dependencies. Not a production deployment.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mx2_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mx2
+      POSTGRES_PASSWORD: mx2_local_dev
+      POSTGRES_DB: polymarket_terminal
+    ports:
+      - "5432:5432"
+    volumes:
+      - mx2_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mx2 -d polymarket_terminal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mx2_pgdata:

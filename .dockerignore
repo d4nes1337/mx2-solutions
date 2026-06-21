@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.next
+**/coverage
+.git
+polymarket_claude_mvp_kit_v1
+.env
+.env.*
