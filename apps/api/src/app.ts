@@ -1,10 +1,22 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyCookie from "@fastify/cookie";
+import fastifyCors from "@fastify/cors";
 import type { AppConfig } from "@mx2/config";
 import type { Logger } from "@mx2/observability";
-import type { MarketSnapshotStore } from "@mx2/db";
-import type { GammaClient, ClobClient } from "@mx2/polymarket-client";
+import type {
+  AuditStore,
+  MarketSnapshotStore,
+  ChallengeStore,
+  UserStore,
+  SessionStore,
+  AllowlistStore,
+} from "@mx2/db";
+import type { GammaClient, ClobClient, DataClient } from "@mx2/polymarket-client";
 import { registerEventsRoutes } from "./routes/events.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { registerProfileRoutes } from "./routes/profile.js";
+import type {} from "./auth/types.js";
 
 /** Minimal surface the app needs from the database (keeps tests light). */
 export interface DbProbe {
@@ -15,9 +27,15 @@ export interface AppDeps {
   config: AppConfig;
   logger: Logger;
   db: DbProbe;
+  auditStore: AuditStore;
   marketSnapshots: MarketSnapshotStore;
+  challenges: ChallengeStore;
+  users: UserStore;
+  sessions: SessionStore;
+  allowlist: AllowlistStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
+  dataClient: DataClient;
 }
 
 /**
@@ -26,6 +44,20 @@ export interface AppDeps {
  */
 export const buildApp = (deps: AppDeps) => {
   const app = Fastify({ loggerInstance: deps.logger, disableRequestLogging: false });
+
+  // Expose req.user on every request (null until auth middleware sets it).
+  app.decorateRequest("user", null);
+
+  // CORS: in development allow any localhost origin (needed for the test HTML page).
+  // In staging/production the allowed origin must be set to the real frontend URL.
+  void app.register(fastifyCors, {
+    origin: deps.config.env === "development" ? (origin, cb) => cb(null, origin ?? true) : false,
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+  });
+
+  // Cookie support — required before any route that reads/sets the session cookie.
+  void app.register(fastifyCookie);
 
   // Liveness: the process is up and serving. Must not depend on downstreams.
   app.get("/healthz", async () => ({
@@ -50,11 +82,24 @@ export const buildApp = (deps: AppDeps) => {
 
   // Cast needed because our pino Logger is more specific than FastifyBaseLogger.
   const fastifyApp = app as unknown as FastifyInstance;
+
   registerEventsRoutes(fastifyApp, { gammaClient: deps.gammaClient });
   registerMarketsRoutes(fastifyApp, {
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
     marketSnapshots: deps.marketSnapshots,
+  });
+  registerAuthRoutes(fastifyApp, {
+    config: deps.config,
+    challenges: deps.challenges,
+    users: deps.users,
+    sessions: deps.sessions,
+    allowlist: deps.allowlist,
+    auditStore: deps.auditStore,
+  });
+  registerProfileRoutes(fastifyApp, {
+    dataClient: deps.dataClient,
+    sessions: deps.sessions,
   });
 
   return app;

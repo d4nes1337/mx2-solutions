@@ -5,3 +5,5 @@ export * from "./clob/schema.js";
 export * from "./clob/client.js";
 export * from "./ws/schema.js";
 export * from "./ws/market-client.js";
+export * from "./data/schema.js";
+export * from "./data/client.js";

@@ -15,6 +15,20 @@
       "when": 1782109752535,
       "tag": "0001_black_thing",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782129292986,
+      "tag": "0002_cultured_dragon_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782200000000,
+      "tag": "0003_auth_chain_id",
+      "breakpoints": true
     }
   ]
 }

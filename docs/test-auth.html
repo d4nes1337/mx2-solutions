@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MX2 — Auth + Profile Demo</title>
+    <style>
+      body {
+        font-family: monospace;
+        max-width: 820px;
+        margin: 40px auto;
+        background: #0f0f0f;
+        color: #e0e0e0;
+        padding: 0 20px;
+      }
+      h1 {
+        color: #7c9fff;
+      }
+      h2 {
+        color: #a0c4a0;
+        border-bottom: 1px solid #333;
+        padding-bottom: 6px;
+        margin-top: 32px;
+      }
+      button {
+        background: #1e3a5f;
+        color: #b8d4ff;
+        border: 1px solid #2d5a8a;
+        padding: 8px 16px;
+        cursor: pointer;
+        border-radius: 4px;
+        margin: 4px 2px;
+        font-family: monospace;
+      }
+      button:hover {
+        background: #2d5a8a;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      input {
+        background: #1a1a1a;
+        color: #e0e0e0;
+        border: 1px solid #444;
+        padding: 6px 10px;
+        width: 420px;
+        font-family: monospace;
+        border-radius: 4px;
+      }
+      pre {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        padding: 12px;
+        overflow-x: auto;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .ok {
+        color: #7dbb7d;
+      }
+      .err {
+        color: #e07070;
+      }
+      .dim {
+        color: #666;
+      }
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        margin-right: 6px;
+      }
+      .tag-ok {
+        background: #1a3a1a;
+        color: #7dbb7d;
+        border: 1px solid #3a6a3a;
+      }
+      .tag-err {
+        background: #3a1a1a;
+        color: #e07070;
+        border: 1px solid #6a3a3a;
+      }
+      .section {
+        margin-bottom: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MX2 Terminal — Auth Demo</h1>
+    <p class="dim">Open MetaMask before starting. API must be running on localhost:3001.</p>
+
+    <div class="section">
+      <label>API base URL: <input id="apiUrl" value="http://localhost:3001" /></label>
+    </div>
+    <div class="section">
+      <label
+        >EOA address (MetaMask):
+        <input id="address" value="0x77117F39dc33292c657a366643Dd995010b7E36d"
+      /></label>
+    </div>
+    <div class="section">
+      <label
+        >Proxy wallet (Polymarket):
+        <input id="proxyWallet" value="0x997C95D8BE61D5779EdfB49aAF5dD83d85f31434"
+      /></label>
+    </div>
+
+    <h2>Step 1 — Healthcheck</h2>
+    <button onclick="checkHealth()">GET /healthz</button>
+    <pre id="healthOut" class="dim">not run</pre>
+
+    <h2>Step 2 — Get login challenge</h2>
+    <button onclick="getChallenge()">GET /api/auth/challenge</button>
+    <pre id="challengeOut" class="dim">not run</pre>
+
+    <h2>Step 3 — Sign with MetaMask</h2>
+    <p class="dim">
+      Requires MetaMask installed and unlocked. Signs the EIP-712 typed data from step 2.
+    </p>
+    <button id="signBtn" onclick="signChallenge()" disabled>Sign with MetaMask</button>
+    <pre id="signOut" class="dim">waiting for step 2…</pre>
+
+    <h2>Step 4 — Verify signature</h2>
+    <button id="verifyBtn" onclick="verifySignature()" disabled>POST /api/auth/verify</button>
+    <pre id="verifyOut" class="dim">waiting for step 3…</pre>
+
+    <h2>Step 5 — Who am I?</h2>
+    <button id="meBtn" onclick="getMe()" disabled>GET /api/auth/me</button>
+    <button id="logoutBtn" onclick="logout()" disabled>POST /api/auth/logout</button>
+    <pre id="meOut" class="dim">waiting for step 4…</pre>
+
+    <h2>Step 6 — Portfolio</h2>
+    <button id="posBtn" onclick="getPositions()" disabled>GET /api/profile/positions</button>
+    <button id="histBtn" onclick="getHistory()" disabled>GET /api/profile/history</button>
+    <button id="pnlBtn" onclick="getPnl()" disabled>GET /api/profile/pnl</button>
+    <pre id="portfolioOut" class="dim">waiting for step 4…</pre>
+
+    <script>
+      let _nonce = null;
+      let _typedData = null;
+      let _signature = null;
+      let _signerAddress = null;
+
+      const api = () => document.getElementById("apiUrl").value.replace(/\/$/, "");
+      const addr = () => document.getElementById("address").value;
+      const proxy = () => document.getElementById("proxyWallet").value;
+
+      function display(id, data, isErr) {
+        const el = document.getElementById(id);
+        el.className = isErr ? "err" : "ok";
+        el.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+      }
+
+      async function fetchJson(url, opts) {
+        const res = await fetch(url, { credentials: "include", ...opts });
+        const text = await res.text();
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          json = { raw: text };
+        }
+        return { status: res.status, ok: res.ok, json };
+      }
+
+      async function checkHealth() {
+        try {
+          const { status, json } = await fetchJson(`${api()}/healthz`);
+          display("healthOut", { status, ...json }, !json || json.status !== "ok");
+        } catch (e) {
+          display("healthOut", `Error: ${e.message} — is pnpm dev:api running?`, true);
+        }
+      }
+
+      async function getChallenge() {
+        try {
+          if (!window.ethereum) {
+            display("challengeOut", "MetaMask not found — install the extension", true);
+            return;
+          }
+          // Connect MetaMask and read active account + chain BEFORE requesting challenge.
+          // This ensures the challenge address matches what MetaMask will sign with.
+          const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+          const activeAccount = accounts[0];
+          if (!activeAccount) {
+            display("challengeOut", "No account connected in MetaMask", true);
+            return;
+          }
+          document.getElementById("address").value = activeAccount;
+
+          let chainId = 137;
+          try {
+            const hex = await window.ethereum.request({ method: "eth_chainId" });
+            const parsed = parseInt(hex, 16);
+            if (!isNaN(parsed) && parsed > 0) chainId = parsed;
+          } catch (_) {}
+
+          const { status, ok, json } = await fetchJson(
+            `${api()}/api/auth/challenge?address=${encodeURIComponent(activeAccount)}&chainId=${chainId}`,
+          );
+          if (!ok) {
+            display("challengeOut", json, true);
+            return;
+          }
+          _nonce = json.nonce;
+          _typedData = json.typedData;
+          display("challengeOut", json, false);
+          document.getElementById("signBtn").disabled = false;
+          document.getElementById("signOut").textContent = "Ready — click Sign with MetaMask";
+          document.getElementById("signOut").className = "dim";
+        } catch (e) {
+          display("challengeOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function signChallenge() {
+        if (!window.ethereum) {
+          display("signOut", "MetaMask not found — install the extension and try again", true);
+          return;
+        }
+        try {
+          await window.ethereum.request({ method: "eth_requestAccounts" });
+          const accounts = await window.ethereum.request({ method: "eth_accounts" });
+          const signer = accounts[0];
+          if (!signer) {
+            display("signOut", "No account connected in MetaMask", true);
+            return;
+          }
+
+          _signerAddress = signer;
+          display("signOut", `Signing with ${signer} — check MetaMask popup…`, false);
+          const payload = JSON.stringify(_typedData);
+          // Diagnostics: log the EXACT bytes handed to MetaMask.
+          console.log("[MX2] eth_signTypedData_v4 signer:", signer);
+          console.log("[MX2] eth_signTypedData_v4 payload:", payload);
+          _signature = await window.ethereum.request({
+            method: "eth_signTypedData_v4",
+            params: [signer, payload],
+          });
+          console.log("[MX2] signature:", _signature);
+          display("signOut", { signer, signature: _signature }, false);
+          document.getElementById("verifyBtn").disabled = false;
+        } catch (e) {
+          display("signOut", `Rejected or error: ${e.message}`, true);
+        }
+      }
+
+      async function verifySignature() {
+        try {
+          const { status, ok, json } = await fetchJson(`${api()}/api/auth/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              address: _signerAddress,
+              nonce: _nonce,
+              signature: _signature,
+              issuedAt: _typedData?.message?.issuedAt,
+              // Diagnostics: send the exact payload that was signed so the server
+              // can compare its reconstruction against it and pinpoint mismatches.
+              signedTypedData: _typedData,
+            }),
+          });
+          display("verifyOut", { status, ...json }, !ok);
+          if (ok) {
+            ["meBtn", "logoutBtn", "posBtn", "histBtn", "pnlBtn"].forEach((id) => {
+              document.getElementById(id).disabled = false;
+            });
+          }
+        } catch (e) {
+          display("verifyOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function getMe() {
+        try {
+          const { status, ok, json } = await fetchJson(`${api()}/api/auth/me`);
+          display("meOut", { status, ...json }, !ok);
+        } catch (e) {
+          display("meOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function logout() {
+        try {
+          const { ok, json } = await fetchJson(`${api()}/api/auth/logout`, { method: "POST" });
+          display("meOut", ok ? "Logged out — session cookie cleared" : json, !ok);
+          if (ok) {
+            ["meBtn", "logoutBtn", "posBtn", "histBtn", "pnlBtn"].forEach((id) => {
+              document.getElementById(id).disabled = true;
+            });
+          }
+        } catch (e) {
+          display("meOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function getPositions() {
+        try {
+          const { status, ok, json } = await fetchJson(
+            `${api()}/api/profile/positions?proxyWallet=${encodeURIComponent(proxy())}`,
+          );
+          display("portfolioOut", { status, ...json }, !ok);
+        } catch (e) {
+          display("portfolioOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function getHistory() {
+        try {
+          const { status, ok, json } = await fetchJson(
+            `${api()}/api/profile/history?proxyWallet=${encodeURIComponent(proxy())}&limit=10`,
+          );
+          display("portfolioOut", { status, ...json }, !ok);
+        } catch (e) {
+          display("portfolioOut", `Error: ${e.message}`, true);
+        }
+      }
+
+      async function getPnl() {
+        try {
+          const { status, ok, json } = await fetchJson(
+            `${api()}/api/profile/pnl?proxyWallet=${encodeURIComponent(proxy())}`,
+          );
+          display("portfolioOut", { status, ...json }, !ok);
+        } catch (e) {
+          display("portfolioOut", `Error: ${e.message}`, true);
+        }
+      }
+    </script>
+  </body>
+</html>

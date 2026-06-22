@@ -35,6 +35,13 @@ Status legend: **OPEN** (needs owner/legal input) · **WORKING** (acting on it u
 | A-032 | Owner manages all secrets (encryption master key, session secret, DB password, relayer key). None are shared with Claude.           | RESOLVED (doc)                |
 | A-033 | The 8 product brief docs stay in the gitignored inbox and are **not** committed; governance artifacts + ADRs are committed at root. | RESOLVED (owner)              |
 
+## Auth / session
+
+| ID    | Assumption                                                                                                                                                        | Status  |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| A-042 | `https://data-api.polymarket.com` is the correct public Data API base URL for position/activity queries. Not yet verified against live official docs.             | WORKING |
+| A-043 | DB-backed sessions (not JWTs) are appropriate for the 50–100 beta cohort. If scale increases significantly, consider stateless tokens with a revocation denylist. | WORKING |
+
 ## PnL
 
 | ID    | Assumption                                                                                                                                                        | Status  |

@@ -1,7 +1,15 @@
 import { loadConfig } from "@mx2/config";
 import { createLogger } from "@mx2/observability";
-import { createDb, createAuditStore, createMarketSnapshotStore } from "@mx2/db";
-import { createGammaClient, createClobClient } from "@mx2/polymarket-client";
+import {
+  createDb,
+  createAuditStore,
+  createMarketSnapshotStore,
+  createChallengeStore,
+  createUserStore,
+  createSessionStore,
+  createAllowlistStore,
+} from "@mx2/db";
+import { createGammaClient, createClobClient, createDataClient } from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
@@ -16,11 +24,29 @@ const main = async (): Promise<void> => {
   const dbHandle = createDb(config.databaseUrl);
   const auditStore = createAuditStore(dbHandle.db);
   const marketSnapshots = createMarketSnapshotStore(dbHandle.db);
+  const challenges = createChallengeStore(dbHandle.db);
+  const users = createUserStore(dbHandle.db);
+  const sessions = createSessionStore(dbHandle.db);
+  const allowlist = createAllowlistStore(dbHandle.db);
 
   const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
   const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
+  const dataClient = createDataClient({ baseUrl: config.polymarket.dataBaseUrl });
 
-  const app = buildApp({ config, logger, db: dbHandle, marketSnapshots, gammaClient, clobClient });
+  const app = buildApp({
+    config,
+    logger,
+    db: dbHandle,
+    auditStore,
+    marketSnapshots,
+    challenges,
+    users,
+    sessions,
+    allowlist,
+    gammaClient,
+    clobClient,
+    dataClient,
+  });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, "Shutting down");
@@ -33,7 +59,6 @@ const main = async (): Promise<void> => {
 
   await app.listen({ port: config.apiPort, host: "0.0.0.0" });
 
-  // Best-effort startup audit; never block serving on it.
   try {
     await auditStore.emit({
       actor: "system",

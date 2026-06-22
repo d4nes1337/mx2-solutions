@@ -38,10 +38,15 @@ const EnvSchema = z.object({
     .url()
     .default("wss://ws-subscriptions-clob.polymarket.com/ws/user"),
   POLYMARKET_GEOBLOCK_URL: z.string().url().default("https://polymarket.com/api/geoblock"),
+  // A-042: data-api.polymarket.com assumed working; not yet verified against live docs.
+  POLYMARKET_DATA_BASE_URL: z.string().url().default("https://data-api.polymarket.com"),
   POLYGON_CHAIN_ID: z.coerce.number().int().default(137),
 
   // Non-secret identifier. Optional until provided by the owner.
   POLYMARKET_BUILDER_CODE: z.string().optional(),
+
+  // Session configuration. Derived cookieSecure from APP_ENV at runtime.
+  SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
@@ -62,8 +67,13 @@ export type AppConfig = {
     marketWsUrl: string;
     userWsUrl: string;
     geoblockUrl: string;
+    dataBaseUrl: string;
     chainId: number;
     builderCode: string | undefined;
+  };
+  session: {
+    ttlSeconds: number;
+    cookieSecure: boolean;
   };
   features: {
     liveTrading: boolean;
@@ -101,8 +111,13 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       marketWsUrl: e.POLYMARKET_MARKET_WS_URL,
       userWsUrl: e.POLYMARKET_USER_WS_URL,
       geoblockUrl: e.POLYMARKET_GEOBLOCK_URL,
+      dataBaseUrl: e.POLYMARKET_DATA_BASE_URL,
       chainId: e.POLYGON_CHAIN_ID,
       builderCode: e.POLYMARKET_BUILDER_CODE,
+    },
+    session: {
+      ttlSeconds: e.SESSION_TTL_SECONDS,
+      cookieSecure: e.APP_ENV !== "development",
     },
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
