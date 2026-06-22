@@ -1,12 +1,12 @@
 import { loadConfig } from "@mx2/config";
 import { createLogger } from "@mx2/observability";
-import { createDb } from "@mx2/db";
+import { createDb, createMarketSnapshotStore } from "@mx2/db";
+import { createMarketFeedManager } from "./market-feed.js";
 
 /**
- * Long-running worker process. In later slices this hosts the Polymarket
- * WebSocket ingestion and the conditional-rule evaluator (single-writer per
- * rule). For Slice 0 it starts, verifies DB connectivity, emits a heartbeat,
- * and shuts down cleanly — establishing the process lifecycle contract.
+ * Long-running worker process. Hosts the Polymarket WebSocket ingestion and
+ * (in later slices) the conditional-rule evaluator. Single-writer per rule
+ * ensures deterministic state transitions.
  */
 const HEARTBEAT_MS = 30_000;
 
@@ -22,6 +22,14 @@ const main = async (): Promise<void> => {
   const dbUp = await dbHandle.ping();
   logger.info({ dbUp, env: config.env }, "Worker started");
 
+  const marketSnapshots = createMarketSnapshotStore(dbHandle.db);
+
+  const marketFeed = createMarketFeedManager({
+    wsUrl: config.polymarket.marketWsUrl,
+    logger,
+    marketSnapshots,
+  });
+
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
   }, HEARTBEAT_MS);
@@ -29,6 +37,7 @@ const main = async (): Promise<void> => {
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, "Worker shutting down");
     clearInterval(heartbeat);
+    marketFeed.close();
     await dbHandle.close();
     process.exit(0);
   };

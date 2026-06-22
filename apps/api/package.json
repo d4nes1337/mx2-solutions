@@ -13,6 +13,7 @@
     "@mx2/core": "workspace:*",
     "@mx2/db": "workspace:*",
     "@mx2/observability": "workspace:*",
+    "@mx2/polymarket-client": "workspace:*",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

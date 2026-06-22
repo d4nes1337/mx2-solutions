@@ -1,6 +1,7 @@
 import { loadConfig } from "@mx2/config";
 import { createLogger } from "@mx2/observability";
-import { createDb, createAuditStore } from "@mx2/db";
+import { createDb, createAuditStore, createMarketSnapshotStore } from "@mx2/db";
+import { createGammaClient, createClobClient } from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
@@ -14,8 +15,12 @@ const main = async (): Promise<void> => {
 
   const dbHandle = createDb(config.databaseUrl);
   const auditStore = createAuditStore(dbHandle.db);
+  const marketSnapshots = createMarketSnapshotStore(dbHandle.db);
 
-  const app = buildApp({ config, logger, db: dbHandle });
+  const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
+  const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
+
+  const app = buildApp({ config, logger, db: dbHandle, marketSnapshots, gammaClient, clobClient });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, "Shutting down");
