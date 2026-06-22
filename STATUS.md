@@ -31,8 +31,6 @@ Gate 1 — Architecture & stack: **approved** (owner, 2026-06-22; ADR-0001 Optio
 
 ## Blocked / owner input required
 
-- **`builderCode` confirmation:** owner provided a value with the shape of an Ethereum private key
-  (`0x`+64 hex). Held unsaved pending confirmation it is the non-secret builderCode, not a key.
 - **Legal sign-off** still advised before enabling **live** trading (Gate 4); does not block
   read-only or staging build work.
 

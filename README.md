@@ -30,23 +30,33 @@ Module boundaries are enforced by ESLint (`apps` may use `packages`; `packages` 
 ## Prerequisites
 
 - Node 22 (`.nvmrc`) — Node 20+ supported.
-- pnpm via corepack: `corepack enable`
+- pnpm via corepack (managed by `"packageManager": "pnpm@9.15.0"` in `package.json`).
 - Docker (for local PostgreSQL).
 
 ## Local run
 
+> **Important:** all `pnpm` commands must be run from the project root (`mx2-solutions/`), not from
+> your home directory. Corepack reads the `packageManager` field from `package.json` and pins pnpm
+> to the correct version — running from `~` picks up the system default instead.
+
 ```bash
+# 0. Navigate to the project root (required)
+cd /path/to/mx2-solutions
+
+# 1. Enable corepack and install (must be run from this directory)
 corepack enable
 pnpm install
 
-# 1. Start PostgreSQL
+# 2. Copy env template (only needed once; optional — localhost defaults are built-in)
+cp .env.example .env
+
+# 3. Start PostgreSQL
 pnpm compose:up
 
-# 2. Apply migrations (generate once if the drizzle/ folder is empty)
-pnpm db:generate   # only when the schema changes
+# 4. Apply migrations
 pnpm db:migrate
 
-# 3. Run the API and worker (separate terminals)
+# 5. Run the API and worker (separate terminals)
 pnpm dev:api       # http://localhost:3001/healthz , /readyz , /api/feature-flags
 pnpm dev:worker
 ```
