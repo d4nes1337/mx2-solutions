@@ -9,12 +9,22 @@ import type {
   UserStore,
   SessionStore,
   AllowlistStore,
+  ClobCredentialStore,
+  OrderIntentStore,
+  RuntimeFlagStore,
   AuthChallengeRow,
   UserRow,
   SessionRow,
   AllowlistRow,
 } from "@mx2/db";
-import type { GammaClient, ClobClient, DataClient, PolymarketError } from "@mx2/polymarket-client";
+import type {
+  GammaClient,
+  ClobClient,
+  DataClient,
+  AuthenticatedClobClient,
+  GeoblockClient,
+  PolymarketError,
+} from "@mx2/polymarket-client";
 import { buildApp, type DbProbe } from "./app.js";
 
 const config = loadConfig({ DATABASE_URL: "postgresql://u:p@localhost:5432/db" });
@@ -115,6 +125,41 @@ const mockAllowlist: AllowlistStore = {
   remove: async () => {},
 };
 
+const mockClobCredentials: ClobCredentialStore = {
+  upsert: async () => {
+    throw new Error("not implemented in test");
+  },
+  find: async () => null,
+  delete: async () => {},
+};
+
+const mockOrderIntents: OrderIntentStore = {
+  create: async () => {
+    throw new Error("not implemented in test");
+  },
+  findByIdempotencyKey: async () => null,
+  findById: async () => null,
+  listByWallet: async () => [],
+  updateStatus: async () => {},
+};
+
+const mockRuntimeFlags: RuntimeFlagStore = {
+  get: async () => null,
+  set: async (key, value, updatedBy) => ({ key, value, updatedBy, updatedAt: new Date() }),
+};
+
+const mockTradingClobClient: AuthenticatedClobClient = {
+  deriveApiKey: async () => err(upstreamErr),
+  getBalanceAllowance: async () => err(upstreamErr),
+  submitOrder: async () => err(upstreamErr),
+  cancelOrder: async () => err(upstreamErr),
+  getOpenOrders: async () => ok([]),
+};
+
+const mockGeoblockClient: GeoblockClient = {
+  check: async (ip) => ok({ status: "allowed", country: "DE", region: null, ip }),
+};
+
 const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof mockAllowlist>) =>
   buildApp({
     config,
@@ -129,6 +174,11 @@ const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof m
     users: mockUsers,
     sessions: { ...mockSessions, ...overrides },
     allowlist: mockAllowlist,
+    clobCredentials: mockClobCredentials,
+    orderIntents: mockOrderIntents,
+    runtimeFlags: mockRuntimeFlags,
+    tradingClobClient: mockTradingClobClient,
+    geoblockClient: mockGeoblockClient,
   });
 
 describe("health endpoints", () => {
@@ -239,6 +289,11 @@ describe("auth routes", () => {
       users: mockUsers,
       sessions: mockSessions,
       allowlist: mockAllowlist,
+      clobCredentials: mockClobCredentials,
+      orderIntents: mockOrderIntents,
+      runtimeFlags: mockRuntimeFlags,
+      tradingClobClient: mockTradingClobClient,
+      geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
       method: "GET",
@@ -294,6 +349,11 @@ describe("auth routes", () => {
       users: mockUsers,
       sessions,
       allowlist: mockAllowlist,
+      clobCredentials: mockClobCredentials,
+      orderIntents: mockOrderIntents,
+      runtimeFlags: mockRuntimeFlags,
+      tradingClobClient: mockTradingClobClient,
+      geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
       method: "GET",
@@ -333,6 +393,11 @@ describe("profile routes", () => {
       users: mockUsers,
       sessions,
       allowlist: mockAllowlist,
+      clobCredentials: mockClobCredentials,
+      orderIntents: mockOrderIntents,
+      runtimeFlags: mockRuntimeFlags,
+      tradingClobClient: mockTradingClobClient,
+      geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
       method: "GET",

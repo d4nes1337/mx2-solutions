@@ -1,10 +1,10 @@
 # Project Status
 
-_Last updated: 2026-06-22_
+_Last updated: 2026-06-23_
 
 ## Current gate
 
-Gate 3 — identity + portfolio: **built** (quality gates green). Next: **Gate 3 owner review**.
+Gate 4 — manual trading: **built** (quality gates green). Next: **Gate 4 owner review**.
 
 ## Completed
 
@@ -35,41 +35,61 @@ Gate 3 — identity + portfolio: **built** (quality gates green). Next: **Gate 3
   methodology + limitations); four new DB tables + migration `0002_cultured_dragon_man.sql`;
   `AppConfig.session` (TTL, cookieSecure). Quality gates: `format`, `lint` (0), `typecheck`,
   `test` (49/49), `db:generate` (migration `0002_...sql`).
+- **Slice 3 — manual trading backend infrastructure (built).** Geoblock client (fail-closed,
+  60s cache, `close_only` detection); AES-256-GCM per-user L2 CLOB credential encryption;
+  three new DB tables (`user_clob_credentials`, `order_intents`, `runtime_flags`) + migration
+  `0004_previous_ezekiel_stane.sql`; `AuthenticatedClobClient` (L2 HMAC, derive, balance,
+  submit, cancel, open orders); trading routes (`GET /api/trade/status`,
+  `POST /api/trade/credentials/setup`, `GET /api/trade/account`,
+  `POST /api/trade/orders/preview`, `POST /api/trade/orders`, `DELETE /api/trade/orders/:id`,
+  `GET /api/trade/orders`); admin kill-switch routes (`POST /api/admin/trading/pause`,
+  `POST /api/admin/trading/resume`, `GET /api/admin/trading/status`); geoblock middleware;
+  `APP_ENCRYPTION_MASTER_KEY` + `TRADING_ADMIN_SECRET` env vars. Quality gates: `format`,
+  `lint` (0), `typecheck`, `test` (93/93).
 
 ## In progress
 
-- **Gate 3 review:** owner acceptance of Slice 2 deliverables below.
+- **Gate 4 review:** owner acceptance of Slice 3 deliverables below.
 
 ## Blocked / owner input required
 
-- **Allowlist seeding:** owner must add at least one test wallet address before Gate 3 demo:
-  `INSERT INTO allowlist (wallet_address, added_by, is_active) VALUES ('0x...', 'owner', true);`
-- **Legal sign-off** still advised before enabling **live** trading (Gate 4); does not block
+- **Staging CLOB credentials:** owner needs CLOB API credentials for a test wallet to prove
+  the full end-to-end flow (credential derivation → balance → preview → sign → submit → cancel).
+  This is an owner action: log into Polymarket with a test wallet, obtain L2 CLOB API key via
+  `POST /api/trade/credentials/setup`, fund with a small pUSD amount on Polygon.
+- **A-021 spike (ERC-7739 signing):** the client-side ERC-7739-wrapped order signing has NOT been
+  proven in-browser yet. This is the critical path for a real staging trade. The backend accepts
+  the signature field — what the frontend must produce is documented in the order preview response.
+- **Legal sign-off** still advised before enabling **live** trading (Gate 4 live); does not block
   read-only or staging build work.
+- **Allowlist seeding (Gate 3 prerequisite):** owner must add at least one test wallet address:
+  `INSERT INTO allowlist (wallet_address, added_by, is_active) VALUES ('0x...', 'owner', true);`
 
-## Gate 3 acceptance checklist (owner review)
+## Gate 4 acceptance checklist (owner review)
 
-- [ ] `pnpm db:migrate` applies migration `0002_cultured_dragon_man.sql` cleanly (3 new migrations total).
-- [ ] `GET /api/auth/challenge?address=0x<wallet>` returns a `typedData` object to sign.
-- [ ] `POST /api/auth/verify` with valid EIP-712 signature from allowlisted wallet sets `mx2_session` cookie and returns `{ ok: true, address }`.
-- [ ] `POST /api/auth/verify` from a non-allowlisted wallet returns 403 `NOT_ALLOWLISTED`.
-- [ ] `GET /api/auth/me` with session cookie returns `{ address, allowlisted: true }`.
-- [ ] `GET /api/profile/positions`, `/history`, `/pnl` all return 401 without session cookie.
-- [ ] `GET /api/profile/pnl` with session returns response with `summary`, `methodology`, and `limitations` fields.
-- [ ] All 49 tests pass: `pnpm test`.
+- [ ] `pnpm db:migrate` applies migration `0004_previous_ezekiel_stane.sql` cleanly.
+- [ ] `GET /api/trade/status` returns `{ tradingEnabled: false, featureFlag: false, geoblock: { status: "allowed"|"blocked" } }`.
+- [ ] `POST /api/trade/credentials/setup` returns 401 without session cookie.
+- [ ] `POST /api/trade/orders/preview` returns 401 without cookie, 403 from blocked IP, 200 with valid body.
+- [ ] `POST /api/trade/orders` returns 503 `TRADING_DISABLED` (feature flag is off by default).
+- [ ] `POST /api/admin/trading/pause` with `x-admin-secret` header returns `{ ok: true, tradingPaused: true }`.
+- [ ] `POST /api/trade/orders` after pause returns 503 `TRADING_PAUSED`.
+- [ ] `POST /api/admin/trading/resume` lifts kill switch; `GET /api/trade/status` shows `tradingEnabled=false` (flag still off).
+- [ ] All 93 tests pass: `pnpm test`.
 - [ ] `pnpm run format:check && pnpm run lint && pnpm run typecheck` all exit 0.
+- [ ] (Staging, owner action) Credentials setup → account balance → order preview → sign (external) → submit → cancel all work end-to-end on staging CLOB.
 
 ## Next checkpoint
 
-**Gate 4 — Slice 3:** manual trading (staging-only, geo-gated, CLOB L2 credentials + relayer).
+**Gate 5 — Slice 4:** conditional rules shadow mode (rule builder, state machine, evidence, deterministic replay, manual-confirm path).
 
 ## Delivery roadmap
 
-| Slice                                                  | Gate   | Status    | Blocked by                                           |
-| ------------------------------------------------------ | ------ | --------- | ---------------------------------------------------- |
-| 0 — scaffolding/CI/health/flags/audit skeleton         | —      | **Built** | —                                                    |
-| 1 — read-only feed + market cockpit                    | Gate 2 | **Built** | —                                                    |
-| 2 — wallet login + allowlist + profile/PnL (read-only) | Gate 3 | **Built** | Owner Gate 3 review                                  |
-| 3 — manual trading (staging-only, geo-gated, flagged)  | Gate 4 | Pending   | integration spike + security review + legal sign-off |
-| 4 — conditional rules shadow mode                      | Gate 5 | Pending   | Slice 2                                              |
-| 5 — beta hardening / release                           | Gate 6 | Pending   | prior slices                                         |
+| Slice                                                  | Gate   | Status    | Blocked by                                        |
+| ------------------------------------------------------ | ------ | --------- | ------------------------------------------------- |
+| 0 — scaffolding/CI/health/flags/audit skeleton         | —      | **Built** | —                                                 |
+| 1 — read-only feed + market cockpit                    | Gate 2 | **Built** | —                                                 |
+| 2 — wallet login + allowlist + profile/PnL (read-only) | Gate 3 | **Built** | Owner Gate 3 review                               |
+| 3 — manual trading (staging-only, geo-gated, flagged)  | Gate 4 | **Built** | Owner Gate 4 review + staging creds + A-021 spike |
+| 4 — conditional rules shadow mode                      | Gate 5 | Pending   | Gate 4                                            |
+| 5 — beta hardening / release                           | Gate 6 | Pending   | prior slices                                      |

@@ -1,5 +1,14 @@
 import { sql } from "drizzle-orm";
-import { boolean, integer, jsonb, pgTable, text, timestamp, uuid, index } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  index,
+} from "drizzle-orm/pg-core";
 
 /**
  * Append-only audit log. Rows are immutable: the application never issues
@@ -129,3 +138,71 @@ export const allowlist = pgTable("allowlist", {
 });
 
 export type AllowlistRow = typeof allowlist.$inferSelect;
+
+/**
+ * Per-user encrypted L2 CLOB API credentials.
+ * encryptedCreds holds AES-256-GCM ciphertext (iv + ciphertext + authTag + keyVersion).
+ * The raw creds (apiKey, secret, passphrase) never leave the server unencrypted.
+ * Re-derivable at any time if the user re-provides an L1 CLOB signature.
+ */
+export const userClobCredentials = pgTable("user_clob_credentials", {
+  walletAddress: text("wallet_address").primaryKey(),
+  encryptedCreds: jsonb("encrypted_creds").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type UserClobCredentialRow = typeof userClobCredentials.$inferSelect;
+
+/**
+ * Idempotent order intents — one row per user intent to place an order.
+ * idempotency_key is client-supplied and prevents double-submit.
+ * status machine: pending → submitted → acknowledged → filled | cancelled | failed | unknown
+ */
+export const orderIntents = pgTable(
+  "order_intents",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    idempotencyKey: text("idempotency_key").notNull().unique(),
+    conditionId: text("condition_id").notNull(),
+    tokenId: text("token_id").notNull(),
+    side: text("side").notNull(),
+    price: text("price").notNull(),
+    size: text("size").notNull(),
+    orderType: text("order_type").notNull(),
+    funder: text("funder"),
+    status: text("status").notNull().default("pending"),
+    clobOrderId: text("clob_order_id"),
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("order_intents_wallet_idx").on(t.walletAddress),
+    index("order_intents_idempotency_key_idx").on(t.idempotencyKey),
+    index("order_intents_status_idx").on(t.status),
+  ],
+);
+
+export type OrderIntentRow = typeof orderIntents.$inferSelect;
+export type NewOrderIntentRow = typeof orderIntents.$inferInsert;
+
+/**
+ * DB-backed runtime flags for kill switches and runtime configuration.
+ * Key examples: 'trading_paused' (value: 'true'/'false').
+ * Changes take effect immediately without redeploying the process.
+ */
+export const runtimeFlags = pgTable("runtime_flags", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type RuntimeFlagRow = typeof runtimeFlags.$inferSelect;

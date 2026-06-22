@@ -17,10 +17,14 @@ export const AUDIT_ACTIONS = [
   "order.acknowledged",
   "order.filled",
   "order.cancelled",
+  "order.cancel_failed",
+  "order.failed",
   "rule.created",
   "rule.state_changed",
   "rule.triggered",
   "admin.action",
+  "trade.credentials.setup",
+  "trade.order.preview",
   "system.startup",
 ] as const;
 

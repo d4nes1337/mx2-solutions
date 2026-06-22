@@ -48,6 +48,16 @@ const EnvSchema = z.object({
   // Session configuration. Derived cookieSecure from APP_ENV at runtime.
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 
+  // Encryption master key for per-user L2 CLOB credentials stored in DB.
+  // Must be a 64-char hex string (32 bytes). Required when FEATURE_LIVE_TRADING=true.
+  APP_ENCRYPTION_MASTER_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, "must be 64-char hex")
+    .optional(),
+
+  // Secret header value for the /api/admin/* kill-switch endpoints.
+  TRADING_ADMIN_SECRET: z.string().min(16).optional(),
+
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
   FEATURE_CONDITIONAL_RULES: boolFromEnv(true),
@@ -61,6 +71,8 @@ export type AppConfig = {
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   apiPort: number;
   databaseUrl: string;
+  encryptionMasterKey: string | undefined;
+  tradingAdminSecret: string | undefined;
   polymarket: {
     gammaBaseUrl: string;
     clobBaseUrl: string;
@@ -105,6 +117,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     logLevel: e.APP_LOG_LEVEL,
     apiPort: e.API_PORT,
     databaseUrl: e.DATABASE_URL,
+    encryptionMasterKey: e.APP_ENCRYPTION_MASTER_KEY,
+    tradingAdminSecret: e.TRADING_ADMIN_SECRET,
     polymarket: {
       gammaBaseUrl: e.POLYMARKET_GAMMA_BASE_URL,
       clobBaseUrl: e.POLYMARKET_CLOB_BASE_URL,

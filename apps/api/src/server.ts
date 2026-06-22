@@ -8,8 +8,17 @@ import {
   createUserStore,
   createSessionStore,
   createAllowlistStore,
+  createClobCredentialStore,
+  createOrderIntentStore,
+  createRuntimeFlagStore,
 } from "@mx2/db";
-import { createGammaClient, createClobClient, createDataClient } from "@mx2/polymarket-client";
+import {
+  createGammaClient,
+  createClobClient,
+  createDataClient,
+  createAuthenticatedClobClient,
+  createGeoblockClient,
+} from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
@@ -28,10 +37,17 @@ const main = async (): Promise<void> => {
   const users = createUserStore(dbHandle.db);
   const sessions = createSessionStore(dbHandle.db);
   const allowlist = createAllowlistStore(dbHandle.db);
+  const clobCredentials = createClobCredentialStore(dbHandle.db);
+  const orderIntents = createOrderIntentStore(dbHandle.db);
+  const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
 
   const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
   const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
   const dataClient = createDataClient({ baseUrl: config.polymarket.dataBaseUrl });
+  const tradingClobClient = createAuthenticatedClobClient({
+    baseUrl: config.polymarket.clobBaseUrl,
+  });
+  const geoblockClient = createGeoblockClient({ baseUrl: config.polymarket.geoblockUrl });
 
   const app = buildApp({
     config,
@@ -43,9 +59,14 @@ const main = async (): Promise<void> => {
     users,
     sessions,
     allowlist,
+    clobCredentials,
+    orderIntents,
+    runtimeFlags,
     gammaClient,
     clobClient,
     dataClient,
+    tradingClobClient,
+    geoblockClient,
   });
 
   const shutdown = async (signal: string): Promise<void> => {

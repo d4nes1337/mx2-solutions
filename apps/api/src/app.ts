@@ -10,12 +10,23 @@ import type {
   UserStore,
   SessionStore,
   AllowlistStore,
+  ClobCredentialStore,
+  OrderIntentStore,
+  RuntimeFlagStore,
 } from "@mx2/db";
-import type { GammaClient, ClobClient, DataClient } from "@mx2/polymarket-client";
+import type {
+  GammaClient,
+  ClobClient,
+  DataClient,
+  AuthenticatedClobClient,
+  GeoblockClient,
+} from "@mx2/polymarket-client";
 import { registerEventsRoutes } from "./routes/events.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
+import { registerTradeRoutes } from "./routes/trade.js";
+import { registerAdminRoutes } from "./routes/admin.js";
 import type {} from "./auth/types.js";
 
 /** Minimal surface the app needs from the database (keeps tests light). */
@@ -33,9 +44,14 @@ export interface AppDeps {
   users: UserStore;
   sessions: SessionStore;
   allowlist: AllowlistStore;
+  clobCredentials: ClobCredentialStore;
+  orderIntents: OrderIntentStore;
+  runtimeFlags: RuntimeFlagStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
+  tradingClobClient: AuthenticatedClobClient;
+  geoblockClient: GeoblockClient;
 }
 
 /**
@@ -53,7 +69,7 @@ export const buildApp = (deps: AppDeps) => {
   void app.register(fastifyCors, {
     origin: deps.config.env === "development" ? (origin, cb) => cb(null, origin ?? true) : false,
     credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
   });
 
   // Cookie support — required before any route that reads/sets the session cookie.
@@ -100,6 +116,21 @@ export const buildApp = (deps: AppDeps) => {
   registerProfileRoutes(fastifyApp, {
     dataClient: deps.dataClient,
     sessions: deps.sessions,
+  });
+  registerTradeRoutes(fastifyApp, {
+    config: deps.config,
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    clobCredentials: deps.clobCredentials,
+    orderIntents: deps.orderIntents,
+    runtimeFlags: deps.runtimeFlags,
+    tradingClobClient: deps.tradingClobClient,
+    geoblockClient: deps.geoblockClient,
+  });
+  registerAdminRoutes(fastifyApp, {
+    config: deps.config,
+    auditStore: deps.auditStore,
+    runtimeFlags: deps.runtimeFlags,
   });
 
   return app;
