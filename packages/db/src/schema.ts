@@ -206,3 +206,77 @@ export const runtimeFlags = pgTable("runtime_flags", {
 });
 
 export type RuntimeFlagRow = typeof runtimeFlags.$inferSelect;
+
+/**
+ * Conditional rules (docs/04). One row per user rule. `definition` holds the
+ * immutable RuleDefinition (@mx2/rules); `definitionHash` ties triggers to the
+ * exact version. The worker is the single writer of evaluation-driven columns
+ * (`status` when ACTIVE_*, `trueSince`, `lastEvaluatedAt`); the API owns the
+ * user-control transitions (PAUSED/CANCELLED) — see the conditional updates in
+ * conditional-store.ts. Evaluation state never auto-submits an order; a trigger
+ * only produces a rule_triggers row awaiting manual confirmation.
+ */
+export const conditionalRules = pgTable(
+  "conditional_rules",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    conditionId: text("condition_id").notNull(),
+    tokenId: text("token_id").notNull(),
+    side: text("side").notNull(),
+    definition: jsonb("definition").notNull(),
+    definitionHash: text("definition_hash").notNull(),
+    status: text("status").notNull().default("ACTIVE_WAITING"),
+    version: integer("version").notNull().default(1),
+    trueSince: timestamp("true_since", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    lastEvaluatedAt: timestamp("last_evaluated_at", { withTimezone: true }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("conditional_rules_wallet_idx").on(t.walletAddress),
+    index("conditional_rules_status_idx").on(t.status),
+    index("conditional_rules_token_idx").on(t.tokenId),
+  ],
+);
+
+export type ConditionalRuleRow = typeof conditionalRules.$inferSelect;
+export type NewConditionalRuleRow = typeof conditionalRules.$inferInsert;
+
+/**
+ * Provable triggers (docs/04 §5). Append-mostly: a trigger is created when a
+ * rule's continuous window completes, then advances awaiting_user → confirmed |
+ * dismissed | expired. `evidence` is the self-contained TriggerEvidence;
+ * `orderIntentId` links the order the user manually confirmed + signed.
+ */
+export const ruleTriggers = pgTable(
+  "rule_triggers",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    ruleId: uuid("rule_id").notNull(),
+    walletAddress: text("wallet_address").notNull(),
+    triggeredAt: timestamp("triggered_at", { withTimezone: true }).notNull().defaultNow(),
+    evidence: jsonb("evidence").notNull(),
+    reasonCodes: jsonb("reason_codes")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    status: text("status").notNull().default("awaiting_user"),
+    orderIntentId: uuid("order_intent_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("rule_triggers_rule_idx").on(t.ruleId),
+    index("rule_triggers_wallet_idx").on(t.walletAddress),
+    index("rule_triggers_status_idx").on(t.status),
+  ],
+);
+
+export type RuleTriggerRow = typeof ruleTriggers.$inferSelect;
+export type NewRuleTriggerRow = typeof ruleTriggers.$inferInsert;

@@ -9,6 +9,7 @@ import {
   CHALLENGE_TTL_MS,
 } from "../auth/eip712.js";
 import { generateSessionToken, hashSessionToken, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import type {} from "../auth/types.js";
 
@@ -218,9 +219,19 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       return { error: "Unauthorized" };
     }
     const entry = await deps.allowlist.findEntry(user.walletAddress);
+    // The Polymarket Data API keys off the deposit (Gnosis Safe) wallet, not the
+    // signer EOA. Derive it deterministically so the client never has to ask the
+    // user to paste it. Fail-soft: null lets the UI fall back to a manual override.
+    let depositWallet: string | null = null;
+    try {
+      depositWallet = deriveDepositWallet(user.walletAddress);
+    } catch {
+      depositWallet = null;
+    }
     return {
       address: user.walletAddress,
       allowlisted: entry?.isActive === true,
+      depositWallet,
     };
   });
 };

@@ -16,6 +16,9 @@ export const registerEventsRoutes = (app: FastifyInstance, deps: EventsRoutesDep
     else if (q["active"] === "false") evtParams.active = false;
     if (q["closed"] === "true") evtParams.closed = true;
     else if (q["closed"] === "false") evtParams.closed = false;
+    if (q["order"] !== undefined) evtParams.order = q["order"];
+    if (q["ascending"] === "true") evtParams.ascending = true;
+    else if (q["ascending"] === "false") evtParams.ascending = false;
     const result = await deps.gammaClient.listEvents(evtParams);
     if (!result.ok) {
       const code = result.error.statusCode === 429 ? 429 : 502;

@@ -5,6 +5,7 @@
     { "path": "./packages/config" },
     { "path": "./packages/observability" },
     { "path": "./packages/db" },
+    { "path": "./packages/rules" },
     { "path": "./packages/polymarket-client" },
     { "path": "./apps/api" },
     { "path": "./apps/worker" }

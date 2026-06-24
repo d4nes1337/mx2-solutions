@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+// The Gamma API is inconsistent about numeric fields: the same field (e.g.
+// lastTradePrice, bestBid, spread) comes back as a JSON string on some markets
+// and a JSON number on others, and the shape drifts over time. We accept either
+// and normalize to a string so all downstream consumers (and the frontend) get
+// a stable type. Verified against the live API 2026-06-23 (numbers observed).
+const numericString = (fallback: string) =>
+  z
+    .union([z.string(), z.number()])
+    .transform((v) => String(v))
+    .default(fallback);
+
 export const GammaTagSchema = z
   .object({
     id: z.string().optional(),
@@ -28,13 +39,13 @@ export const GammaMarketSchema = z
     featured: z.boolean().default(false),
     acceptingOrders: z.boolean().default(false),
     acceptingOrdersTimestamp: z.string().nullish(),
-    liquidity: z.string().default("0"),
-    volume: z.string().default("0"),
-    openInterest: z.string().default("0"),
-    lastTradePrice: z.string().default("0"),
-    bestBid: z.string().default("0"),
-    bestAsk: z.string().default("0"),
-    spread: z.string().default("0"),
+    liquidity: numericString("0"),
+    volume: numericString("0"),
+    openInterest: numericString("0"),
+    lastTradePrice: numericString("0"),
+    bestBid: numericString("0"),
+    bestAsk: numericString("0"),
+    spread: numericString("0"),
     status: z.string().default("closed"),
     // JSON-encoded arrays stored as strings in the Gamma API response
     outcomes: z.string().default("[]"),

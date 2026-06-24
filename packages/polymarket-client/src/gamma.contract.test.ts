@@ -51,6 +51,29 @@ describe("GammaMarketSchema", () => {
     }
   });
 
+  it("accepts numeric price/volume fields and normalizes them to strings", () => {
+    // The live Gamma API returns these as JSON numbers on some markets
+    // (observed 2026-06-23); the schema must coerce, not reject.
+    const numericMarket: unknown = {
+      id: "691547",
+      conditionId: "0xabc",
+      lastTradePrice: 1,
+      bestBid: 0.01,
+      bestAsk: 0.99,
+      spread: 0.02,
+      liquidity: 250000.5,
+      volume: 494516.53254,
+      openInterest: 0,
+    };
+    const result = GammaMarketSchema.safeParse(numericMarket);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.lastTradePrice).toBe("1");
+      expect(result.data.spread).toBe("0.02");
+      expect(result.data.volume).toBe("494516.53254");
+    }
+  });
+
   it("applies defaults for missing optional fields", () => {
     const minimal: unknown = {
       id: "1",

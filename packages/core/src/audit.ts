@@ -22,6 +22,8 @@ export const AUDIT_ACTIONS = [
   "rule.created",
   "rule.state_changed",
   "rule.triggered",
+  "rule.trigger.confirmed",
+  "rule.trigger.dismissed",
   "admin.action",
   "trade.credentials.setup",
   "trade.order.preview",

@@ -13,6 +13,8 @@ import type {
   ClobCredentialStore,
   OrderIntentStore,
   RuntimeFlagStore,
+  RuleStore,
+  TriggerStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -27,6 +29,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerTradeRoutes } from "./routes/trade.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerRulesRoutes } from "./routes/rules.js";
 import type {} from "./auth/types.js";
 
 /** Minimal surface the app needs from the database (keeps tests light). */
@@ -47,6 +50,8 @@ export interface AppDeps {
   clobCredentials: ClobCredentialStore;
   orderIntents: OrderIntentStore;
   runtimeFlags: RuntimeFlagStore;
+  ruleStore: RuleStore;
+  triggerStore: TriggerStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
@@ -131,6 +136,14 @@ export const buildApp = (deps: AppDeps) => {
     config: deps.config,
     auditStore: deps.auditStore,
     runtimeFlags: deps.runtimeFlags,
+  });
+  registerRulesRoutes(fastifyApp, {
+    config: deps.config,
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    ruleStore: deps.ruleStore,
+    triggerStore: deps.triggerStore,
+    marketSnapshots: deps.marketSnapshots,
   });
 
   return app;

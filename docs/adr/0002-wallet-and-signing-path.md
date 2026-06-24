@@ -13,6 +13,12 @@ gasless validation via a relayer (see `docs/INTEGRATION_VERIFIED.md`). The owner
 
 ## Decision
 
+> **Correction (2026-06-23, Slice 5 / D-011):** the deposit wallet is a **Gnosis Safe** proxy and
+> orders are signed with **`signatureType = 2` (POLY_GNOSIS_SAFE)**, not "sig type 3 / POLY_1271".
+> The canonical CLOB enum has no type 3, and no ERC-7739 nesting is needed for type 2. The EOA signs
+> the Order EIP-712 directly. See `docs/INTEGRATION_VERIFIED.md` §9–10. The "sig type 3" wording below
+> is retained as the original (incorrect) record.
+
 Support exactly one wallet path in MVP: \*\*Deposit Wallet (ERC-1967 proxy) + `POLY_1271` (sig type 3)
 
 - relayer\*\*, via the V2 TS SDK.

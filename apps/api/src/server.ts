@@ -11,6 +11,8 @@ import {
   createClobCredentialStore,
   createOrderIntentStore,
   createRuntimeFlagStore,
+  createRuleStore,
+  createTriggerStore,
 } from "@mx2/db";
 import {
   createGammaClient,
@@ -40,6 +42,8 @@ const main = async (): Promise<void> => {
   const clobCredentials = createClobCredentialStore(dbHandle.db);
   const orderIntents = createOrderIntentStore(dbHandle.db);
   const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
+  const ruleStore = createRuleStore(dbHandle.db);
+  const triggerStore = createTriggerStore(dbHandle.db);
 
   const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
   const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
@@ -62,6 +66,8 @@ const main = async (): Promise<void> => {
     clobCredentials,
     orderIntents,
     runtimeFlags,
+    ruleStore,
+    triggerStore,
     gammaClient,
     clobClient,
     dataClient,

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { OrderbookSchema, TradeSchema, TokenPriceSchema } from "./clob/schema.js";
+import { createClobClient } from "./clob/client.js";
 
 const sampleOrderbook: unknown = {
   market: "0xdd22472e552ac1051ef7c0cbaf0d2db4a2b04a71af8a7c3a7eda3edc20f0b2c",
@@ -88,5 +89,45 @@ describe("TokenPriceSchema", () => {
       winner: false,
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("ClobClient.getPricesHistory", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("queries the CLOB host by TOKEN id (not conditionId) and unwraps `history`", async () => {
+    // Regression for the bug where this hit the Gamma host with the conditionId
+    // and a bare-array schema → 404 / empty for every market.
+    let calledUrl = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calledUrl = url;
+        return new Response(
+          JSON.stringify({
+            history: [
+              { t: 1779498020, p: 0.485 },
+              { t: 1779501607, p: 0.49 },
+            ],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const clob = createClobClient({ baseUrl: "https://clob.example.com" });
+    const res = await clob.getPricesHistory({ tokenId: "TOKEN123" });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value).toHaveLength(2);
+      expect(res.value[0]).toEqual({ t: 1779498020, p: 0.485 });
+    }
+
+    const u = new URL(calledUrl);
+    expect(u.origin).toBe("https://clob.example.com");
+    expect(u.pathname).toBe("/prices-history");
+    expect(u.searchParams.get("market")).toBe("TOKEN123");
+    expect(u.searchParams.get("interval")).toBe("max");
   });
 });

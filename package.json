@@ -18,11 +18,13 @@
     "test:watch": "vitest",
     "db:generate": "pnpm --filter @mx2/db run generate",
     "db:migrate": "pnpm --filter @mx2/db run migrate",
+    "db:seed:allowlist": "pnpm --filter @mx2/db run seed:allowlist",
     "dev:api": "pnpm --filter @mx2/api run dev",
     "dev:worker": "pnpm --filter @mx2/worker run dev",
+    "dev:web": "pnpm --filter @mx2/web run dev",
     "compose:up": "docker compose up -d",
     "compose:down": "docker compose down",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test"
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm --filter @mx2/web run typecheck && pnpm --filter @mx2/web run test"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

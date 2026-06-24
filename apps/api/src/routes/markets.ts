@@ -108,7 +108,8 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
     };
   });
 
-  // Price history from Gamma; conditionId resolved via market metadata.
+  // Price history from the CLOB API, keyed by the outcome's CLOB token id
+  // (?outcome=0 default YES, 1 NO). The conditionId does NOT work here.
   app.get("/api/markets/:id/prices-history", async (req, reply) => {
     const { id } = req.params as { id: string };
     const q = req.query as Record<string, string>;
@@ -119,17 +120,26 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
       return { error: marketResult.error.code, message: marketResult.error.message };
     }
 
-    const histParams: GetPricesHistoryParams = { conditionId: marketResult.value.conditionId };
+    const tokenIds = parseTokenIds(marketResult.value.clobTokenIds);
+    const outcomeIdx = q["outcome"] !== undefined ? Number(q["outcome"]) : 0;
+    const tokenId = tokenIds[outcomeIdx] ?? tokenIds[0];
+    if (tokenId === undefined) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "No token ID for this market" };
+    }
+
+    const histParams: GetPricesHistoryParams = { tokenId };
     if (q["startTs"] !== undefined) histParams.startTs = Number(q["startTs"]);
     if (q["endTs"] !== undefined) histParams.endTs = Number(q["endTs"]);
     if (q["fidelity"] !== undefined) histParams.fidelity = Number(q["fidelity"]);
-    const histResult = await deps.gammaClient.getPricesHistory(histParams);
+    if (q["interval"] !== undefined) histParams.interval = q["interval"];
+    const histResult = await deps.clobClient.getPricesHistory(histParams);
 
     if (!histResult.ok) {
       reply.code(502);
       return { error: histResult.error.code, message: histResult.error.message };
     }
 
-    return { conditionId: marketResult.value.conditionId, history: histResult.value };
+    return { conditionId: marketResult.value.conditionId, tokenId, history: histResult.value };
   });
 };

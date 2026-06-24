@@ -1,17 +1,18 @@
-import { createHmac } from "crypto";
 import type { Result } from "@mx2/core";
 import { ok, err } from "@mx2/core";
 import {
   L2CredentialsSchema,
   BalanceAllowanceSchema,
-  OpenOrderSchema,
+  OpenOrdersResponseSchema,
   SubmitOrderResponseSchema,
   type L2Credentials,
   type BalanceAllowance,
   type OpenOrder,
   type SubmitOrderResponse,
-  type SignedOrderPayload,
+  type SignedClobOrder,
+  type OrderType,
 } from "./schema.js";
+import { buildL2Headers, type L2HeaderArgs } from "./hmac.js";
 import {
   networkError,
   upstreamError,
@@ -29,13 +30,16 @@ export interface DeriveApiKeyParams {
 }
 
 export interface AuthenticatedClobClient {
+  /** Polymarket CLOB server unix timestamp (seconds). Required for L1 auth signing. */
+  getServerTime(): Promise<Result<number, PolymarketError>>;
   deriveApiKey(params: DeriveApiKeyParams): Promise<Result<L2Credentials, PolymarketError>>;
   getBalanceAllowance(
     address: string,
     creds: L2Credentials,
   ): Promise<Result<BalanceAllowance, PolymarketError>>;
   submitOrder(
-    order: SignedOrderPayload,
+    order: SignedClobOrder,
+    orderType: OrderType,
     creds: L2Credentials,
     address: string,
     idempotencyKey: string,
@@ -58,21 +62,8 @@ export interface AuthenticatedClobClientOptions {
 
 const DEFAULT_BASE_URL = "https://clob.polymarket.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
-
-const buildL2Headers = (address: string, creds: L2Credentials): Record<string, string> => {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const message = timestamp + address;
-  const hmac = createHmac("sha256", Buffer.from(creds.secret, "base64"))
-    .update(message)
-    .digest("base64");
-  return {
-    POLY_ADDRESS: address,
-    POLY_SIGNATURE: hmac,
-    POLY_TIMESTAMP: timestamp,
-    POLY_API_KEY: creds.apiKey,
-    POLY_PASSPHRASE: creds.passphrase,
-  };
-};
+/** First-page cursor for GET /data/orders (matches @polymarket/clob-client INITIAL_CURSOR). */
+const INITIAL_CURSOR = "MA==";
 
 const buildL1Headers = (params: DeriveApiKeyParams): Record<string, string> => ({
   POLY_ADDRESS: params.address,
@@ -118,59 +109,127 @@ export const createAuthenticatedClobClient = (
   const baseUrl = opts?.baseUrl ?? DEFAULT_BASE_URL;
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+  const getServerTime = async (): Promise<Result<number, PolymarketError>> => {
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${baseUrl}/time`, { signal: controller.signal });
+      if (!response.ok) {
+        return err(
+          upstreamError(response.status, `HTTP ${response.status}: failed to fetch CLOB time`),
+        );
+      }
+      const text = (await response.text()).trim();
+      const ts = Number.parseInt(text, 10);
+      if (!Number.isFinite(ts)) return err(parseError(`Invalid CLOB /time response: ${text}`));
+      return ok(ts);
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return err(timeoutError());
+      return err(networkError(e instanceof Error ? e.message : String(e), e));
+    } finally {
+      clearTimeout(timerId);
+    }
+  };
+
+  const l2Headers = async (
+    address: string,
+    creds: L2Credentials,
+    args: L2HeaderArgs,
+  ): Promise<Result<Record<string, string>, PolymarketError>> => {
+    const tsResult = await getServerTime();
+    if (!tsResult.ok) return err(tsResult.error);
+    return ok(buildL2Headers(address, creds, tsResult.value, args));
+  };
+
   return {
+    getServerTime,
+
     async deriveApiKey(params) {
+      // create-or-derive (mirrors @polymarket/clob-client createOrDeriveApiKey):
+      // POST /auth/api-key creates a new L2 key; if one already exists for this
+      // signer it errors, so we fall back to the deterministic GET /auth/derive-api-key.
+      // Both use the same L1 (ClobAuth) headers.
+      const headers = {
+        ...buildL1Headers(params),
+        "Content-Type": "application/json",
+      };
+      const created = await doFetch(
+        `${baseUrl}/auth/api-key`,
+        { method: "POST", headers },
+        L2CredentialsSchema,
+        timeoutMs,
+      );
+      if (created.ok) return created;
+      // Auth/header failures won't succeed on derive either; surface the first error.
+      if (created.error.code === "UPSTREAM_ERROR" && created.error.statusCode === 401) {
+        return created;
+      }
       return doFetch(
         `${baseUrl}/auth/derive-api-key`,
-        {
-          method: "GET",
-          headers: {
-            ...buildL1Headers(params),
-            "Content-Type": "application/json",
-          },
-        },
+        { method: "GET", headers },
         L2CredentialsSchema,
         timeoutMs,
       );
     },
 
     async getBalanceAllowance(address, creds) {
+      const requestPath = "/balance-allowance";
+      const headersResult = await l2Headers(address, creds, { method: "GET", requestPath });
+      if (!headersResult.ok) return err(headersResult.error);
       return doFetch(
-        `${baseUrl}/balance-allowance?asset_type=CONDITIONAL&token_id=`,
+        `${baseUrl}${requestPath}?asset_type=CONDITIONAL&token_id=`,
         {
           method: "GET",
-          headers: {
-            ...buildL2Headers(address, creds),
-          },
+          headers: headersResult.value,
         },
         BalanceAllowanceSchema,
         timeoutMs,
       );
     },
 
-    async submitOrder(order, creds, address, idempotencyKey) {
+    async submitOrder(order, orderType, creds, address, idempotencyKey) {
+      // CLOB V2 POST /order body (orderToJsonV2): side is "BUY"|"SELL", includes
+      // timestamp/metadata/builder; domain version "2" at sign time.
+      const sideWire = order.side === 0 || order.side === "BUY" ? "BUY" : "SELL";
+      const requestPath = "/order";
       const body = {
-        tokenID: order.tokenId,
-        side: order.side,
-        price: order.price,
-        size: order.size,
-        orderType: order.orderType,
-        funder: order.funder,
-        signature: order.signature,
-        signatureType: order.signatureType,
-        ...(order.builderCode ? { builderCode: order.builderCode } : {}),
-        ...(order.expiration ? { expiration: order.expiration } : {}),
+        deferExec: false,
+        postOnly: false,
+        order: {
+          salt: typeof order.salt === "string" ? Number.parseInt(order.salt, 10) : order.salt,
+          maker: order.maker,
+          signer: order.signer,
+          tokenId: order.tokenId,
+          makerAmount: order.makerAmount,
+          takerAmount: order.takerAmount,
+          side: sideWire,
+          signatureType: order.signatureType,
+          timestamp: order.timestamp,
+          expiration: order.expiration ?? "0",
+          metadata: order.metadata,
+          builder: order.builder,
+          signature: order.signature,
+        },
+        owner: creds.apiKey,
+        orderType,
       };
+      const bodyStr = JSON.stringify(body);
+      const headersResult = await l2Headers(address, creds, {
+        method: "POST",
+        requestPath,
+        body: bodyStr,
+      });
+      if (!headersResult.ok) return err(headersResult.error);
       return doFetch(
-        `${baseUrl}/order`,
+        `${baseUrl}${requestPath}`,
         {
           method: "POST",
           headers: {
-            ...buildL2Headers(address, creds),
+            ...headersResult.value,
             "Content-Type": "application/json",
             "Idempotency-Key": idempotencyKey,
           },
-          body: JSON.stringify(body),
+          body: bodyStr,
         },
         SubmitOrderResponseSchema,
         timeoutMs,
@@ -178,15 +237,23 @@ export const createAuthenticatedClobClient = (
     },
 
     async cancelOrder(clobOrderId, creds, address) {
+      const requestPath = "/order";
+      const bodyStr = JSON.stringify({ orderID: clobOrderId });
+      const headersResult = await l2Headers(address, creds, {
+        method: "DELETE",
+        requestPath,
+        body: bodyStr,
+      });
+      if (!headersResult.ok) return err(headersResult.error);
       const result = await doFetch(
-        `${baseUrl}/order`,
+        `${baseUrl}${requestPath}`,
         {
           method: "DELETE",
           headers: {
-            ...buildL2Headers(address, creds),
+            ...headersResult.value,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ orderID: clobOrderId }),
+          body: bodyStr,
         },
         // Accept any object shape for cancel response
         { safeParse: (d: unknown) => ({ success: true as const, data: d as object }) },
@@ -197,15 +264,20 @@ export const createAuthenticatedClobClient = (
     },
 
     async getOpenOrders(address, creds) {
-      return doFetch(
-        `${baseUrl}/orders?status=LIVE`,
+      const requestPath = "/data/orders";
+      const headersResult = await l2Headers(address, creds, { method: "GET", requestPath });
+      if (!headersResult.ok) return err(headersResult.error);
+      const result = await doFetch(
+        `${baseUrl}${requestPath}?next_cursor=${INITIAL_CURSOR}`,
         {
           method: "GET",
-          headers: buildL2Headers(address, creds),
+          headers: headersResult.value,
         },
-        OpenOrderSchema.array(),
+        OpenOrdersResponseSchema,
         timeoutMs,
       );
+      if (!result.ok) return err(result.error);
+      return ok(result.value.data);
     },
   };
 };

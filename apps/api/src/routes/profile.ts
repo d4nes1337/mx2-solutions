@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { DataClient, Position } from "@mx2/polymarket-client";
+import { deriveDepositWallet } from "@mx2/polymarket-client";
 import type { SessionStore } from "@mx2/db";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import type {} from "../auth/types.js";
@@ -18,20 +19,29 @@ const PNL_LIMITATIONS = [
   "Pre-beta trading history may be incomplete if the wallet traded before connecting here",
   "USDC transfers between wallets are not tracked",
   "Split, merge, and redeem events may not be fully reflected in realized PnL",
-  "Pass ?proxyWallet=0x... to query your Polymarket deposit wallet if the EOA returns no positions",
+  "Queries default to your derived Polymarket deposit wallet; pass ?proxyWallet=0x... to inspect a different wallet",
 ];
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-// The Polymarket Data API uses the proxy/deposit wallet address, not the EOA.
-// Allow the authenticated user to pass ?proxyWallet=<address> to override the query address.
+// The Polymarket Data API keys off the proxy/deposit wallet, not the signer EOA.
+// Resolution order:
+//   1. explicit ?proxyWallet=<address> override (e.g. to inspect another wallet);
+//   2. the deposit (Gnosis Safe) wallet deterministically derived from the EOA;
+//   3. the raw EOA as a last resort if derivation fails.
 const resolveQueryAddress = (
   req: { user: { walletAddress: string } | null },
   q: Record<string, string>,
 ): string => {
   const proxy = q["proxyWallet"];
   if (proxy && ETH_ADDRESS_RE.test(proxy)) return proxy.toLowerCase();
-  return req.user?.walletAddress ?? "";
+  const eoa = req.user?.walletAddress;
+  if (!eoa) return "";
+  try {
+    return deriveDepositWallet(eoa).toLowerCase();
+  } catch {
+    return eoa;
+  }
 };
 
 const computePnlSummary = (positions: Position[]) => {

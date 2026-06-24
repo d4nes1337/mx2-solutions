@@ -14,10 +14,12 @@
   "scripts": {
     "build": "tsc -b",
     "generate": "drizzle-kit generate",
-    "migrate": "tsx src/migrate.ts"
+    "migrate": "tsx src/migrate.ts",
+    "seed:allowlist": "tsx src/seed-allowlist.ts"
   },
   "dependencies": {
     "@mx2/core": "workspace:*",
+    "@mx2/rules": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "pg": "^8.13.1"
   },

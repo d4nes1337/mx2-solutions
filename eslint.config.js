@@ -14,6 +14,9 @@ export default tseslint.config(
       "**/.next/**",
       "**/node_modules/**",
       "**/coverage/**",
+      // apps/web (Next.js) is linted by its own toolchain, not the root ESLint 9
+      // flat config (which targets the Node packages + their import boundaries).
+      "apps/web/**",
       "polymarket_claude_mvp_kit_v1/**",
     ],
   },

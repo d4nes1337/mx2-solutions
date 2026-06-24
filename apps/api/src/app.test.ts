@@ -12,6 +12,8 @@ import type {
   ClobCredentialStore,
   OrderIntentStore,
   RuntimeFlagStore,
+  RuleStore,
+  TriggerStore,
   AuthChallengeRow,
   UserRow,
   SessionRow,
@@ -41,7 +43,6 @@ const mockGammaClient: GammaClient = {
   getEvent: async () => err(upstreamErr),
   listMarkets: async () => ok([]),
   getMarket: async () => err(upstreamErr),
-  getPricesHistory: async () => ok([]),
 };
 
 const mockClobClient: ClobClient = {
@@ -49,6 +50,7 @@ const mockClobClient: ClobClient = {
   getTrades: async () => ok([]),
   getPrices: async () => ok([]),
   getLastTradePrice: async () => err(upstreamErr),
+  getPricesHistory: async () => ok([]),
 };
 
 const mockDataClient: DataClient = {
@@ -148,7 +150,35 @@ const mockRuntimeFlags: RuntimeFlagStore = {
   set: async (key, value, updatedBy) => ({ key, value, updatedBy, updatedAt: new Date() }),
 };
 
+const mockRuleStore: RuleStore = {
+  create: async () => {
+    throw new Error("not implemented in test");
+  },
+  findById: async () => null,
+  findByIdForWallet: async () => null,
+  listByWallet: async () => [],
+  listEvaluable: async () => [],
+  updateEvaluationState: async () => null,
+  pause: async () => null,
+  resume: async () => null,
+  cancel: async () => null,
+  markExecuted: async () => null,
+};
+
+const mockTriggerStore: TriggerStore = {
+  create: async () => {
+    throw new Error("not implemented in test");
+  },
+  findById: async () => null,
+  findByIdForWallet: async () => null,
+  listByWallet: async () => [],
+  listAwaiting: async () => [],
+  hasForRule: async () => false,
+  updateStatus: async () => {},
+};
+
 const mockTradingClobClient: AuthenticatedClobClient = {
+  getServerTime: async () => ok(Math.floor(Date.now() / 1000)),
   deriveApiKey: async () => err(upstreamErr),
   getBalanceAllowance: async () => err(upstreamErr),
   submitOrder: async () => err(upstreamErr),
@@ -177,6 +207,8 @@ const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof m
     clobCredentials: mockClobCredentials,
     orderIntents: mockOrderIntents,
     runtimeFlags: mockRuntimeFlags,
+    ruleStore: mockRuleStore,
+    triggerStore: mockTriggerStore,
     tradingClobClient: mockTradingClobClient,
     geoblockClient: mockGeoblockClient,
   });
@@ -292,6 +324,8 @@ describe("auth routes", () => {
       clobCredentials: mockClobCredentials,
       orderIntents: mockOrderIntents,
       runtimeFlags: mockRuntimeFlags,
+      ruleStore: mockRuleStore,
+      triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
       geoblockClient: mockGeoblockClient,
     });
@@ -352,6 +386,8 @@ describe("auth routes", () => {
       clobCredentials: mockClobCredentials,
       orderIntents: mockOrderIntents,
       runtimeFlags: mockRuntimeFlags,
+      ruleStore: mockRuleStore,
+      triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
       geoblockClient: mockGeoblockClient,
     });
@@ -361,7 +397,11 @@ describe("auth routes", () => {
       headers: { cookie: "mx2_session=sometoken" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ address: walletAddress });
+    const body = res.json() as { address: string; depositWallet: string | null };
+    expect(body).toMatchObject({ address: walletAddress });
+    // Deposit wallet is derived deterministically from the EOA (Gnosis Safe).
+    expect(body.depositWallet).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    expect(body.depositWallet?.toLowerCase()).not.toBe(walletAddress.toLowerCase());
     await app.close();
   });
 });
@@ -396,6 +436,8 @@ describe("profile routes", () => {
       clobCredentials: mockClobCredentials,
       orderIntents: mockOrderIntents,
       runtimeFlags: mockRuntimeFlags,
+      ruleStore: mockRuleStore,
+      triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
       geoblockClient: mockGeoblockClient,
     });

@@ -13,6 +13,7 @@ export default defineConfig({
       "@mx2/config": pkg("./packages/config/src/index.ts"),
       "@mx2/observability": pkg("./packages/observability/src/index.ts"),
       "@mx2/db": pkg("./packages/db/src/index.ts"),
+      "@mx2/rules": pkg("./packages/rules/src/index.ts"),
       "@mx2/polymarket-client": pkg("./packages/polymarket-client/src/index.ts"),
     },
   },

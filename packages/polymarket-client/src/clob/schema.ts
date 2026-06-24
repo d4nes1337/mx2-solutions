@@ -77,6 +77,14 @@ export const OpenOrderSchema = z
   .passthrough();
 export type OpenOrder = z.infer<typeof OpenOrderSchema>;
 
+export const OpenOrdersResponseSchema = z
+  .object({
+    data: z.array(OpenOrderSchema),
+    next_cursor: z.string(),
+  })
+  .passthrough();
+export type OpenOrdersResponse = z.infer<typeof OpenOrdersResponseSchema>;
+
 export const SubmitOrderResponseSchema = z
   .object({
     orderID: z.string(),
@@ -87,17 +95,28 @@ export type SubmitOrderResponse = z.infer<typeof SubmitOrderResponseSchema>;
 
 export type OrderSide = "BUY" | "SELL";
 export type OrderType = "GTC" | "GTD" | "FOK";
-export const SIGNATURE_TYPE_POLY_1271 = 3 as const;
 
-export interface SignedOrderPayload {
-  tokenId: string;
-  side: OrderSide;
-  price: string;
-  size: string;
-  orderType: OrderType;
-  funder: string;
-  signature: string;
-  signatureType: typeof SIGNATURE_TYPE_POLY_1271;
-  builderCode?: string;
-  expiration?: string;
-}
+// Polymarket CLOB SignatureType enum (verified against @polymarket/clob-client
+// order-utils; see docs/INTEGRATION_VERIFIED.md §10). EOA=0, POLY_PROXY=1,
+// POLY_GNOSIS_SAFE=2. Our deposit wallets are Gnosis Safes → type 2.
+export const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = 2 as const;
+
+// CLOB V2 signed order (ExchangeOrderBuilderV2 / orderToJsonV2 wire shape).
+export const SignedClobOrderSchema = z
+  .object({
+    salt: z.union([z.string(), z.number()]),
+    maker: z.string(),
+    signer: z.string(),
+    tokenId: z.string(),
+    makerAmount: z.string(),
+    takerAmount: z.string(),
+    side: z.union([z.enum(["BUY", "SELL"]), z.literal(0), z.literal(1)]),
+    signatureType: z.number().int(),
+    timestamp: z.string(),
+    metadata: z.string(),
+    builder: z.string(),
+    expiration: z.string().optional(),
+    signature: z.string(),
+  })
+  .passthrough();
+export type SignedClobOrder = z.infer<typeof SignedClobOrderSchema>;

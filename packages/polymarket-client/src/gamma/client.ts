@@ -3,10 +3,8 @@ import { ok, err } from "@mx2/core";
 import {
   GammaEventSchema,
   GammaMarketSchema,
-  PricePointSchema,
   type GammaEvent,
   type GammaMarket,
-  type PricePoint,
 } from "./schema.js";
 import {
   networkError,
@@ -33,19 +31,11 @@ export interface ListMarketsParams {
   closed?: boolean;
 }
 
-export interface GetPricesHistoryParams {
-  conditionId: string;
-  startTs?: number;
-  endTs?: number;
-  fidelity?: number;
-}
-
 export interface GammaClient {
   listEvents(params?: ListEventsParams): Promise<Result<GammaEvent[], PolymarketError>>;
   getEvent(id: string): Promise<Result<GammaEvent, PolymarketError>>;
   listMarkets(params?: ListMarketsParams): Promise<Result<GammaMarket[], PolymarketError>>;
   getMarket(id: string): Promise<Result<GammaMarket, PolymarketError>>;
-  getPricesHistory(params: GetPricesHistoryParams): Promise<Result<PricePoint[], PolymarketError>>;
 }
 
 export interface GammaClientOptions {
@@ -161,22 +151,6 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
       fetchJson(
         buildUrl(baseUrl, `/markets/${encodeURIComponent(id)}`),
         GammaMarketSchema,
-        timeoutMs,
-      ),
-
-    getPricesHistory: (params) =>
-      fetchJson(
-        buildUrl(
-          baseUrl,
-          "/prices-history",
-          buildParams({
-            market: params.conditionId,
-            startTs: params.startTs,
-            endTs: params.endTs,
-            fidelity: params.fidelity,
-          }),
-        ),
-        PricePointSchema.array(),
         timeoutMs,
       ),
   };

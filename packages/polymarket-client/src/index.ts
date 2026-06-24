@@ -10,3 +10,4 @@ export * from "./data/schema.js";
 export * from "./data/client.js";
 export * from "./geoblock/schema.js";
 export * from "./geoblock/client.js";
+export * from "./wallet/derive.js";

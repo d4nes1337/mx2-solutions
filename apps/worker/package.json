@@ -13,7 +13,8 @@
     "@mx2/core": "workspace:*",
     "@mx2/db": "workspace:*",
     "@mx2/observability": "workspace:*",
-    "@mx2/polymarket-client": "workspace:*"
+    "@mx2/polymarket-client": "workspace:*",
+    "@mx2/rules": "workspace:*"
   },
   "devDependencies": {
     "pino-pretty": "^13.0.0",

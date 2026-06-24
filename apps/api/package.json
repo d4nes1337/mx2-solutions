@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsx watch src/server.ts",
-    "start": "node dist/server.js"
+    "dev": "tsx watch --env-file-if-exists=../../.env src/server.ts",
+    "start": "node --env-file-if-exists=../../.env dist/server.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
@@ -16,8 +16,10 @@
     "@mx2/db": "workspace:*",
     "@mx2/observability": "workspace:*",
     "@mx2/polymarket-client": "workspace:*",
+    "@mx2/rules": "workspace:*",
     "fastify": "^5.2.1",
-    "viem": "^2.21.0"
+    "viem": "^2.21.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "pino-pretty": "^13.0.0",

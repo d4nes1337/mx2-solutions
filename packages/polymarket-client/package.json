@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@mx2/core": "workspace:*",
+    "viem": "^2.21.0",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },

@@ -104,3 +104,52 @@ Relayer operations (wallet deploy, approvals) are only available in TS/Python SD
 - https://docs.polymarket.com/builders/overview
 - https://docs.polymarket.com/developers/gamma-markets-api/overview
 - https://docs.polymarket.com/quickstart/websocket/WSS-Quickstart
+
+## 9. Deposit-wallet derivation (verified 2026-06-23, Slice 5/A-021)
+
+- Polymarket browser-wallet (MetaMask/EOA) users trade through a per-user **Gnosis Safe**
+  proxy ("Deposit Wallet"), deployed via CREATE2 by the **Polymarket Contract Proxy Factory**
+  at `0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b` (Polygon).
+- Derivation is a **pure** function of the EOA (no on-chain lookup):
+  - `salt = keccak256(abi.encode(["address"], [eoa]))`
+  - `address = CREATE2(factory, salt, SAFE_INIT_CODE_HASH)`
+  - `SAFE_INIT_CODE_HASH = 0x2bce2127ff07fb632d16c8347c4ebf501f4841168bed00d9e6ef715ddb6fcecf`
+- Verified against the owner's real pair: EOA `0x77117F39…E36d` → deposit wallet
+  `0x997C95D8…1434` (the address `docs/test-auth.html` hardcodes). See
+  `packages/polymarket-client/src/wallet/derive.ts` + `derive.test.ts`.
+- Source: `@polymarket/builder-relayer-client` `src/builder/derive.ts#deriveSafe`,
+  `src/config/index.ts`, `src/constants/index.ts`.
+
+## 10. CLOB order signing (verified 2026-06-23, Slice 5/A-021)
+
+Source: `@polymarket/clob-client` (`src/order-utils/*`, `src/order-builder/helpers.ts`,
+`src/config.ts`, `src/utilities.ts`).
+
+- **Exchange contracts (Polygon 137):** normal `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`,
+  neg-risk `0xC5d563A36AE78145C45a50134d48A1215220f80a`. The order is signed against (and
+  submitted to the exchange matching) whichever applies to the market (`negRisk` flag).
+- **EIP-712 domain:** `{ name: "Polymarket CTF Exchange", version: "1", chainId: 137,
+verifyingContract: <exchange> }`.
+- **Order struct (primaryType "Order"):** `salt uint256, maker address, signer address,
+taker address, tokenId uint256, makerAmount uint256, takerAmount uint256, expiration uint256,
+nonce uint256, feeRateBps uint256, side uint8, signatureType uint8`.
+- **signatureType — CORRECTION:** canonical enum is `EOA=0, POLY_PROXY=1, POLY_GNOSIS_SAFE=2`.
+  There is **no type 3**. Since our users' deposit wallets are Gnosis Safes (§9), orders MUST use
+  **signatureType = 2 (POLY_GNOSIS_SAFE)**. (ADR-0002 / Slice-3 backend said "POLY_1271 / type 3";
+  that was wrong and is corrected here. The EOA signs the Order EIP-712 directly via
+  `eth_signTypedData_v4`; no ERC-7739 nesting is required for type 2.)
+- **maker / signer:** `maker` = deposit (Safe) wallet = `funder`; `signer` = EOA. `taker` =
+  zero address (public order). `feeRateBps`/`nonce` default "0".
+- **Amounts (6-decimal USDC/CTF):** `side BUY → takerAmt = roundDown(size, sizeDp),
+makerAmt = takerAmt*price`; `SELL → makerAmt = roundDown(size, sizeDp), takerAmt = makerAmt*price`;
+  then `parseUnits(amt, 6)`. Rounding decimals come from tickSize: 0.1→{p1,s2,a3}, 0.01→{p2,s2,a4},
+  0.001→{p3,s2,a5}, 0.0001→{p4,s2,a6}.
+- **salt:** `Math.round(Math.random()*Date.now()).toString()` (sent to CLOB as an integer).
+- **POST /order body:** `{ order: { salt(int), maker, signer, taker, tokenId, makerAmount,
+takerAmount, side(0|1), expiration, nonce, feeRateBps, signatureType, signature }, owner: <apiKey>,
+orderType: "GTC"|"GTD"|"FOK" }` with the L2 HMAC headers.
+
+## Primary sources (order signing, fetched 2026-06-23)
+
+- https://github.com/Polymarket/clob-client (`src/order-utils`, `src/order-builder`, `src/config.ts`)
+- https://github.com/Polymarket/builder-relayer-client (`src/builder/derive.ts`, `src/config`, `src/constants`)

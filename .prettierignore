@@ -2,6 +2,7 @@
 **/build/**
 **/.next/**
 **/coverage/**
+.pnpm-store/
 pnpm-lock.yaml
 polymarket_claude_mvp_kit_v1/
 .claude/

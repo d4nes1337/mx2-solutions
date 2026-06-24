@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Result } from "@mx2/core";
 import { ok, err } from "@mx2/core";
 import {
@@ -9,6 +10,7 @@ import {
   type Trade,
   type TokenPrice,
 } from "./schema.js";
+import { PricePointSchema, type PricePoint } from "../gamma/schema.js";
 import {
   networkError,
   upstreamError,
@@ -23,12 +25,31 @@ export interface GetTradesParams {
   limit?: number;
 }
 
+export interface GetPricesHistoryParams {
+  /** CLOB token id (clobTokenIds[outcomeIndex]) — NOT the conditionId. */
+  tokenId: string;
+  startTs?: number;
+  endTs?: number;
+  /** Resolution in minutes (defaults to 60). */
+  fidelity?: number;
+  /** Time window when startTs/endTs are not given: max | 1m | 1w | 1d | 6h | 1h. */
+  interval?: string;
+}
+
 export interface ClobClient {
   getOrderbook(tokenId: string): Promise<Result<Orderbook, PolymarketError>>;
   getTrades(params: GetTradesParams): Promise<Result<Trade[], PolymarketError>>;
   getPrices(tokenIds: string[]): Promise<Result<TokenPrice[], PolymarketError>>;
   getLastTradePrice(tokenId: string): Promise<Result<string, PolymarketError>>;
+  getPricesHistory(params: GetPricesHistoryParams): Promise<Result<PricePoint[], PolymarketError>>;
 }
+
+// The CLOB price-history endpoint wraps the series in a `history` object:
+// { history: [{ t, p }, ...] }. (The earlier code hit the Gamma host with a
+// bare-array schema and the conditionId, which 404'd / returned nothing.)
+const PricesHistoryResponseSchema = z
+  .object({ history: PricePointSchema.array().default([]) })
+  .passthrough();
 
 export interface ClobClientOptions {
   baseUrl?: string;
@@ -100,6 +121,24 @@ export const createClobClient = (opts?: ClobClientOptions): ClobClient => {
       const result = await fetchJson(url.toString(), LastTradePriceSchema, timeoutMs);
       if (!result.ok) return err(result.error);
       return ok(result.value.price);
+    },
+
+    getPricesHistory: async (params) => {
+      const url = new URL("/prices-history", baseUrl);
+      url.searchParams.set("market", params.tokenId);
+      if (params.startTs !== undefined) url.searchParams.set("startTs", String(params.startTs));
+      if (params.endTs !== undefined) url.searchParams.set("endTs", String(params.endTs));
+      // The endpoint requires a window: explicit start/end OR an interval.
+      // Default to the full history ("max") when no explicit window is given.
+      if (params.startTs === undefined && params.endTs === undefined) {
+        url.searchParams.set("interval", params.interval ?? "max");
+      } else if (params.interval !== undefined) {
+        url.searchParams.set("interval", params.interval);
+      }
+      url.searchParams.set("fidelity", String(params.fidelity ?? 60));
+      const result = await fetchJson(url.toString(), PricesHistoryResponseSchema, timeoutMs);
+      if (!result.ok) return err(result.error);
+      return ok(result.value.history);
     },
   };
 };
