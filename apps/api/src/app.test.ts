@@ -14,6 +14,8 @@ import type {
   RuntimeFlagStore,
   RuleStore,
   TriggerStore,
+  PrivyWalletStore,
+  DelegationStore,
   AuthChallengeRow,
   UserRow,
   SessionRow,
@@ -27,6 +29,7 @@ import type {
   GeoblockClient,
   PolymarketError,
 } from "@mx2/polymarket-client";
+import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "./app.js";
 
 const config = loadConfig({ DATABASE_URL: "postgresql://u:p@localhost:5432/db" });
@@ -43,6 +46,7 @@ const mockGammaClient: GammaClient = {
   getEvent: async () => err(upstreamErr),
   listMarkets: async () => ok([]),
   getMarket: async () => err(upstreamErr),
+  findMarket: async () => ok(null),
 };
 
 const mockClobClient: ClobClient = {
@@ -143,6 +147,7 @@ const mockOrderIntents: OrderIntentStore = {
   findById: async () => null,
   listByWallet: async () => [],
   updateStatus: async () => {},
+  countRecentByWallet: async () => 0,
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {
@@ -163,6 +168,9 @@ const mockRuleStore: RuleStore = {
   resume: async () => null,
   cancel: async () => null,
   markExecuted: async () => null,
+  markExecuting: async () => null,
+  markAutoExecuted: async () => null,
+  markExecutionFailed: async () => null,
 };
 
 const mockTriggerStore: TriggerStore = {
@@ -190,6 +198,27 @@ const mockGeoblockClient: GeoblockClient = {
   check: async (ip) => ok({ status: "allowed", country: "DE", region: null, ip }),
 };
 
+const mockTradingSigner: TradingSigner = createMockTradingSigner({
+  privateKey: `0x${"1".repeat(64)}`,
+});
+
+const mockPrivyWallets: PrivyWalletStore = {
+  upsert: async () => {
+    throw new Error("not implemented");
+  },
+  find: async () => null,
+  markAllowancesBootstrapped: async () => {},
+};
+
+const mockDelegations: DelegationStore = {
+  create: async () => {
+    throw new Error("not implemented");
+  },
+  findActive: async () => null,
+  revoke: async () => {},
+  expireLapsed: async () => {},
+};
+
 const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof mockAllowlist>) =>
   buildApp({
     config,
@@ -210,6 +239,9 @@ const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof m
     ruleStore: mockRuleStore,
     triggerStore: mockTriggerStore,
     tradingClobClient: mockTradingClobClient,
+    tradingSigner: mockTradingSigner,
+    privyWallets: mockPrivyWallets,
+    delegations: mockDelegations,
     geoblockClient: mockGeoblockClient,
   });
 
@@ -327,6 +359,9 @@ describe("auth routes", () => {
       ruleStore: mockRuleStore,
       triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
+      tradingSigner: mockTradingSigner,
+      privyWallets: mockPrivyWallets,
+      delegations: mockDelegations,
       geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
@@ -389,6 +424,9 @@ describe("auth routes", () => {
       ruleStore: mockRuleStore,
       triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
+      tradingSigner: mockTradingSigner,
+      privyWallets: mockPrivyWallets,
+      delegations: mockDelegations,
       geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
@@ -439,6 +477,9 @@ describe("profile routes", () => {
       ruleStore: mockRuleStore,
       triggerStore: mockTriggerStore,
       tradingClobClient: mockTradingClobClient,
+      tradingSigner: mockTradingSigner,
+      privyWallets: mockPrivyWallets,
+      delegations: mockDelegations,
       geoblockClient: mockGeoblockClient,
     });
     const res = await app.inject({
@@ -451,6 +492,91 @@ describe("profile routes", () => {
     expect(body).toHaveProperty("methodology");
     expect(body).toHaveProperty("limitations");
     expect(body).toHaveProperty("summary");
+    await app.close();
+  });
+
+  it("GET /api/profile/overview returns aggregated portfolio when authenticated", async () => {
+    const walletAddress = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+    const sessions: SessionStore = {
+      ...mockSessions,
+      findByTokenHash: async () => makeSessionRow(walletAddress),
+    };
+    const app = buildApp({
+      config,
+      logger,
+      db: { ping: async () => true },
+      auditStore: mockAuditStore,
+      gammaClient: mockGammaClient,
+      clobClient: mockClobClient,
+      dataClient: mockDataClient,
+      marketSnapshots: mockMarketSnapshots,
+      challenges: mockChallenges,
+      users: mockUsers,
+      sessions,
+      allowlist: mockAllowlist,
+      clobCredentials: mockClobCredentials,
+      orderIntents: mockOrderIntents,
+      runtimeFlags: mockRuntimeFlags,
+      ruleStore: mockRuleStore,
+      triggerStore: mockTriggerStore,
+      tradingClobClient: mockTradingClobClient,
+      tradingSigner: mockTradingSigner,
+      privyWallets: mockPrivyWallets,
+      delegations: mockDelegations,
+      geoblockClient: mockGeoblockClient,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/profile/overview",
+      headers: { cookie: "mx2_session=sometoken" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toHaveProperty("summary");
+    expect(body).toHaveProperty("positions");
+    expect(body).toHaveProperty("counts");
+    await app.close();
+  });
+
+  it("GET /api/profile/open-orders returns setupRequired when no creds", async () => {
+    const walletAddress = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+    const sessions: SessionStore = {
+      ...mockSessions,
+      findByTokenHash: async () => makeSessionRow(walletAddress),
+    };
+    const app = buildApp({
+      config,
+      logger,
+      db: { ping: async () => true },
+      auditStore: mockAuditStore,
+      gammaClient: mockGammaClient,
+      clobClient: mockClobClient,
+      dataClient: mockDataClient,
+      marketSnapshots: mockMarketSnapshots,
+      challenges: mockChallenges,
+      users: mockUsers,
+      sessions,
+      allowlist: mockAllowlist,
+      clobCredentials: mockClobCredentials,
+      orderIntents: mockOrderIntents,
+      runtimeFlags: mockRuntimeFlags,
+      ruleStore: mockRuleStore,
+      triggerStore: mockTriggerStore,
+      tradingClobClient: mockTradingClobClient,
+      tradingSigner: mockTradingSigner,
+      privyWallets: mockPrivyWallets,
+      delegations: mockDelegations,
+      geoblockClient: mockGeoblockClient,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/profile/open-orders",
+      headers: { cookie: "mx2_session=sometoken" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { setupRequired: boolean; openOrders: unknown[] };
+    expect(body.setupRequired).toBe(true);
+    expect(body.openOrders).toEqual([]);
     await app.close();
   });
 });

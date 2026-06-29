@@ -192,7 +192,7 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
     // Set httpOnly session cookie.
     void reply.setCookie(SESSION_COOKIE_NAME, token, {
       httpOnly: true,
-      sameSite: "strict",
+      sameSite: deps.config.session.crossSite ? "none" : "strict",
       path: "/",
       secure: deps.config.session.cookieSecure,
       maxAge: deps.config.session.ttlSeconds,

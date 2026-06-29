@@ -6,9 +6,17 @@ import {
   createAuditStore,
   createRuleStore,
   createTriggerStore,
+  createPrivyWalletStore,
+  createDelegationStore,
+  createRuntimeFlagStore,
+  createOrderIntentStore,
+  createClobCredentialStore,
 } from "@mx2/db";
+import { createAuthenticatedClobClient } from "@mx2/polymarket-client";
+import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
+import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
 
 /**
  * Long-running worker process. Hosts the Polymarket WebSocket ingestion and the
@@ -43,13 +51,59 @@ const main = async (): Promise<void> => {
   let evaluator: RuleEvaluatorManager | null = null;
 
   if (config.features.conditionalRules) {
+    const ruleStore = createRuleStore(dbHandle.db);
+    const triggerStore = createTriggerStore(dbHandle.db);
+    const auditStore = createAuditStore(dbHandle.db);
+
+    // Auto-execution is wired ONLY when explicitly enabled (config validation
+    // requires Privy signing + live trading for this flag). Absent → manual-only.
+    let autoExecutor: AutoExecutor | undefined;
+    if (config.features.conditionalLiveExecution) {
+      const privyCreds =
+        config.privy.appId && config.privy.appSecret && config.privy.authorizationKey
+          ? {
+              appId: config.privy.appId,
+              appSecret: config.privy.appSecret,
+              authorizationPrivateKey: config.privy.authorizationKey,
+              keyQuorumId: config.privy.keyQuorumId,
+              tradingPolicyId: config.privy.tradingPolicyId,
+              rpcUrl: config.polygonRpcUrl,
+            }
+          : undefined;
+      autoExecutor = createAutoExecutor({
+        logger,
+        config,
+        tradingSigner: createConfiguredTradingSigner({
+          enabled: config.features.privySigning,
+          isProduction: config.env === "production",
+          mockSignerPrivateKey: config.mockSignerPrivateKey,
+          privy: privyCreds,
+        }),
+        privyWallets: createPrivyWalletStore(dbHandle.db),
+        delegations: createDelegationStore(dbHandle.db),
+        runtimeFlags: createRuntimeFlagStore(dbHandle.db),
+        orderIntents: createOrderIntentStore(dbHandle.db),
+        clobCredentials: createClobCredentialStore(dbHandle.db),
+        tradingClobClient: createAuthenticatedClobClient({
+          baseUrl: config.polymarket.clobBaseUrl,
+        }),
+        ruleStore,
+        triggerStore,
+        auditStore,
+      });
+      logger.warn(
+        "FEATURE_CONDITIONAL_LIVE_EXECUTION is ON — auto rules will submit real orders unattended",
+      );
+    }
+
     evaluator = createRuleEvaluatorManager({
       logger,
-      ruleStore: createRuleStore(dbHandle.db),
-      triggerStore: createTriggerStore(dbHandle.db),
-      auditStore: createAuditStore(dbHandle.db),
+      ruleStore,
+      triggerStore,
+      auditStore,
       subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
       unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
+      ...(autoExecutor ? { autoExecutor } : {}),
     });
   } else {
     logger.warn("FEATURE_CONDITIONAL_RULES is off — rule evaluator disabled");

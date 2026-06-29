@@ -17,6 +17,7 @@
     "@mx2/observability": "workspace:*",
     "@mx2/polymarket-client": "workspace:*",
     "@mx2/rules": "workspace:*",
+    "@mx2/trading-signer": "workspace:*",
     "fastify": "^5.2.1",
     "viem": "^2.21.0",
     "zod": "^3.24.1"

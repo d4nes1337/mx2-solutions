@@ -26,21 +26,26 @@ export function TradingStatusBanner() {
   const paused = status.data?.runtimePaused;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
-      <span className="font-semibold text-fg">Trading status:</span>
-      <Badge tone={liveTrading ? "pos" : "warn"}>
-        live trading {liveTrading ? "ENABLED" : "DISABLED"}
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted">
+      <span className="font-semibold uppercase tracking-wide text-faint">Status</span>
+      <Badge tone={liveTrading ? "pos" : "warn"} dot>
+        live trading {liveTrading ? "ON" : "OFF"}
       </Badge>
-      {paused ? <Badge tone="neg">kill-switch: PAUSED</Badge> : null}
+      {paused ? (
+        <Badge tone="neg" dot>
+          kill-switch: PAUSED
+        </Badge>
+      ) : null}
       {geo ? (
-        <Badge tone={geo.status === "allowed" ? "pos" : "warn"}>
+        <Badge tone={geo.status === "allowed" ? "pos" : "warn"} dot>
           geoblock: {geo.status}
           {geo.country ? ` (${geo.country})` : ""}
         </Badge>
       ) : null}
       <span className="text-muted">
-        Order submission is intentionally disabled in this MVP — preview only (A-021 signing spike
-        is open).
+        {liveTrading
+          ? "Orders route to the Polymarket CLOB after manual signature."
+          : "Preview-only — order submission is disabled in this MVP build."}
       </span>
     </div>
   );

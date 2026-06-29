@@ -7,6 +7,7 @@
     { "path": "./packages/db" },
     { "path": "./packages/rules" },
     { "path": "./packages/polymarket-client" },
+    { "path": "./packages/trading-signer" },
     { "path": "./apps/api" },
     { "path": "./apps/worker" }
   ]

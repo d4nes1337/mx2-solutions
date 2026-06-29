@@ -27,6 +27,11 @@ import type {
 const TERMINAL: ReadonlySet<RuleStatus> = new Set<RuleStatus>([
   "TRIGGERED_AWAITING_USER",
   "EXECUTED_MANUALLY",
+  // Auto-execution lifecycle (worker-managed, post-trigger). Absorbing here so the
+  // pure evaluator never re-arms a rule that is executing or has executed/failed.
+  "EXECUTING",
+  "EXECUTED_AUTO",
+  "EXECUTION_FAILED",
   "EXPIRED",
   "CANCELLED",
   "INVALIDATED",

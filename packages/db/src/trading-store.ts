@@ -1,4 +1,4 @@
-import { eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, gte, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   userClobCredentials,
@@ -84,6 +84,8 @@ export interface OrderIntentStore {
   findByIdempotencyKey(key: string): Promise<OrderIntentRow | null>;
   findById(id: string): Promise<OrderIntentRow | null>;
   listByWallet(walletAddress: string, limit?: number): Promise<OrderIntentRow[]>;
+  /** Count intents created at/after `since` for a wallet — the shared rate-limit gate. */
+  countRecentByWallet(walletAddress: string, since: Date): Promise<number>;
   updateStatus(
     id: string,
     status: OrderIntentStatus,
@@ -132,6 +134,16 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
       .where(eq(orderIntents.walletAddress, walletAddress))
       .orderBy(desc(orderIntents.createdAt))
       .limit(limit);
+  },
+
+  async countRecentByWallet(walletAddress, since) {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(orderIntents)
+      .where(
+        and(eq(orderIntents.walletAddress, walletAddress), gte(orderIntents.createdAt, since)),
+      );
+    return row?.count ?? 0;
   },
 
   async updateStatus(id, status, extra) {

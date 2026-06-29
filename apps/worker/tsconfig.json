@@ -10,7 +10,8 @@
     { "path": "../../packages/observability" },
     { "path": "../../packages/db" },
     { "path": "../../packages/rules" },
-    { "path": "../../packages/polymarket-client" }
+    { "path": "../../packages/polymarket-client" },
+    { "path": "../../packages/trading-signer" }
   ],
   "include": ["src/**/*.ts"]
 }

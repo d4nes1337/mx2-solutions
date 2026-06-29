@@ -48,6 +48,32 @@ export function signed(v: string | number | undefined | null): string {
   return `${sign}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Signed USD, e.g. +$12.34 / -$5.00 — for PnL/deltas. */
+export function signedUsd(v: string | number | undefined | null): string {
+  const n = toNum(v);
+  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+  return `${sign}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** A 0–1 probability rendered as cents (Polymarket share price). */
+export function cents(v: string | number | undefined | null): string {
+  const n = toNum(v);
+  return `${(n * 100).toFixed(1)}¢`;
+}
+
+/** Signed percent string from an already-percent value, e.g. +4.2% */
+export function signedPct(v: string | number | undefined | null, digits = 1): string {
+  const n = toNum(v);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(digits)}%`;
+}
+
+/** Percentage change from `from` to `to` (both raw values). */
+export function pctChange(from: number, to: number): number {
+  if (!Number.isFinite(from) || from === 0) return 0;
+  return ((to - from) / Math.abs(from)) * 100;
+}
+
 export function timeAgo(unixSeconds: number): string {
   const diff = Date.now() / 1000 - unixSeconds;
   if (diff < 60) return "just now";

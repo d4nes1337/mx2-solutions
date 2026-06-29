@@ -15,6 +15,8 @@ import type {
   RuntimeFlagStore,
   RuleStore,
   TriggerStore,
+  PrivyWalletStore,
+  DelegationStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -23,11 +25,14 @@ import type {
   AuthenticatedClobClient,
   GeoblockClient,
 } from "@mx2/polymarket-client";
+import type { TradingSigner } from "@mx2/trading-signer";
+import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
 import { registerEventsRoutes } from "./routes/events.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerTradeRoutes } from "./routes/trade.js";
+import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import type {} from "./auth/types.js";
@@ -52,11 +57,16 @@ export interface AppDeps {
   runtimeFlags: RuntimeFlagStore;
   ruleStore: RuleStore;
   triggerStore: TriggerStore;
+  privyWallets: PrivyWalletStore;
+  delegations: DelegationStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
   tradingClobClient: AuthenticatedClobClient;
+  tradingSigner: TradingSigner;
   geoblockClient: GeoblockClient;
+  /** Optional: injected in tests; otherwise built from POLYGON_RPC_URL. */
+  allowanceReader?: AllowanceReader | null;
 }
 
 /**
@@ -70,9 +80,14 @@ export const buildApp = (deps: AppDeps) => {
   app.decorateRequest("user", null);
 
   // CORS: in development allow any localhost origin (needed for the test HTML page).
-  // In staging/production the allowed origin must be set to the real frontend URL.
+  // In staging/production allow exactly the configured frontend origin (APP_BASE_URL).
+  // Same-domain deploys (web + /api behind one reverse proxy) are same-origin and need
+  // no CORS; this also supports a split deploy (web on a different host) with credentials.
   void app.register(fastifyCors, {
-    origin: deps.config.env === "development" ? (origin, cb) => cb(null, origin ?? true) : false,
+    origin:
+      deps.config.env === "development"
+        ? (origin, cb) => cb(null, origin ?? true)
+        : [deps.config.baseUrl],
     credentials: true,
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
   });
@@ -121,6 +136,10 @@ export const buildApp = (deps: AppDeps) => {
   registerProfileRoutes(fastifyApp, {
     dataClient: deps.dataClient,
     sessions: deps.sessions,
+    clobCredentials: deps.clobCredentials,
+    tradingClobClient: deps.tradingClobClient,
+    config: deps.config,
+    gammaClient: deps.gammaClient,
   });
   registerTradeRoutes(fastifyApp, {
     config: deps.config,
@@ -131,6 +150,21 @@ export const buildApp = (deps: AppDeps) => {
     runtimeFlags: deps.runtimeFlags,
     tradingClobClient: deps.tradingClobClient,
     geoblockClient: deps.geoblockClient,
+    tradingSigner: deps.tradingSigner,
+    privyWallets: deps.privyWallets,
+    delegations: deps.delegations,
+  });
+  const allowanceReader =
+    deps.allowanceReader ??
+    (deps.config.polygonRpcUrl ? createViemAllowanceReader(deps.config.polygonRpcUrl) : null);
+  registerTradingWalletRoutes(fastifyApp, {
+    config: deps.config,
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    tradingSigner: deps.tradingSigner,
+    privyWallets: deps.privyWallets,
+    delegations: deps.delegations,
+    allowanceReader,
   });
   registerAdminRoutes(fastifyApp, {
     config: deps.config,

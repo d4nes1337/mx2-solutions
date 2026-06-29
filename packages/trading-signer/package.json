@@ -1,0 +1,22 @@
+{
+  "name": "@mx2/trading-signer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@mx2/core": "workspace:*",
+    "@privy-io/node": "^0.23.0",
+    "viem": "^2.21.0"
+  }
+}

@@ -22,7 +22,7 @@ const data: PnlResponse = {
 describe("PnLSummary", () => {
   it("renders summary figures", () => {
     render(<PnLSummary data={data} />);
-    expect(screen.getByText("Portfolio value")).toBeInTheDocument();
+    expect(screen.getByText("Equity")).toBeInTheDocument();
     expect(screen.getByText("$100.00")).toBeInTheDocument();
     expect(screen.getByText("$+7.78")).toBeInTheDocument();
   });

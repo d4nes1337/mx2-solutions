@@ -2,22 +2,22 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import {
-  FEED_LIMIT,
-  hottestScore,
-  newVolumeScore,
-  sortEventsByScore,
-} from "./feeds";
+import { FEED_LIMIT, hottestScore, newVolumeScore, sortEventsByScore } from "./feeds";
 import type {
   CreateRuleRequest,
+  EquityHistoryResponse,
+  EquityWindow,
   EvaluateNowResponse,
   EventsResponse,
   FeatureFlags,
   HistoryResponse,
+  HistoryTypeFilter,
   MarketDetail,
+  OpenOrdersResponse,
   OrderbookResponse,
   OrderPreviewRequest,
   OrderPreviewResponse,
+  PortfolioOverviewResponse,
   PnlResponse,
   PositionsResponse,
   PricesHistoryResponse,
@@ -39,8 +39,7 @@ const FEED_BASE = `/api/events?limit=${FEED_LIMIT}&active=true&closed=false`;
 export function useLatestFeed() {
   return useQuery({
     queryKey: ["feed", "latest"],
-    queryFn: () =>
-      api.get<EventsResponse>(`${FEED_BASE}&order=createdAt&ascending=false`),
+    queryFn: () => api.get<EventsResponse>(`${FEED_BASE}&order=createdAt&ascending=false`),
     staleTime: 30_000,
   });
 }
@@ -48,8 +47,7 @@ export function useLatestFeed() {
 export function useVolumeWeekFeed() {
   return useQuery({
     queryKey: ["feed", "volumeWeek"],
-    queryFn: () =>
-      api.get<EventsResponse>(`${FEED_BASE}&order=volume1wk&ascending=false`),
+    queryFn: () => api.get<EventsResponse>(`${FEED_BASE}&order=volume1wk&ascending=false`),
     staleTime: 60_000,
   });
 }
@@ -58,9 +56,7 @@ export function useHottestFeed() {
   return useQuery({
     queryKey: ["feed", "hottest"],
     queryFn: async () => {
-      const res = await api.get<EventsResponse>(
-        `/api/events?limit=60&active=true&closed=false`,
-      );
+      const res = await api.get<EventsResponse>(`/api/events?limit=60&active=true&closed=false`);
       return {
         ...res,
         events: sortEventsByScore(res.events, hottestScore),
@@ -111,12 +107,21 @@ export function useOrderbook(id: string, outcome: number) {
   });
 }
 
-export function usePricesHistory(id: string) {
+export function usePricesHistory(
+  id: string,
+  opts?: { interval?: string; outcome?: number; enabled?: boolean; refetchInterval?: number },
+) {
+  const interval = opts?.interval ?? "1w";
+  const outcome = opts?.outcome ?? 0;
   return useQuery({
-    queryKey: ["prices-history", id],
-    queryFn: () => api.get<PricesHistoryResponse>(`/api/markets/${id}/prices-history`),
-    enabled: Boolean(id),
-    staleTime: 60_000,
+    queryKey: ["prices-history", id, interval, outcome],
+    queryFn: () =>
+      api.get<PricesHistoryResponse>(
+        `/api/markets/${id}/prices-history?interval=${encodeURIComponent(interval)}&outcome=${outcome}`,
+      ),
+    enabled: Boolean(id) && (opts?.enabled ?? true),
+    staleTime: 30_000,
+    refetchInterval: opts?.refetchInterval,
   });
 }
 
@@ -143,6 +148,39 @@ export function useTradeStatus() {
 const proxyQuery = (proxyWallet?: string) =>
   proxyWallet ? `?proxyWallet=${encodeURIComponent(proxyWallet)}` : "";
 
+const proxyAmp = (proxyWallet?: string) => (proxyWallet ? "&" : "?");
+
+export function usePortfolioOverview(enabled: boolean, proxyWallet?: string) {
+  return useQuery({
+    queryKey: ["portfolio-overview", proxyWallet ?? ""],
+    queryFn: () =>
+      api.get<PortfolioOverviewResponse>(`/api/profile/overview${proxyQuery(proxyWallet)}`),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useEquityHistory(enabled: boolean, window: EquityWindow, proxyWallet?: string) {
+  return useQuery({
+    queryKey: ["equity-history", window, proxyWallet ?? ""],
+    queryFn: () =>
+      api.get<EquityHistoryResponse>(
+        `/api/profile/equity-history${proxyQuery(proxyWallet)}${proxyAmp(proxyWallet)}window=${window}`,
+      ),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useOpenOrders(enabled: boolean) {
+  return useQuery({
+    queryKey: ["open-orders"],
+    queryFn: () => api.get<OpenOrdersResponse>("/api/profile/open-orders"),
+    enabled,
+    refetchInterval: 15_000,
+  });
+}
+
 export function usePositions(enabled: boolean, proxyWallet?: string) {
   return useQuery({
     queryKey: ["positions", proxyWallet ?? ""],
@@ -151,13 +189,23 @@ export function usePositions(enabled: boolean, proxyWallet?: string) {
   });
 }
 
-export function useHistory(enabled: boolean, proxyWallet?: string) {
+export function useHistory(
+  enabled: boolean,
+  proxyWallet?: string,
+  opts?: { limit?: number; offset?: number; type?: HistoryTypeFilter },
+) {
+  const limit = opts?.limit ?? 25;
+  const offset = opts?.offset ?? 0;
+  const type = opts?.type ?? "all";
   return useQuery({
-    queryKey: ["history", proxyWallet ?? ""],
-    queryFn: () =>
-      api.get<HistoryResponse>(
-        `/api/profile/history${proxyQuery(proxyWallet)}${proxyWallet ? "&" : "?"}limit=25`,
-      ),
+    queryKey: ["history", proxyWallet ?? "", limit, offset, type],
+    queryFn: () => {
+      const base = proxyWallet ? `?proxyWallet=${encodeURIComponent(proxyWallet)}` : "?";
+      const sep = proxyWallet ? "&" : "";
+      return api.get<HistoryResponse>(
+        `/api/profile/history${base}${sep}limit=${limit}&offset=${offset}&type=${type}`,
+      );
+    },
     enabled,
   });
 }

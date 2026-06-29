@@ -1,0 +1,77 @@
+# Production stack for a single Lightsail box: Postgres + one-shot migrate + api +
+# worker + Caddy (auto-TLS reverse proxy). Web (Next.js) is deployed separately.
+# Usage: cp .env.production.example .env.production && edit, then:
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: [.env.production]
+    command: ["node", "packages/db/dist/migrate.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: [.env.production]
+    command: ["node", "apps/api/dist/server.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+    expose: ["3001"]
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: [.env.production]
+    command: ["node", "apps/worker/dist/main.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  web:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: [.env.production]
+    # Run Next directly (no pnpm at runtime). Root so next can write .next/cache.
+    working_dir: /app/apps/web
+    user: "0:0"
+    command: ["node_modules/.bin/next", "start", "-p", "3000"]
+    environment:
+      # Caddy routes /api before it reaches Next, but set this as a safety net.
+      API_PROXY_TARGET: http://api:3001
+    depends_on: [api]
+    restart: unless-stopped
+    expose: ["3000"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api, web]
+
+volumes:
+  pgdata: {}
+  caddy_data: {}
+  caddy_config: {}

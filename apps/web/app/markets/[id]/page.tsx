@@ -1,18 +1,28 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMarket, useOrderbook, usePricesHistory } from "@/lib/queries";
+import { useMarket, useOrderbook } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import { parseJsonArray, pct, usd } from "@/lib/format";
-import { Badge, Card, CardHeader, ErrorNote, Spinner, cn } from "@/components/ui";
-import { Sparkline } from "@/components/Sparkline";
+import { parseJsonArray, pct, usdCompact } from "@/lib/format";
+import { Badge, Card, CardHeader, ErrorNote, Segmented, Spinner } from "@/components/ui";
+import { MarketPriceChart } from "@/components/charts/MarketPriceChart";
 import { OrderbookTable } from "@/components/OrderbookTable";
 import { OrderTicket } from "@/components/OrderTicket";
 import { RuleBuilder } from "@/components/RuleBuilder";
 import { RuleList } from "@/components/RuleList";
 import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
+
+function HeaderStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wide text-muted">{label}</span>
+      <span className="tabular text-sm font-semibold text-fg">{value}</span>
+    </div>
+  );
+}
 
 export default function MarketCockpitPage() {
   const params = useParams<{ id: string }>();
@@ -22,7 +32,6 @@ export default function MarketCockpitPage() {
   const session = useSession();
   const [outcomeIdx, setOutcomeIdx] = useState(0);
   const orderbook = useOrderbook(id, outcomeIdx);
-  const history = usePricesHistory(id);
 
   if (market.isLoading) return <Spinner label="Loading market…" />;
   if (market.error || !market.data)
@@ -37,24 +46,41 @@ export default function MarketCockpitPage() {
   const live = m._live;
   const isStale = live?.isStale ?? orderbook.data?.isStale ?? false;
 
+  const outcomeOptions = (outcomes.length ? outcomes : ["YES", "NO"]).map((o, i) => ({
+    value: String(i),
+    label: o,
+    disabled: !tokenIds[i],
+  }));
+  const outcomeLabel = outcomes[outcomeIdx] ?? `Outcome ${outcomeIdx}`;
+
   const ob = orderbook.data
     ? { bids: orderbook.data.bids, asks: orderbook.data.asks }
     : live?.orderbook;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold">{m.question}</h1>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span>Vol {usd(m.volume)}</span>
-            <span>Liq {usd(m.liquidity)}</span>
-            <span>Spread {pct(m.spread)}</span>
-            {m.active && !m.closed ? (
-              <Badge tone="pos">active</Badge>
-            ) : (
-              <Badge tone="neutral">closed</Badge>
-            )}
+      <div>
+        <Link href="/" className="text-xs text-muted transition-colors hover:text-accent">
+          ← Markets
+        </Link>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold leading-snug text-fg sm:text-xl">{m.question}</h1>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {m.active && !m.closed ? (
+                <Badge tone="pos" dot>
+                  active
+                </Badge>
+              ) : (
+                <Badge tone="neutral">closed</Badge>
+              )}
+              {m.neg_risk ? <Badge tone="accent">neg-risk</Badge> : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            <HeaderStat label="Volume" value={usdCompact(m.volume)} />
+            <HeaderStat label="Liquidity" value={usdCompact(m.liquidity)} />
+            <HeaderStat label="Spread" value={pct(m.spread)} />
           </div>
         </div>
       </div>
@@ -66,41 +92,26 @@ export default function MarketCockpitPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Left: chart + orderbook */}
         <div className="space-y-4 lg:col-span-2">
-          <Card>
-            <CardHeader>Price history (YES probability)</CardHeader>
-            <div className="p-4">
-              {history.isLoading ? (
-                <Spinner />
-              ) : history.data && history.data.history.length > 1 ? (
-                <Sparkline values={history.data.history.map((p) => p.p)} />
-              ) : (
-                <div className="text-sm text-muted">No price history available.</div>
-              )}
-            </div>
-          </Card>
+          <div className="flex items-center justify-end">
+            <Segmented
+              options={outcomeOptions}
+              value={String(outcomeIdx)}
+              onChange={(v) => setOutcomeIdx(Number(v))}
+              size="md"
+            />
+          </div>
+
+          <MarketPriceChart marketId={id} outcome={outcomeIdx} outcomeLabel={outcomeLabel} />
 
           <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <span>Orderbook</span>
-                <div className="flex gap-1">
-                  {(outcomes.length ? outcomes : ["YES", "NO"]).map((o, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setOutcomeIdx(i)}
-                      disabled={!tokenIds[i]}
-                      className={cn(
-                        "rounded border px-2 py-0.5 text-xs disabled:opacity-30",
-                        outcomeIdx === i
-                          ? "border-accent/50 text-accent"
-                          : "border-border text-muted",
-                      )}
-                    >
-                      {o}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <CardHeader
+              right={
+                <span className="tabular text-xs text-muted">
+                  {outcomeLabel} · {prices[outcomeIdx] ? pct(prices[outcomeIdx]) : "—"}
+                </span>
+              }
+            >
+              Order book
             </CardHeader>
             <div className="p-4">
               {orderbook.isLoading && !ob ? (
@@ -108,14 +119,10 @@ export default function MarketCockpitPage() {
               ) : ob ? (
                 <OrderbookTable bids={ob.bids} asks={ob.asks} />
               ) : (
-                <div className="text-sm text-muted">Orderbook unavailable.</div>
+                <div className="text-sm text-muted">Order book unavailable.</div>
               )}
-              <div className="mt-3 flex justify-between text-xs text-muted">
-                <span>
-                  {outcomes[outcomeIdx] ?? `Outcome ${outcomeIdx}`} ·{" "}
-                  {prices[outcomeIdx] ? pct(prices[outcomeIdx]) : "—"}
-                </span>
-                <span>source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}</span>
+              <div className="mt-3 flex justify-end text-[11px] text-faint">
+                source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}
               </div>
             </div>
           </Card>
@@ -123,7 +130,7 @@ export default function MarketCockpitPage() {
 
         {/* Right: order ticket + conditional rule builder */}
         <div className="space-y-4">
-          <Card className="h-fit">
+          <Card glow className="h-fit">
             <CardHeader>Order ticket</CardHeader>
             <div className="p-4">
               <OrderTicket

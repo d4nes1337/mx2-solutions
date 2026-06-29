@@ -62,5 +62,8 @@ cancel before volatility (kickoff/news). The same engine that powers conditional
 
 - Exact reward scoring formula + two-sided multiplier; epoch/sampling cadence.
 - Safest scoped-signing primitive (session key vs delegated relayer vs MPC/TEE) given the
-  "never custody the primary key" invariant.
+  "never custody the primary key" invariant. **Resolved (2026-06-29):** Privy embedded wallet +
+  server session signer + in-enclave policy engine (TEE) — see ADR-0006 and RFC-0002. Phase E's
+  unattended execution is now built behind `FEATURE_CONDITIONAL_LIVE_EXECUTION` (gated, default
+  OFF) rather than structurally impossible.
 - Regulatory posture of operating an automated maker on behalf of users (legal review).

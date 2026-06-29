@@ -70,6 +70,12 @@ const CreateRuleSchema = z.object({
   maxDataAgeMs: z.number().int().positive().max(60_000).default(2_000),
   action: ActionSchema,
   expiresAt: z.string().datetime().nullish(),
+  // "auto" lets the worker submit on trigger with no human (only takes effect when
+  // FEATURE_CONDITIONAL_LIVE_EXECUTION is on; otherwise it degrades to manual).
+  executionMode: z.enum(["manual", "auto"]).default("manual"),
+  // Market metadata needed to build a correct auto-signed order.
+  negRisk: z.boolean().default(false),
+  tickSize: z.enum(["0.1", "0.01", "0.001", "0.0001"]).optional(),
 });
 
 // ── Snapshot → normalized view ────────────────────────────────────────────────
@@ -135,7 +141,8 @@ const buildOrderPreview = (def: RuleDefinition, config: AppConfig) => {
     orderType,
     maxSpend: (price * size).toFixed(6),
     builderCode: config.polymarket.builderCode ?? null,
-    signatureType: 2,
+    signatureType: config.features.privySigning ? 0 : 2,
+    executionMode: def.executionMode ?? "manual",
     timestamp: Math.floor(Date.now() / 1000).toString(),
   };
 };
@@ -179,6 +186,9 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       action: b.action,
       recurrence: "once",
       expiresAtMs,
+      executionMode: b.executionMode,
+      negRisk: b.negRisk,
+      ...(b.tickSize ? { tickSize: b.tickSize } : {}),
     };
     const definitionHash = hashDefinition(definition);
     const rule = await deps.ruleStore.create({
@@ -200,6 +210,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         definitionHash,
         predicateCount: b.predicates.length,
         continuousWindowMs: b.continuousWindowMs,
+        executionMode: b.executionMode,
       },
     });
     reply.code(201);

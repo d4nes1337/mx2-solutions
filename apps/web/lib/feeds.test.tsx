@@ -79,21 +79,31 @@ describe("resolveUrgency", () => {
 
 describe("feed scoring", () => {
   it("ranks hotter events with volume and near resolve higher", () => {
-    const hot = event({ volume1wk: 5000, markets: [market({ endDate: new Date(Date.now() + 2 * 86_400_000).toISOString() })] });
-    const cold = event({ volume1wk: 5000, markets: [market({ endDate: new Date(Date.now() + 120 * 86_400_000).toISOString() })] });
+    const hot = event({
+      volume1wk: 5000,
+      markets: [market({ endDate: new Date(Date.now() + 2 * 86_400_000).toISOString() })],
+    });
+    const cold = event({
+      volume1wk: 5000,
+      markets: [market({ endDate: new Date(Date.now() + 120 * 86_400_000).toISOString() })],
+    });
     expect(hottestScore(hot)).toBeGreaterThan(hottestScore(cold));
   });
 
   it("ranks newer events higher in newVolumeScore", () => {
-    const newer = event({ createdAt: new Date(Date.now() - 86_400_000).toISOString(), volume1wk: 1000 });
-    const older = event({ createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString(), volume1wk: 1000 });
+    const newer = event({
+      createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+      volume1wk: 1000,
+    });
+    const older = event({
+      createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString(),
+      volume1wk: 1000,
+    });
     expect(newVolumeScore(newer)).toBeGreaterThan(newVolumeScore(older));
   });
 
   it("sortEventsByScore returns at most FEED_LIMIT items", () => {
-    const events = Array.from({ length: 30 }, (_, i) =>
-      event({ id: String(i), volume1wk: i }),
-    );
+    const events = Array.from({ length: 30 }, (_, i) => event({ id: String(i), volume1wk: i }));
     const sorted = sortEventsByScore(events, hottestScore);
     expect(sorted.length).toBe(20);
     expect(sorted[0]?.id).toBe("29");

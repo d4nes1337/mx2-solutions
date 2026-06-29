@@ -19,6 +19,41 @@ const parseTokenIds = (raw: string): string[] => {
 };
 
 export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesDeps): void => {
+  // Resolve Gamma market metadata by conditionId or CLOB token id (must register before /:id).
+  app.get("/api/markets/resolve", async (req, reply) => {
+    const q = req.query as Record<string, string>;
+    const conditionId = q["conditionId"];
+    const tokenId = q["tokenId"];
+
+    if (!conditionId && !tokenId) {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", message: "conditionId or tokenId required" };
+    }
+
+    const result = await deps.gammaClient.findMarket({
+      ...(conditionId ? { conditionId } : {}),
+      ...(tokenId ? { tokenId } : {}),
+    });
+
+    if (!result.ok) {
+      reply.code(result.error.statusCode === 404 ? 404 : 502);
+      return { error: result.error.code, message: result.error.message };
+    }
+
+    if (!result.value) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Market not found" };
+    }
+
+    const m = result.value;
+    return {
+      marketId: m.id,
+      question: m.question,
+      slug: m.slug,
+      conditionId: m.conditionId,
+    };
+  });
+
   // Market detail: Gamma metadata + live orderbook (DB WS snapshot or REST fallback).
   app.get("/api/markets/:id", async (req, reply) => {
     const { id } = req.params as { id: string };

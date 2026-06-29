@@ -161,8 +161,78 @@ export interface HistoryResponse {
   queryAddress: string;
   activity: Activity[];
   count: number;
+  totalFetched?: number;
+  hasMore?: boolean;
   dataSource: string;
   fetchedAt: string;
+}
+
+export type HistoryTypeFilter = "all" | "trade" | "redeem" | "other";
+
+export interface PortfolioOverviewResponse {
+  signerAddress: string;
+  queryAddress: string;
+  fetchedAt: string;
+  dataSource: string;
+  summary: PnlSummary;
+  positions: Position[];
+  activityPreview: Activity[];
+  counts: {
+    openOrders: number;
+    usdcBalance: string | null;
+    setupRequired: boolean;
+  };
+  methodology: string;
+  limitations: string[];
+}
+
+export type EquityWindow = "7d" | "30d" | "all";
+
+export interface EquityPoint {
+  t: number;
+  equity: number;
+}
+
+export interface EquityHistoryResponse {
+  signerAddress: string;
+  queryAddress: string;
+  window: EquityWindow;
+  points: EquityPoint[];
+  disclaimer: string;
+  methodology: string;
+  computedAt: string;
+}
+
+export interface EnrichedOpenOrder {
+  id: string;
+  market: string;
+  asset_id: string;
+  side: "BUY" | "SELL";
+  original_size: string;
+  size_matched?: string;
+  price: string;
+  status: string;
+  created_at?: number;
+  type?: string;
+  title?: string;
+  marketId?: string;
+  slug?: string;
+}
+
+export interface OpenOrdersResponse {
+  signerAddress: string;
+  setupRequired: boolean;
+  balance: string | null;
+  openOrders: EnrichedOpenOrder[];
+  count: number;
+  fetchedAt: string;
+}
+
+export interface MarketResolveResponse {
+  marketId: string;
+  question: string;
+  slug: string;
+  conditionId: string;
 }
 
 export interface PnlSummary {

@@ -1,8 +1,55 @@
 # Project Status
 
-_Last updated: 2026-06-24_
+_Last updated: 2026-06-29_
+
+## Recent
+
+- **Server-side "sign once" trading + unattended conditional execution (built, behind flags).**
+  Adopted **Privy embedded wallets + server session signers + in-enclave policy engine**
+  (ADR-0006, RFC-0002) so users sign once and then trade — manual AND conditional — with no
+  per-order popup. New signing seam `@mx2/trading-signer` (Privy adapter + mock for tests/dry-run);
+  shared `buildAndSignEoaOrder` (`signatureType 0`) in `@mx2/polymarket-client`; new
+  `privy_wallets` + `trading_delegations` tables (migration `0006`); `trading-wallet` routes
+  (provision / delegate / status / revoke / bootstrap-allowances); `POST /api/trade/orders` gains
+  a server-signing branch behind `FEATURE_PRIVY_SIGNING` (legacy browser path preserved when OFF).
+  Conditional auto-execution: worker `auto-executor` builds + signs + submits on an "auto" rule
+  trigger (states `EXECUTING/EXECUTED_AUTO/EXECUTION_FAILED`) behind a now-**gated**
+  `FEATURE_CONDITIONAL_LIVE_EXECUTION` (replaces the old hard-fail). Guardrails: order rate limit,
+  delegation expiry, kill switch, allowance fail-closed, and deterministic idempotency; crypto
+  moved to `@mx2/core` so the worker can decrypt L2 creds. The raw key never touches our server.
+  Quality gates: `format`/`lint`/`typecheck` ✓, backend `test` **172 pass / 3 skipped** (incl. new
+  signer-seam, order-builder, allowance, auto-executor, and Privy-route suites). All flags default
+  OFF; live enablement pending **Gate 6** (owner review + low-value staging test).
+
+- **Frontend redesign → "arima" (built).** Rebranded the web app to **arima** with a sharp dark
+  design system (brand `#2A36FF`): new CSS tokens + Tailwind radius/colour scale, upgraded UI
+  primitives (`Button`/`Badge`/`Segmented`/`Stat`/`Skeleton`/`LiveDot`), responsive header with a
+  mobile nav strip. Added dependency-free interactive SVG charts (`components/charts/AreaChart` with
+  crosshair/tooltip/axes + `MiniSparkline`); the market cockpit now has a live price chart
+  (6H/1D/1W/1M/ALL ranges, 15s refetch) and the markets feed shows an on-hover price-movement preview
+  card (portal-based). `/profile` is now a dashboard (KPIs + equity chart + allocation/exposure +
+  movers + tabbed tables). No backend/contract changes; charts reuse the existing
+  `/api/markets/:id/prices-history` (interval/outcome) endpoint. Quality gates: web `typecheck` ✓,
+  `test` (36/36); all routes compile clean (HTTP 200) and price-history returns ~168 points.
+
+- **Portfolio page rework (built).** `/profile` (nav: **Portfolio**) redesigned as a terminal-style
+  dashboard: hero equity/PnL metrics, approximate activity-derived equity sparkline (7D/30D/ALL),
+  tabbed Positions / Open orders / History, wallet override popover, collapsed PnL methodology.
+  New API routes: `GET /api/profile/overview`, `/equity-history`, `/open-orders` (read-only CLOB
+  snapshot without live-trading flag); extended `/profile/history` filters; `GET /api/markets/resolve`.
+  Gamma client: `findMarket` by condition or token id. Quality gates: backend `test` (135 pass),
+  web `test` (36/36), `typecheck` ✓.
 
 ## Current gate
+
+Gate 6 — server-side signing + unattended execution (Privy): **built behind flags** (quality
+gates green; default OFF). Delivers the owner's "sign once, no per-order popup" request for both
+manual and conditional orders, with the raw key held only in Privy's enclave. **Next: Gate 6 owner
+review + the security review (RFC-0002 threat model) + a low-value staging test** (real Privy test
+app, a Privy wallet funded with $5–20, bootstrap allowances, one tiny manual order + one tiny auto
+rule, and the policy negative test) before flipping `FEATURE_PRIVY_SIGNING` /
+`FEATURE_CONDITIONAL_LIVE_EXECUTION`. The `@privy-io/node` client + policy schema is the remaining
+staging integration step (the signer seam + all guard logic are done and tested via the mock).
 
 Gate 5 — conditional rules (shadow / alert / manual-confirm): **built** (quality gates green).
 The pure `@mx2/rules` engine + worker evaluator + rules API + web rule-builder/alert/confirm are

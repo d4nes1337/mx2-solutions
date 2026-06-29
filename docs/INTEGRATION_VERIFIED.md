@@ -153,3 +153,24 @@ orderType: "GTC"|"GTD"|"FOK" }` with the L2 HMAC headers.
 
 - https://github.com/Polymarket/clob-client (`src/order-utils`, `src/order-builder`, `src/config.ts`)
 - https://github.com/Polymarket/builder-relayer-client (`src/builder/derive.ts`, `src/config`, `src/constants`)
+
+## Server-side signing & Privy (verified 2026-06-29; ADR-0006 / RFC-0002)
+
+Verified against official Polymarket + Privy docs:
+
+- **Signature types:** `0` = EOA (plain wallet holds funds & signs directly), `1` = Email/Magic
+  (delegated signing), `2` = browser-wallet Gnosis Safe proxy (the legacy path), `3` = EIP-1271
+  smart-contract (V2 only). Source: docs.polymarket.com/api-reference/authentication.
+- **L2 API creds (apiKey/secret/passphrase) authenticate the request but do NOT replace the
+  per-order EIP-712 signature** — "methods that create user orders still require the user to sign
+  the order payload." Source: Polymarket/py-clob-client issues #277, #70.
+- **Privy session signers** support **server-side signing while the user is offline** ("execute
+  limit orders or agentic trades even while a user is offline"); the raw key never leaves Privy's
+  secure enclave (Shamir share reconstituted in a TEE). Source: docs.privy.io
+  /wallets/using-wallets/signers/overview ; privy.io/blog/delegated-actions-launch.
+- **Privy policy engine** (enforced in-enclave): contract allowlists/denylists, transfer limits,
+  recipient allowlists, calldata constraints — evaluated before a signature is produced. Source:
+  docs.privy.io/security/wallet-infrastructure/policy-and-controls.
+- **To verify on staging** (see A-044–A-048): exact `@privy-io/node` method shapes + policy JSON,
+  CLOB `signatureType 0` funder semantics, the allowance spender set, gas funding, and server-side
+  ClobAuth acceptance.

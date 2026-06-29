@@ -17,6 +17,8 @@ import type {
   SessionStore,
   TriggerStore,
   UserStore,
+  PrivyWalletStore,
+  DelegationStore,
 } from "@mx2/db";
 import type {
   AuthenticatedClobClient,
@@ -27,7 +29,27 @@ import type {
   PolymarketError,
 } from "@mx2/polymarket-client";
 import type { RuleDefinition } from "@mx2/rules";
+import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
+
+const noopPrivyWallets: PrivyWalletStore = {
+  upsert: async () => {
+    throw new Error("not implemented");
+  },
+  find: async () => null,
+  markAllowancesBootstrapped: async () => {},
+};
+const noopDelegations: DelegationStore = {
+  create: async () => {
+    throw new Error("not implemented");
+  },
+  findActive: async () => null,
+  revoke: async () => {},
+  expireLapsed: async () => {},
+};
+const noopTradingSigner: TradingSigner = createMockTradingSigner({
+  privateKey: `0x${"1".repeat(64)}`,
+});
 
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const logger = createLogger({ name: "rules-test", level: "silent" });
@@ -100,6 +122,31 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       const r = find(id);
       if (r && r.walletAddress === w && r.status === "TRIGGERED_AWAITING_USER") {
         r.status = "EXECUTED_MANUALLY";
+        return r;
+      }
+      return null;
+    },
+    markExecuting: async (id) => {
+      const r = find(id);
+      if (r && r.status === "TRIGGERED_AWAITING_USER") {
+        r.status = "EXECUTING";
+        return r;
+      }
+      return null;
+    },
+    markAutoExecuted: async (id) => {
+      const r = find(id);
+      if (r && r.status === "EXECUTING") {
+        r.status = "EXECUTED_AUTO";
+        return r;
+      }
+      return null;
+    },
+    markExecutionFailed: async (id, errorMessage) => {
+      const r = find(id);
+      if (r && r.status === "EXECUTING") {
+        r.status = "EXECUTION_FAILED";
+        r.errorMessage = errorMessage;
         return r;
       }
       return null;
@@ -260,6 +307,7 @@ const buildRulesApp = (opts: {
     findById: async () => null,
     listByWallet: async () => [],
     updateStatus: async () => {},
+    countRecentByWallet: async () => 0,
   };
   const noopFlags: RuntimeFlagStore = {
     get: async () => null,
@@ -270,6 +318,7 @@ const buildRulesApp = (opts: {
     getEvent: async () => err(upstreamErr),
     listMarkets: async () => ok([]),
     getMarket: async () => err(upstreamErr),
+    findMarket: async () => ok(null),
   };
   const clob: ClobClient = {
     getOrderbook: async () => err(upstreamErr),
@@ -306,10 +355,13 @@ const buildRulesApp = (opts: {
     runtimeFlags: noopFlags,
     ruleStore,
     triggerStore,
+    privyWallets: noopPrivyWallets,
+    delegations: noopDelegations,
     gammaClient: gamma,
     clobClient: clob,
     dataClient: data,
     tradingClobClient: trading,
+    tradingSigner: noopTradingSigner,
     geoblockClient: geo,
   });
 

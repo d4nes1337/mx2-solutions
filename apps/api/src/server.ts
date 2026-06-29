@@ -13,6 +13,8 @@ import {
   createRuntimeFlagStore,
   createRuleStore,
   createTriggerStore,
+  createPrivyWalletStore,
+  createDelegationStore,
 } from "@mx2/db";
 import {
   createGammaClient,
@@ -22,6 +24,7 @@ import {
   createGeoblockClient,
 } from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
+import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
 const main = async (): Promise<void> => {
@@ -44,6 +47,9 @@ const main = async (): Promise<void> => {
   const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
   const ruleStore = createRuleStore(dbHandle.db);
   const triggerStore = createTriggerStore(dbHandle.db);
+  const privyWallets = createPrivyWalletStore(dbHandle.db);
+  const delegations = createDelegationStore(dbHandle.db);
+  const tradingSigner = createTradingSignerFromConfig(config);
 
   const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
   const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
@@ -68,10 +74,13 @@ const main = async (): Promise<void> => {
     runtimeFlags,
     ruleStore,
     triggerStore,
+    privyWallets,
+    delegations,
     gammaClient,
     clobClient,
     dataClient,
     tradingClobClient,
+    tradingSigner,
     geoblockClient,
   });
 

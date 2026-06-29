@@ -1,0 +1,19 @@
+# Auto-HTTPS for the all-in-one stack under one domain ($API_DOMAIN, e.g.
+# arima.finance). Point an A record at the Lightsail static IP and open 80 + 443;
+# Caddy obtains a Let's Encrypt cert automatically. Same origin for web + API keeps
+# the session cookie first-party (SameSite=Strict) — no CORS / cross-site cookie.
+{$API_DOMAIN} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /healthz {
+		reverse_proxy api:3001
+	}
+	handle /readyz {
+		reverse_proxy api:3001
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}

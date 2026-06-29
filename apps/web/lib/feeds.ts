@@ -1,5 +1,5 @@
 import type { GammaEvent, GammaMarket } from "./types";
-import { toNum } from "./format";
+import { parseJsonArray, toNum } from "./format";
 
 export const FEED_LIMIT = 20;
 
@@ -73,6 +73,16 @@ export function yesTopOfBook(market: GammaMarket): { bid: number; ask: number } 
   const ask = toNum(market.bestAsk);
   if (bid > 0 && ask > 0) return { bid, ask };
   return { bid, ask: ask > 0 ? ask : bid };
+}
+
+/** Best estimate of YES probability (0–1): book mid, else last trade, else price array. */
+export function yesProbability(market: GammaMarket): number {
+  const { bid, ask } = yesTopOfBook(market);
+  if (bid > 0 && ask > 0) return (bid + ask) / 2;
+  const last = toNum(market.lastTradePrice);
+  if (last > 0) return last;
+  const prices = parseJsonArray(market.outcomePrices);
+  return toNum(prices[0]);
 }
 
 export function noTopOfBook(market: GammaMarket): { bid: number; ask: number } {

@@ -53,6 +53,13 @@ export interface RuleStore {
   cancel(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
   /** Move a triggered rule to EXECUTED_MANUALLY after the user confirms+submits. */
   markExecuted(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
+  /**
+   * Auto-execution lifecycle (worker single-writer). Compare-and-set guards each
+   * transition so a concurrent manual confirm/cancel wins (returns null on loss).
+   */
+  markExecuting(id: string): Promise<ConditionalRuleRow | null>;
+  markAutoExecuted(id: string): Promise<ConditionalRuleRow | null>;
+  markExecutionFailed(id: string, errorMessage: string): Promise<ConditionalRuleRow | null>;
 }
 
 const tsOrNull = (ms: number | null): Date | null => (ms === null ? null : new Date(ms));
@@ -186,6 +193,35 @@ export const createRuleStore = (db: Database): RuleStore => ({
           eq(conditionalRules.status, "TRIGGERED_AWAITING_USER"),
         ),
       )
+      .returning();
+    return row ?? null;
+  },
+
+  async markExecuting(id) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ status: "EXECUTING", updatedAt: sql`now()` })
+      .where(
+        and(eq(conditionalRules.id, id), eq(conditionalRules.status, "TRIGGERED_AWAITING_USER")),
+      )
+      .returning();
+    return row ?? null;
+  },
+
+  async markAutoExecuted(id) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ status: "EXECUTED_AUTO", updatedAt: sql`now()` })
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.status, "EXECUTING")))
+      .returning();
+    return row ?? null;
+  },
+
+  async markExecutionFailed(id, errorMessage) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ status: "EXECUTION_FAILED", errorMessage, updatedAt: sql`now()` })
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.status, "EXECUTING")))
       .returning();
     return row ?? null;
   },

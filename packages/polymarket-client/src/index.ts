@@ -4,6 +4,8 @@ export * from "./gamma/client.js";
 export * from "./clob/schema.js";
 export * from "./clob/client.js";
 export * from "./clob/trading-client.js";
+export * from "./clob/order-builder.js";
+export * from "./clob/clob-auth.js";
 export * from "./ws/schema.js";
 export * from "./ws/market-client.js";
 export * from "./data/schema.js";

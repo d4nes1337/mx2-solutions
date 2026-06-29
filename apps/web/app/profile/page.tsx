@@ -1,135 +1,203 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/lib/auth";
-import { useHistory, usePnl, usePositions } from "@/lib/queries";
-import { shortAddress } from "@/lib/format";
-import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from "@/components/ui";
-import { PnLSummary } from "@/components/PnLSummary";
+import {
+  useCancelOrder,
+  useEquityHistory,
+  useHistory,
+  useOpenOrders,
+  usePortfolioOverview,
+  useTradeStatus,
+} from "@/lib/queries";
+import type { HistoryTypeFilter } from "@/lib/types";
+import { Card, Empty, ErrorNote, Spinner } from "@/components/ui";
 import { PositionsTable } from "@/components/PositionsTable";
-import { HistoryTable } from "@/components/HistoryTable";
+import { HistoryFilters, HistoryLoadMore, HistoryTable } from "@/components/HistoryTable";
+import {
+  PortfolioHeader,
+  PortfolioTabBar,
+  useWalletOverride,
+} from "@/components/portfolio/PortfolioHeader";
+import { PortfolioMetrics } from "@/components/portfolio/PortfolioMetrics";
+import { PortfolioDisclaimer } from "@/components/portfolio/PortfolioDisclaimer";
+import { PortfolioEquityChart, useEquityWindow } from "@/components/portfolio/PortfolioEquityChart";
+import { PortfolioAllocation } from "@/components/portfolio/PortfolioAllocation";
+import { OpenOrdersTable } from "@/components/portfolio/OpenOrdersTable";
 
-const PROXY_STORAGE_KEY = "mx2.proxyWallet";
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-
-export default function ProfilePage() {
+export default function PortfolioPage() {
   const session = useSession();
-  // The deposit wallet is derived server-side from the signed-in EOA and returned
-  // by /api/auth/me, so the portfolio loads automatically with no manual entry.
-  // The input below is an optional override (e.g. to inspect a different wallet).
+  const qc = useQueryClient();
   const derivedDeposit = session.data?.depositWallet ?? undefined;
-  const [proxyInput, setProxyInput] = useState("");
-  const override = ADDRESS_RE.test(proxyInput) ? proxyInput : undefined;
-  const proxy = override ?? derivedDeposit;
-
-  // Persist the override so it only has to be entered once.
-  // (Read on mount in an effect, not in useState, so SSR doesn't touch window.)
-  useEffect(() => {
-    const saved = window.localStorage.getItem(PROXY_STORAGE_KEY);
-    if (saved) setProxyInput(saved);
-  }, []);
-  useEffect(() => {
-    if (override) window.localStorage.setItem(PROXY_STORAGE_KEY, override);
-  }, [override]);
+  const { proxyInput, setProxyInput, proxy } = useWalletOverride(derivedDeposit);
 
   const signedIn = Boolean(session.data);
-  const positions = usePositions(signedIn, proxy);
-  const history = useHistory(signedIn, proxy);
-  const pnl = usePnl(signedIn, proxy);
+  const overview = usePortfolioOverview(signedIn, proxy);
+  const openOrders = useOpenOrders(signedIn);
+  const tradeStatus = useTradeStatus();
+  const { window, setWindow } = useEquityWindow("30d");
+  const equity = useEquityHistory(signedIn, window, proxy);
+
+  const [tab, setTab] = useState<"positions" | "orders" | "history">("positions");
+  const [historyType, setHistoryType] = useState<HistoryTypeFilter>("all");
+  const [historyLimit, setHistoryLimit] = useState(25);
+
+  useEffect(() => {
+    setHistoryLimit(25);
+  }, [historyType]);
+
+  const history = useHistory(signedIn, proxy, {
+    limit: historyLimit,
+    offset: 0,
+    type: historyType,
+  });
+
+  const cancelOrder = useCancelOrder();
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  const refreshAll = () => {
+    void qc.invalidateQueries({ queryKey: ["portfolio-overview"] });
+    void qc.invalidateQueries({ queryKey: ["equity-history"] });
+    void qc.invalidateQueries({ queryKey: ["open-orders"] });
+    void qc.invalidateQueries({ queryKey: ["history"] });
+  };
+
+  const refreshing =
+    overview.isFetching || equity.isFetching || openOrders.isFetching || history.isFetching;
 
   if (session.isLoading) return <Spinner label="Checking session…" />;
 
   if (!signedIn) {
     return (
       <Empty>
-        Connect your wallet and <strong>Sign in</strong> (top right) to view your portfolio, trading
-        history and PnL.
+        Connect your wallet and <strong>Sign in</strong> to view your portfolio, orders, and PnL.
       </Empty>
     );
   }
 
-  // The deposit wallet is normally derived automatically. This hint only appears in
-  // the rare fallback case where derivation failed (querying the bare EOA, which has
-  // no positions) — then guide the user to paste their deposit wallet as an override.
-  const queryAddress = positions.data?.queryAddress;
-  const showDepositWalletHint =
-    !proxy && positions.data !== undefined && positions.data.count === 0;
+  const showDepositHint =
+    !proxy &&
+    overview.data !== undefined &&
+    overview.data.positions.length === 0 &&
+    overview.data.summary.openPositions === 0;
+
+  const handleCancel = async (clobOrderId: string) => {
+    setCancellingId(clobOrderId);
+    try {
+      await cancelOrder.mutateAsync(clobOrderId);
+      void qc.invalidateQueries({ queryKey: ["open-orders"] });
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold">Profile</h1>
-          <Badge tone="accent">{shortAddress(session.data!.address)}</Badge>
-          <Badge tone={session.data!.allowlisted ? "pos" : "warn"}>
-            {session.data!.allowlisted ? "allowlisted" : "not allowlisted"}
-          </Badge>
-          {queryAddress ? (
-            <span className="text-xs text-muted">
-              querying {override ? "override" : derivedDeposit ? "deposit wallet" : "EOA"}{" "}
-              {shortAddress(queryAddress)}
-            </span>
-          ) : null}
-        </div>
-        <label className="text-xs text-muted">
-          Override wallet
-          <input
-            value={proxyInput}
-            onChange={(e) => setProxyInput(e.target.value)}
-            placeholder="0x… (optional — defaults to derived)"
-            className="tabular ml-2 w-[320px] rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-fg outline-none focus:border-accent/50"
-          />
-        </label>
-      </div>
+      <PortfolioHeader
+        signerAddress={session.data!.address}
+        queryAddress={overview.data?.queryAddress}
+        derivedDeposit={derivedDeposit}
+        onRefresh={refreshAll}
+        refreshing={refreshing}
+        proxyInput={proxyInput}
+        setProxyInput={setProxyInput}
+      />
 
-      {showDepositWalletHint ? (
-        <div className="rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-fg">
-          <p className="font-semibold text-accent">No positions found for your signing wallet.</p>
-          <p className="mt-1 text-muted">
-            You signed in with your <strong>EOA</strong> ({shortAddress(session.data!.address)}),
-            but Polymarket holds positions, history and PnL under your{" "}
-            <strong>deposit wallet</strong> (the address shown on your Polymarket profile). Paste
-            that address into the <strong>Deposit/proxy wallet</strong> field above to see your
-            portfolio. It will be remembered on this device.
-          </p>
+      {showDepositHint ? (
+        <div className="rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-fg">
+          No positions found — paste your Polymarket deposit wallet under <strong>⚙ Wallet</strong>{" "}
+          if your portfolio lives at a different address.
         </div>
       ) : null}
 
-      {/* PnL */}
-      <section className="space-y-2">
-        {pnl.isLoading ? (
-          <Spinner label="Computing PnL…" />
-        ) : pnl.error ? (
-          <ErrorNote message={(pnl.error as Error).message} />
-        ) : pnl.data ? (
-          <PnLSummary data={pnl.data} />
-        ) : null}
-      </section>
+      {overview.isLoading ? (
+        <Spinner label="Loading portfolio…" />
+      ) : overview.error ? (
+        <ErrorNote message={(overview.error as Error).message} />
+      ) : overview.data ? (
+        <>
+          <PortfolioMetrics
+            summary={overview.data.summary}
+            usdcBalance={openOrders.data?.balance ?? overview.data.counts.usdcBalance}
+            openOrderCount={openOrders.data?.count ?? overview.data.counts.openOrders}
+          />
+          <PortfolioDisclaimer
+            methodology={overview.data.methodology}
+            limitations={overview.data.limitations}
+          />
+        </>
+      ) : null}
 
-      {/* Positions */}
-      <Card>
-        <CardHeader>Open positions</CardHeader>
-        <div className="p-4">
-          {positions.isLoading ? (
-            <Spinner />
-          ) : positions.error ? (
-            <ErrorNote message={(positions.error as Error).message} />
-          ) : positions.data ? (
-            <PositionsTable positions={positions.data.positions} />
-          ) : null}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <PortfolioEquityChart
+            data={equity.data}
+            isLoading={equity.isLoading}
+            error={equity.error as Error | null}
+            window={window}
+            onWindow={setWindow}
+          />
         </div>
-      </Card>
+        <div className="lg:col-span-1">
+          <PortfolioAllocation positions={overview.data?.positions ?? []} />
+        </div>
+      </div>
 
-      {/* History */}
-      <Card>
-        <CardHeader>Recent activity</CardHeader>
+      <Card className="overflow-hidden">
+        <div className="px-4 pt-3">
+          <PortfolioTabBar
+            tab={tab}
+            onTab={setTab}
+            positionCount={overview.data?.positions.length ?? 0}
+            orderCount={openOrders.data?.count ?? overview.data?.counts.openOrders ?? 0}
+          />
+        </div>
         <div className="p-4">
-          {history.isLoading ? (
-            <Spinner />
-          ) : history.error ? (
-            <ErrorNote message={(history.error as Error).message} />
-          ) : history.data ? (
-            <HistoryTable activity={history.data.activity} />
+          {tab === "positions" ? (
+            overview.isLoading ? (
+              <Spinner />
+            ) : overview.error ? (
+              <ErrorNote message={(overview.error as Error).message} />
+            ) : overview.data ? (
+              <PositionsTable positions={overview.data.positions} />
+            ) : null
+          ) : null}
+
+          {tab === "orders" ? (
+            openOrders.isLoading ? (
+              <Spinner />
+            ) : openOrders.error ? (
+              <ErrorNote message={(openOrders.error as Error).message} />
+            ) : openOrders.data ? (
+              <OpenOrdersTable
+                orders={openOrders.data.openOrders}
+                setupRequired={openOrders.data.setupRequired}
+                tradingEnabled={tradeStatus.data?.tradingEnabled}
+                onCancel={handleCancel}
+                cancellingId={cancellingId}
+              />
+            ) : null
+          ) : null}
+
+          {tab === "history" ? (
+            <>
+              <HistoryFilters value={historyType} onChange={setHistoryType} />
+              {history.isLoading ? (
+                <Spinner />
+              ) : history.error ? (
+                <ErrorNote message={(history.error as Error).message} />
+              ) : history.data ? (
+                <>
+                  <HistoryTable activity={history.data.activity} />
+                  <HistoryLoadMore
+                    hasMore={history.data.hasMore}
+                    loading={history.isFetching}
+                    onLoadMore={() => setHistoryLimit((l) => l + 25)}
+                  />
+                </>
+              ) : null}
+            </>
           ) : null}
         </div>
       </Card>

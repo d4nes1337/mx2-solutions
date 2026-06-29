@@ -81,6 +81,17 @@ export type RuleAction = PrepareOrderAction;
 
 export type Recurrence = "once";
 
+/** Order-book tick size (matches the CLOB rounding grid). */
+export type TickSize = "0.1" | "0.01" | "0.001" | "0.0001";
+
+/**
+ * How a completed trigger is handled:
+ *  - "manual" (default): record a trigger awaiting user confirmation + signature.
+ *  - "auto": the worker builds + signs + submits the order with no human
+ *    (requires FEATURE_CONDITIONAL_LIVE_EXECUTION + FEATURE_PRIVY_SIGNING).
+ */
+export type ExecutionMode = "manual" | "auto";
+
 /**
  * Immutable rule definition. Its hash (computed over a canonical serialization)
  * is recorded in evidence so a trigger can be tied to the exact rule version.
@@ -97,6 +108,12 @@ export interface RuleDefinition {
   readonly recurrence: Recurrence;
   /** Wall-clock expiry of the rule itself, or null for no expiry. */
   readonly expiresAtMs: number | null;
+  /** Defaults to "manual" when absent (existing rules stay manual). */
+  readonly executionMode?: ExecutionMode;
+  /** Neg-risk market? Determines the exchange domain for auto-signed orders. */
+  readonly negRisk?: boolean;
+  /** CLOB tick size for amount rounding (auto-signed orders). Defaults to "0.01". */
+  readonly tickSize?: TickSize;
 }
 
 export type RuleStatus =
@@ -105,7 +122,10 @@ export type RuleStatus =
   | "ACTIVE_ACCUMULATING"
   | "PAUSED"
   | "TRIGGERED_AWAITING_USER"
+  | "EXECUTING"
   | "EXECUTED_MANUALLY"
+  | "EXECUTED_AUTO"
+  | "EXECUTION_FAILED"
   | "EXPIRED"
   | "CANCELLED"
   | "INVALIDATED"

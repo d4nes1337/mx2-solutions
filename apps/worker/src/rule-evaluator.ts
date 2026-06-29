@@ -9,6 +9,7 @@ import {
   type RuleRuntime,
   type TransitionResult,
 } from "@mx2/rules";
+import type { AutoExecutor } from "./auto-executor.js";
 
 /**
  * Single-writer conditional-rule evaluator (L3 host). Lives in the worker so a
@@ -41,6 +42,12 @@ export interface RuleEvaluatorOptions {
   auditStore: AuditStore;
   subscribe: (tokenIds: string[]) => void;
   unsubscribe: (tokenIds: string[]) => void;
+  /**
+   * Auto-execution handler. Provided ONLY when FEATURE_CONDITIONAL_LIVE_EXECUTION
+   * is enabled. When present, "auto" rules build+sign+submit on trigger; when
+   * absent (the default), every rule degrades to manual confirmation.
+   */
+  autoExecutor?: AutoExecutor;
   /** How often to reconcile the active rule set from the DB. Default 5 s. */
   reloadIntervalMs?: number;
   /** How often to tick rules for staleness / window completion. Default 1 s. */
@@ -58,7 +65,8 @@ interface ActiveRule {
 }
 
 export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEvaluatorManager => {
-  const { logger, ruleStore, triggerStore, auditStore, subscribe, unsubscribe } = opts;
+  const { logger, ruleStore, triggerStore, auditStore, subscribe, unsubscribe, autoExecutor } =
+    opts;
   const reloadIntervalMs = opts.reloadIntervalMs ?? 5_000;
   const tickIntervalMs = opts.tickIntervalMs ?? 1_000;
 
@@ -153,22 +161,44 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
           evidence: result.trigger,
           reasonCodes: result.trigger.reasonCodes,
         });
+        const isAuto = autoExecutor !== undefined && ar.def.executionMode === "auto";
         await auditStore.emit({
           actor: ar.walletAddress,
           action: "rule.triggered",
           subject: `rule:${ar.id}`,
           metadata: {
             triggerId: trig.id,
+            executionMode: isAuto ? "auto" : "manual",
             windowStartMs: result.trigger.windowStartMs,
             triggeredAtMs: result.trigger.triggeredAtMs,
             bestAsk: result.trigger.bestAsk,
             bestBid: result.trigger.bestBid,
           },
         });
-        logger.info(
-          { ruleId: ar.id, triggerId: trig.id },
-          "Conditional rule triggered — awaiting manual confirmation (no auto-submit)",
-        );
+        if (isAuto) {
+          logger.info(
+            { ruleId: ar.id, triggerId: trig.id },
+            "Conditional rule triggered — auto-executing",
+          );
+          // Build + sign + submit with fail-closed guards. Runs in the per-rule
+          // writeChain so it is serialized with all other state for this rule.
+          await autoExecutor.execute({
+            rule: {
+              id: ar.id,
+              walletAddress: ar.walletAddress,
+              tokenId: ar.tokenId,
+              def: ar.def,
+            },
+            triggerId: trig.id,
+            evidence: result.trigger,
+            nowMs,
+          });
+        } else {
+          logger.info(
+            { ruleId: ar.id, triggerId: trig.id },
+            "Conditional rule triggered — awaiting manual confirmation (no auto-submit)",
+          );
+        }
       }
     }
 

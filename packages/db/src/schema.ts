@@ -280,3 +280,59 @@ export const ruleTriggers = pgTable(
 
 export type RuleTriggerRow = typeof ruleTriggers.$inferSelect;
 export type NewRuleTriggerRow = typeof ruleTriggers.$inferInsert;
+
+/**
+ * Per-user Privy-managed embedded trading wallet. The raw private key NEVER
+ * touches this app — Privy holds it in a secure enclave. We store only references
+ * (privyWalletId is used for every signing call) plus the embedded EOA address,
+ * which is the maker == signer == funder for signatureType 0 orders.
+ * `policyId` is the Privy policy allowlisting only Polymarket contracts.
+ * `allowancesBootstrappedAt` marks the one-time USDC/CTF approvals (Slice C) done.
+ */
+export const privyWallets = pgTable(
+  "privy_wallets",
+  {
+    walletAddress: text("wallet_address").primaryKey(), // login EOA (identity)
+    privyUserId: text("privy_user_id").notNull(),
+    privyWalletId: text("privy_wallet_id").notNull(),
+    embeddedAddress: text("embedded_address").notNull(),
+    policyId: text("policy_id"),
+    allowancesBootstrappedAt: timestamp("allowances_bootstrapped_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("privy_wallets_embedded_idx").on(t.embeddedAddress)],
+);
+
+export type PrivyWalletRow = typeof privyWallets.$inferSelect;
+export type NewPrivyWalletRow = typeof privyWallets.$inferInsert;
+
+/**
+ * Records the user's one-time consent delegating server-side signing authority to
+ * the app (the "sign once" moment). Time-bounded: `expiresAt` enforces re-auth.
+ * status: active → revoked | expired. This is an app-side ledger of the Privy
+ * session-signer grant; Privy independently enforces policy + revocation.
+ */
+export const tradingDelegations = pgTable(
+  "trading_delegations",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    sessionSignerId: text("session_signer_id"),
+    status: text("status").notNull().default("active"),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("trading_delegations_wallet_idx").on(t.walletAddress),
+    index("trading_delegations_status_idx").on(t.status),
+    index("trading_delegations_expires_at_idx").on(t.expiresAt),
+  ],
+);
+
+export type TradingDelegationRow = typeof tradingDelegations.$inferSelect;
+export type NewTradingDelegationRow = typeof tradingDelegations.$inferInsert;

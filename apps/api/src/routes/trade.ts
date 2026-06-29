@@ -7,13 +7,22 @@ import type {
   ClobCredentialStore,
   OrderIntentStore,
   RuntimeFlagStore,
+  PrivyWalletStore,
+  DelegationStore,
 } from "@mx2/db";
 import type {
   AuthenticatedClobClient,
   GeoblockClient,
   L2Credentials,
+  TickSize,
+  SignedClobOrder,
 } from "@mx2/polymarket-client";
-import { SignedClobOrderSchema } from "@mx2/polymarket-client";
+import {
+  SignedClobOrderSchema,
+  buildAndSignEoaOrder,
+  buildClobAuthTypedData,
+} from "@mx2/polymarket-client";
+import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 // TODO(geoblock): TEMPORARILY DISABLED for local testing — restore before any staging/live use.
 // import { makeGeoblockCheck } from "../middleware/geoblock.js";
@@ -28,7 +37,15 @@ export interface TradeRoutesDeps {
   runtimeFlags: RuntimeFlagStore;
   tradingClobClient: AuthenticatedClobClient;
   geoblockClient: GeoblockClient;
+  // Server-side signing (FEATURE_PRIVY_SIGNING). Used only on the Privy path; the
+  // legacy browser-signed path ignores these.
+  tradingSigner: TradingSigner;
+  privyWallets: PrivyWalletStore;
+  delegations: DelegationStore;
 }
+
+const TICK_SIZES: readonly TickSize[] = ["0.1", "0.01", "0.001", "0.0001"];
+const isTickSize = (v: unknown): v is TickSize => TICK_SIZES.includes(v as TickSize);
 
 const isTradingPaused = async (deps: TradeRoutesDeps): Promise<boolean> => {
   const flag = await deps.runtimeFlags.get("trading_paused");
@@ -132,23 +149,72 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
   app.post("/api/trade/credentials/setup", { preHandler: requireAuth }, async (req, reply) => {
     const user = req.user!;
     const body = req.body as Record<string, unknown>;
-    const l1Signature = typeof body["l1Signature"] === "string" ? body["l1Signature"] : null;
-    const timestamp = typeof body["timestamp"] === "string" ? body["timestamp"] : null;
-    const nonce = typeof body["nonce"] === "string" ? body["nonce"] : null;
-
-    if (!l1Signature || !timestamp || !nonce) {
-      reply.code(400);
-      return { error: "INVALID_REQUEST", message: "l1Signature, timestamp, and nonce required" };
-    }
 
     if (!deps.config.encryptionMasterKey) {
       reply.code(500);
       return { error: "CONFIG_ERROR", message: "Trading infrastructure is not configured." };
     }
 
-    // Session wallet is lowercase; CLOB L1 auth expects checksummed POLY_ADDRESS
-    // matching the address field in the signed ClobAuth EIP-712 message.
-    const signingAddress = clobSignerAddress(user.walletAddress);
+    // Resolve the L1 ClobAuth signature + the address it attests. Two modes:
+    //  - browser path: the client signs ClobAuth and posts {l1Signature,timestamp,nonce}.
+    //  - Privy path: the server signs ClobAuth for the embedded wallet (no popup),
+    //    keyed off the embedded address (which the CLOB sees as POLY_ADDRESS).
+    let signingAddress: `0x${string}`;
+    let l1Signature: string;
+    let timestamp: string;
+    let nonce: string;
+
+    const bodySig = typeof body["l1Signature"] === "string" ? body["l1Signature"] : null;
+    if (bodySig) {
+      const ts = typeof body["timestamp"] === "string" ? body["timestamp"] : null;
+      const nc = typeof body["nonce"] === "string" ? body["nonce"] : null;
+      if (!ts || !nc) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "l1Signature, timestamp, and nonce required" };
+      }
+      // Session wallet is lowercase; CLOB L1 auth expects checksummed POLY_ADDRESS
+      // matching the address field in the signed ClobAuth EIP-712 message.
+      signingAddress = clobSignerAddress(user.walletAddress);
+      l1Signature = bodySig;
+      timestamp = ts;
+      nonce = nc;
+    } else if (deps.config.features.privySigning) {
+      const wallet = await deps.privyWallets.find(user.walletAddress);
+      if (!wallet) {
+        reply.code(400);
+        return {
+          error: "TRADING_WALLET_NOT_PROVISIONED",
+          message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
+        };
+      }
+      const timeResult = await deps.tradingClobClient.getServerTime();
+      if (!timeResult.ok) {
+        reply.code(502);
+        return { error: "CLOB_TIME_FAILED", message: timeResult.error.message };
+      }
+      signingAddress = clobSignerAddress(wallet.embeddedAddress);
+      timestamp = String(timeResult.value);
+      nonce = "0";
+      const typedData = buildClobAuthTypedData(
+        signingAddress,
+        deps.config.polymarket.chainId,
+        timestamp,
+        0,
+      );
+      const signed = await deps.tradingSigner.signClobAuth({
+        wallet: { walletId: wallet.privyWalletId, address: wallet.embeddedAddress },
+        typedData,
+      });
+      if (!signed.ok) {
+        reply.code(502);
+        return { error: "CLOB_SIGN_FAILED", message: signed.error.message };
+      }
+      l1Signature = signed.value.signature;
+    } else {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", message: "l1Signature, timestamp, and nonce required" };
+    }
+
     const result = await deps.tradingClobClient.deriveApiKey({
       address: signingAddress,
       l1Signature,
@@ -271,9 +337,11 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         funder,
         maxSpend,
         builderCode: deps.config.polymarket.builderCode ?? null,
-        signatureType: 2,
+        signatureType: deps.config.features.privySigning ? 0 : 2,
         timestamp,
-        note: "Build + sign the CTF Exchange order with your EOA (signatureType 2, POLY_GNOSIS_SAFE; maker = your deposit wallet). Send the signed order to POST /api/trade/orders.",
+        note: deps.config.features.privySigning
+          ? "Server-side signing is enabled: POST /api/trade/orders with {tokenId, side, price, size} and the server signs with your Privy trading wallet (signatureType 0). No wallet popup."
+          : "Build + sign the CTF Exchange order with your EOA (signatureType 2, POLY_GNOSIS_SAFE; maker = your deposit wallet). Send the signed order to POST /api/trade/orders.",
         warning: deps.config.features.liveTrading
           ? "Live trading is ENABLED. Submitting this order will use real funds."
           : "Live trading is DISABLED. This preview is for demonstration only.",
@@ -295,29 +363,20 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       const idempotencyKey =
         typeof body["idempotencyKey"] === "string" ? body["idempotencyKey"] : null;
       const conditionId = typeof body["conditionId"] === "string" ? body["conditionId"] : null;
-      // Human-readable price/size are recorded for the intent/audit trail only;
-      // the signed order struct below is the source of truth for submission.
+      // Human-readable price/size are recorded for the intent/audit trail.
       const price = typeof body["price"] === "string" ? body["price"] : null;
       const size = typeof body["size"] === "string" ? body["size"] : null;
       const orderType = (
         ["GTC", "GTD", "FOK"].includes(body["orderType"] as string) ? body["orderType"] : "GTC"
       ) as "GTC" | "GTD" | "FOK";
 
-      // The client builds + signs the full CLOB order struct (EIP-712 over the CTF
-      // Exchange domain). We validate its shape and forward it verbatim — its
-      // signature commits to every field, so we must not mutate it.
-      const parsedOrder = SignedClobOrderSchema.safeParse(body["order"]);
-      if (!idempotencyKey || !conditionId || !price || !size || !parsedOrder.success) {
+      if (!idempotencyKey || !conditionId || !price || !size) {
         reply.code(400);
         return {
           error: "INVALID_REQUEST",
-          message: "idempotencyKey, conditionId, price, size and a signed `order` are required",
+          message: "idempotencyKey, conditionId, price, size are required",
         };
       }
-      const order = parsedOrder.data;
-      const tokenId = order.tokenId;
-      const side: "BUY" | "SELL" = order.side === "BUY" || order.side === 0 ? "BUY" : "SELL";
-      const funder = order.maker;
 
       // Idempotency: if a matching intent already exists, return its current state.
       const existing = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
@@ -335,6 +394,131 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
           status: existing.status,
           idempotent: true,
         };
+      }
+
+      // Rate-limit guardrail (shared with the auto-execution path via the same
+      // order_intents count). Caps runaway submission from any one wallet.
+      const recentOrders = await deps.orderIntents.countRecentByWallet(
+        user.walletAddress,
+        new Date(Date.now() - 60_000),
+      );
+      if (recentOrders >= deps.config.limits.orderRateLimitPerMin) {
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "order.rate_limited",
+          subject: `idem:${idempotencyKey}`,
+          metadata: { recent: recentOrders, limit: deps.config.limits.orderRateLimitPerMin },
+        });
+        reply.code(429);
+        return {
+          error: "RATE_LIMITED",
+          message: "Too many orders in the last minute. Please slow down.",
+        };
+      }
+
+      // Obtain a signed CLOB order. Two modes:
+      //  - Privy path (FEATURE_PRIVY_SIGNING): the server builds + signs the order
+      //    (signatureType 0) with the user's delegated Privy wallet — no popup.
+      //  - Legacy path: the client posts a fully-signed `order` we forward verbatim.
+      let signedOrder: SignedClobOrder;
+      let tokenId: string;
+      let side: "BUY" | "SELL";
+      let funder: string;
+      let clobAddress: `0x${string}`;
+
+      if (deps.config.features.privySigning) {
+        const tokenIdIn = typeof body["tokenId"] === "string" ? body["tokenId"] : null;
+        const sideIn = body["side"] === "BUY" || body["side"] === "SELL" ? body["side"] : null;
+        if (!tokenIdIn || !sideIn) {
+          reply.code(400);
+          return {
+            error: "INVALID_REQUEST",
+            message: "tokenId and side are required for server-side signing",
+          };
+        }
+        const negRisk = body["negRisk"] === true;
+        const tickSize = isTickSize(body["tickSize"]) ? body["tickSize"] : undefined;
+
+        const wallet = await deps.privyWallets.find(user.walletAddress);
+        if (!wallet) {
+          reply.code(400);
+          return {
+            error: "TRADING_WALLET_NOT_PROVISIONED",
+            message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
+          };
+        }
+        // Session-expiry guardrail: signing requires an active, unexpired delegation.
+        const delegation = await deps.delegations.findActive(user.walletAddress);
+        if (!delegation) {
+          reply.code(401);
+          return {
+            error: "DELEGATION_EXPIRED",
+            message: "Trading authorization has expired. Re-authorize to continue.",
+          };
+        }
+        // Fail-closed: never submit before required on-chain allowances are set.
+        if (!wallet.allowancesBootstrappedAt) {
+          reply.code(400);
+          return {
+            error: "ALLOWANCES_NOT_BOOTSTRAPPED",
+            message:
+              "Trading wallet allowances are not set up. Call POST /api/trading-wallet/bootstrap-allowances.",
+          };
+        }
+
+        const built = await buildAndSignEoaOrder(
+          {
+            tokenId: tokenIdIn,
+            side: sideIn,
+            price,
+            size,
+            address: wallet.embeddedAddress,
+            chainId: deps.config.polymarket.chainId,
+            negRisk,
+            ...(tickSize !== undefined ? { tickSize } : {}),
+            builderCode: deps.config.polymarket.builderCode ?? null,
+          },
+          (typedData) =>
+            deps.tradingSigner.signOrder({
+              wallet: { walletId: wallet.privyWalletId, address: wallet.embeddedAddress },
+              typedData,
+            }),
+        );
+        if (!built.ok) {
+          await deps.auditStore.emit({
+            actor: user.walletAddress,
+            action: "order.failed",
+            subject: `idem:${idempotencyKey}`,
+            metadata: { error: built.error.code, message: built.error.message },
+          });
+          reply.code(502);
+          return { error: "ORDER_SIGN_FAILED", message: built.error.message };
+        }
+        signedOrder = built.value;
+        tokenId = tokenIdIn;
+        side = sideIn;
+        funder = wallet.embeddedAddress;
+        clobAddress = clobSignerAddress(wallet.embeddedAddress);
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "order.signed",
+          subject: `idem:${idempotencyKey}`,
+          metadata: { tokenId, side, signatureType: 0, signer: wallet.embeddedAddress },
+        });
+      } else {
+        // Legacy: the client builds + signs the CLOB order struct (EIP-712 over the CTF
+        // Exchange domain). We validate its shape and forward it verbatim — its
+        // signature commits to every field, so we must not mutate it.
+        const parsedOrder = SignedClobOrderSchema.safeParse(body["order"]);
+        if (!parsedOrder.success) {
+          reply.code(400);
+          return { error: "INVALID_REQUEST", message: "a signed `order` struct is required" };
+        }
+        signedOrder = parsedOrder.data;
+        tokenId = signedOrder.tokenId;
+        side = signedOrder.side === "BUY" || signedOrder.side === 0 ? "BUY" : "SELL";
+        funder = signedOrder.maker;
+        clobAddress = clobSignerAddress(user.walletAddress);
       }
 
       const creds = await getDecryptedCreds(deps, user.walletAddress, reply);
@@ -362,10 +546,10 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       });
 
       const submitResult = await deps.tradingClobClient.submitOrder(
-        order,
+        signedOrder,
         orderType,
         creds,
-        clobSignerAddress(user.walletAddress),
+        clobAddress,
         idempotencyKey,
       );
 

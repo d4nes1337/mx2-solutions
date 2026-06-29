@@ -31,11 +31,18 @@ export interface ListMarketsParams {
   closed?: boolean;
 }
 
+export interface FindMarketParams {
+  conditionId?: string;
+  tokenId?: string;
+}
+
 export interface GammaClient {
   listEvents(params?: ListEventsParams): Promise<Result<GammaEvent[], PolymarketError>>;
   getEvent(id: string): Promise<Result<GammaEvent, PolymarketError>>;
   listMarkets(params?: ListMarketsParams): Promise<Result<GammaMarket[], PolymarketError>>;
   getMarket(id: string): Promise<Result<GammaMarket, PolymarketError>>;
+  /** Best-effort lookup by condition id or CLOB token id (Gamma /markets filters). */
+  findMarket(params: FindMarketParams): Promise<Result<GammaMarket | null, PolymarketError>>;
 }
 
 export interface GammaClientOptions {
@@ -153,5 +160,29 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
         GammaMarketSchema,
         timeoutMs,
       ),
+
+    findMarket: async (params) => {
+      if (params.conditionId) {
+        const byCond = await fetchJson(
+          buildUrl(baseUrl, "/markets", { condition_ids: params.conditionId, limit: 1 }),
+          GammaMarketSchema.array(),
+          timeoutMs,
+        );
+        if (!byCond.ok) return byCond;
+        if (byCond.value[0]) return ok(byCond.value[0]);
+      }
+
+      if (params.tokenId) {
+        const byToken = await fetchJson(
+          buildUrl(baseUrl, "/markets", { clob_token_ids: params.tokenId, limit: 1 }),
+          GammaMarketSchema.array(),
+          timeoutMs,
+        );
+        if (!byToken.ok) return byToken;
+        return ok(byToken.value[0] ?? null);
+      }
+
+      return ok(null);
+    },
   };
 };
