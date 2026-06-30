@@ -284,6 +284,7 @@ const makeTradingAccountRow = (overrides: Partial<TradingAccountRow> = {}): Trad
   metadata: {},
   createdAt: new Date(),
   updatedAt: new Date(),
+  archivedAt: null,
   ...overrides,
 });
 
@@ -306,6 +307,7 @@ const mockTradingAccounts: TradingAccountStore = {
     }),
   markReady: async () => {},
   updateStatus: async () => {},
+  archive: async () => null,
 };
 
 const makePrivyWalletRow = (): PrivyWalletRow => ({

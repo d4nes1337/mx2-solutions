@@ -99,6 +99,7 @@ export const buildApp = (deps: AppDeps) => {
       },
       markReady: async () => {},
       updateStatus: async () => {},
+      archive: async () => null,
     } satisfies TradingAccountStore);
   const accountClobCredentials =
     deps.accountClobCredentials ??

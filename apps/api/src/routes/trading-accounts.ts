@@ -154,4 +154,43 @@ export const registerTradingAccountsRoutes = (
     });
     return { account: await serializeAccount(account) };
   });
+
+  // ── DELETE /api/trading-accounts/:id ─────────────────────────────────────
+  // Soft-delete: stamps archivedAt, hides the account from listing, and
+  // auto-promotes the next active account to primary if needed.
+  // The auto-login wallet (signerAddress === ownerWalletAddress) is blocked
+  // from archival — it will just be re-created on next GET /api/trading-accounts.
+  app.delete("/api/trading-accounts/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const user = req.user!;
+    const params = req.params as { id: string };
+
+    const existing = await deps.tradingAccounts.findByOwner(user.walletAddress, params.id);
+    if (!existing) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Trading account not found" };
+    }
+    if (existing.signerAddress === user.walletAddress.toLowerCase()) {
+      reply.code(409);
+      return {
+        error: "CANNOT_ARCHIVE_LOGIN_WALLET",
+        message:
+          "The wallet you are signed in with cannot be removed — it is re-created automatically on login.",
+      };
+    }
+
+    const archived = await deps.tradingAccounts.archive(user.walletAddress, params.id);
+    if (!archived) {
+      reply.code(409);
+      return { error: "ALREADY_ARCHIVED", message: "Trading account is already archived." };
+    }
+
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "trading_account.archived" as const,
+      subject: `trading_account:${archived.id}`,
+      metadata: { kind: archived.kind, signerAddress: archived.signerAddress },
+    });
+
+    return { ok: true, id: archived.id };
+  });
 };

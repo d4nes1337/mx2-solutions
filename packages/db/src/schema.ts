@@ -183,6 +183,7 @@ export const tradingAccounts = pgTable(
       .default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
   (t) => [
     index("trading_accounts_owner_idx").on(t.ownerWalletAddress),

@@ -94,6 +94,7 @@ export function WalletsSection({ signedIn }: { signedIn: boolean }) {
             <WalletCard
               key={account.id}
               account={account}
+              loginAddress={address ?? ""}
               onSetupCredentials={(acc) => void handleSetupCredentials(acc)}
             />
           ))

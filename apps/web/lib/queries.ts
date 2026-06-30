@@ -177,6 +177,17 @@ export function useSetPrimaryTradingAccount() {
   });
 }
 
+export function useArchiveTradingAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.del<{ ok: boolean; id: string }>(`/api/trading-accounts/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+    },
+  });
+}
+
 export function useUpsertExternalTradingAccount() {
   const qc = useQueryClient();
   return useMutation({

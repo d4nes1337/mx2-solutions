@@ -33,6 +33,7 @@ export const AUDIT_ACTIONS = [
   "trade.order.preview",
   "trading_account.external_upserted",
   "trading_account.primary_set",
+  "trading_account.archived",
   "trading_wallet.provisioned",
   "trading_wallet.deposit_wallet_activation_started",
   "trading_wallet.deposit_wallet_activation_ready",

@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronRight, Copy, ExternalLink, Loader2, Wallet, Zap } from "lucide-react";
+import { Check, ChevronRight, Copy, ExternalLink, Loader2, Trash2, Wallet, Zap } from "lucide-react";
 import {
   useActivateDepositWallet,
+  useArchiveTradingAccount,
   useBootstrapAllowances,
   useSetPrimaryTradingAccount,
   useTradingWallet,
@@ -59,16 +60,20 @@ function ModeChip({ account }: { account: TradingAccount }) {
 
 interface WalletCardProps {
   account: TradingAccount;
+  /** The address the user is currently signed in with — cannot be archived. */
+  loginAddress: string;
   onSetupCredentials: (account: TradingAccount) => void;
 }
 
-export function WalletCard({ account, onSetupCredentials }: WalletCardProps) {
+export function WalletCard({ account, loginAddress, onSetupCredentials }: WalletCardProps) {
   const setPrimary = useSetPrimaryTradingAccount();
   const activateDeposit = useActivateDepositWallet();
   const bootstrap = useBootstrapAllowances();
+  const archive = useArchiveTradingAccount();
   const walletStatus = useTradingWallet(true);
 
   const [topUpOpen, setTopUpOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const depositWalletAddress =
     account.depositWalletAddress ??
@@ -76,8 +81,9 @@ export function WalletCard({ account, onSetupCredentials }: WalletCardProps) {
     null;
 
   const isPrivy = account.kind === "internal_privy";
+  const isLoginWallet = account.signerAddress.toLowerCase() === loginAddress.toLowerCase();
   const isBusy =
-    setPrimary.isPending || activateDeposit.isPending || bootstrap.isPending;
+    setPrimary.isPending || activateDeposit.isPending || bootstrap.isPending || archive.isPending;
 
   const handleActivate = () => {
     activateDeposit.mutate(undefined, {
@@ -169,7 +175,7 @@ export function WalletCard({ account, onSetupCredentials }: WalletCardProps) {
         )}
 
         {/* Action row */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2 justify-between">
           {/* Set primary */}
           {!account.isPrimary && (
             <Button
@@ -234,6 +240,47 @@ export function WalletCard({ account, onSetupCredentials }: WalletCardProps) {
               {bootstrap.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
               Check & activate trading
             </Button>
+          )}
+          {/* Spacer so remove sits on the right */}
+          <span className="flex-1" />
+          {/* Remove wallet (blocked for the login wallet) */}
+          {!isLoginWallet && !confirmDelete && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={isBusy}
+              onClick={() => setConfirmDelete(true)}
+              className="text-muted hover:text-neg"
+            >
+              <Trash2 size={12} />
+              Remove
+            </Button>
+          )}
+          {!isLoginWallet && confirmDelete && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] text-neg">Remove this wallet?</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={archive.isPending}
+                onClick={() => {
+                  archive.mutate(account.id);
+                  setConfirmDelete(false);
+                }}
+                className="text-neg hover:text-neg"
+              >
+                {archive.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
+                Confirm
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={archive.isPending}
+                onClick={() => setConfirmDelete(false)}
+              >
+                Cancel
+              </Button>
+            </div>
           )}
         </div>
 

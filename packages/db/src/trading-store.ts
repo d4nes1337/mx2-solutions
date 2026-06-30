@@ -1,4 +1,4 @@
-import { and, eq, desc, gte, sql } from "drizzle-orm";
+import { and, eq, desc, gte, isNull, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   userClobCredentials,
@@ -100,6 +100,8 @@ export interface TradingAccountStore {
   upsertInternalPrivy(opts: UpsertInternalPrivyTradingAccountOpts): Promise<TradingAccountRow>;
   markReady(id: string): Promise<void>;
   updateStatus(id: string, status: TradingAccountStatus): Promise<void>;
+  /** Soft-delete: stamps archivedAt, clears isPrimary, promotes next active account if needed. */
+  archive(ownerWalletAddress: string, id: string): Promise<TradingAccountRow | null>;
 }
 
 const normalizeAddress = (address: string): string => address.toLowerCase();
@@ -144,7 +146,12 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
     return db
       .select()
       .from(tradingAccounts)
-      .where(eq(tradingAccounts.ownerWalletAddress, ownerWalletAddress))
+      .where(
+        and(
+          eq(tradingAccounts.ownerWalletAddress, ownerWalletAddress),
+          isNull(tradingAccounts.archivedAt),
+        ),
+      )
       .orderBy(desc(tradingAccounts.isPrimary), desc(tradingAccounts.updatedAt));
   },
 
@@ -300,6 +307,38 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
       .update(tradingAccounts)
       .set({ status, updatedAt: sql`now()` })
       .where(eq(tradingAccounts.id, id));
+  },
+
+  async archive(ownerWalletAddress, id) {
+    const account = await this.findByOwner(ownerWalletAddress, id);
+    if (!account || account.archivedAt) return null;
+
+    const [archived] = await db
+      .update(tradingAccounts)
+      .set({ archivedAt: sql`now()`, isPrimary: false, updatedAt: sql`now()` })
+      .where(
+        and(eq(tradingAccounts.id, id), eq(tradingAccounts.ownerWalletAddress, ownerWalletAddress)),
+      )
+      .returning();
+    if (!archived) return null;
+
+    // If it was primary, promote the next active account alphabetically by createdAt.
+    if (account.isPrimary) {
+      const [next] = await db
+        .select()
+        .from(tradingAccounts)
+        .where(
+          and(
+            eq(tradingAccounts.ownerWalletAddress, ownerWalletAddress),
+            isNull(tradingAccounts.archivedAt),
+          ),
+        )
+        .orderBy(tradingAccounts.createdAt)
+        .limit(1);
+      if (next) await ensurePrimary(db, ownerWalletAddress, next.id);
+    }
+
+    return archived;
   },
 });
 
