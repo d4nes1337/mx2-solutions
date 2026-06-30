@@ -1,9 +1,16 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppConfig } from "@mx2/config";
-import type { AuditStore, SessionStore, PrivyWalletStore, DelegationStore } from "@mx2/db";
+import type {
+  AuditStore,
+  SessionStore,
+  PrivyWalletStore,
+  DelegationStore,
+  TradingAccountStore,
+} from "@mx2/db";
+import { isDepositWalletConfirmed, type DepositWalletRelayer } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
-import { ensureAllowances, type AllowanceReader } from "../trade/allowance-bootstrap.js";
+import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
 
 export interface TradingWalletRoutesDeps {
   config: AppConfig;
@@ -11,7 +18,9 @@ export interface TradingWalletRoutesDeps {
   auditStore: AuditStore;
   tradingSigner: TradingSigner;
   privyWallets: PrivyWalletStore;
+  tradingAccounts: TradingAccountStore;
   delegations: DelegationStore;
+  depositWalletRelayer: DepositWalletRelayer;
   /** null when POLYGON_RPC_URL is not configured (allowance bootstrap unavailable). */
   allowanceReader: AllowanceReader | null;
 }
@@ -43,6 +52,19 @@ export const registerTradingWalletRoutes = (
     return true;
   };
 
+  const ensureRelayerEnabled = (reply: FastifyReply): boolean => {
+    if (!deps.config.features.relayer || !deps.depositWalletRelayer.enabled) {
+      reply.code(503);
+      void reply.send({
+        error: "RELAYER_DISABLED",
+        message:
+          "Deposit-wallet activation is not enabled on this build. External Polymarket wallets can still trade with wallet signatures.",
+      });
+      return false;
+    }
+    return true;
+  };
+
   // ── POST /api/trading-wallet/provision ────────────────────────────────────
   app.post("/api/trading-wallet/provision", { preHandler: requireAuth }, async (req, reply) => {
     if (!ensureEnabled(reply)) return;
@@ -50,9 +72,19 @@ export const registerTradingWalletRoutes = (
 
     const existing = await deps.privyWallets.find(user.walletAddress);
     if (existing) {
+      const account = await deps.tradingAccounts.upsertInternalPrivy({
+        ownerWalletAddress: user.walletAddress,
+        signerAddress: existing.embeddedAddress,
+        privyWalletId: existing.privyWalletId,
+        status: "needs_deposit_wallet",
+        makePrimary: false,
+        metadata: { source: "privy_existing", relayerRequired: true },
+      });
       return {
         ok: true,
+        tradingAccountId: account.id,
         embeddedAddress: existing.embeddedAddress,
+        depositWalletAddress: account.depositWalletAddress,
         allowancesBootstrapped: existing.allowancesBootstrappedAt !== null,
         alreadyProvisioned: true,
       };
@@ -71,21 +103,153 @@ export const registerTradingWalletRoutes = (
       embeddedAddress: provisioned.value.address,
       policyId: deps.config.privy.tradingPolicyId ?? null,
     });
+    const account = await deps.tradingAccounts.upsertInternalPrivy({
+      ownerWalletAddress: user.walletAddress,
+      signerAddress: row.embeddedAddress,
+      privyWalletId: row.privyWalletId,
+      status: "needs_deposit_wallet",
+      makePrimary: false,
+      metadata: { source: "privy_provision", relayerRequired: true },
+    });
 
     await deps.auditStore.emit({
       actor: user.walletAddress,
       action: "trading_wallet.provisioned",
       subject: `wallet:${user.walletAddress}`,
-      metadata: { embeddedAddress: row.embeddedAddress, policyId: row.policyId },
+      metadata: {
+        embeddedAddress: row.embeddedAddress,
+        policyId: row.policyId,
+        tradingAccountId: account.id,
+      },
     });
 
     return {
       ok: true,
+      tradingAccountId: account.id,
       embeddedAddress: row.embeddedAddress,
+      depositWalletAddress: account.depositWalletAddress,
       alreadyProvisioned: false,
-      fundingInstructions: `Send USDC on Polygon to ${row.embeddedAddress}. Your maximum possible loss is bounded by the amount you load; your primary wallet is never touched.`,
+      fundingInstructions:
+        "Deposit-wallet activation is required before funding. Once active, fund the Polymarket deposit wallet, not the embedded signer EOA.",
     };
   });
+
+  // ── POST /api/trading-wallet/activate-deposit-wallet ──────────────────────
+  app.post(
+    "/api/trading-wallet/activate-deposit-wallet",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!ensureEnabled(reply)) return;
+      if (!ensureRelayerEnabled(reply)) return;
+      const user = req.user!;
+
+      const wallet = await deps.privyWallets.find(user.walletAddress);
+      if (!wallet) {
+        reply.code(400);
+        return {
+          error: "TRADING_WALLET_NOT_PROVISIONED",
+          message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
+        };
+      }
+
+      const owner = { ownerAddress: wallet.embeddedAddress, ownerWalletId: wallet.privyWalletId };
+      const currentStatus = await deps.depositWalletRelayer.getDeploymentStatus(owner);
+      if (!currentStatus.ok) {
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "trading_wallet.deposit_wallet_activation_failed",
+          subject: `wallet:${user.walletAddress}`,
+          metadata: {
+            embeddedAddress: wallet.embeddedAddress,
+            code: currentStatus.error.code,
+          },
+        });
+        reply.code(currentStatus.error.code === "RELAYER_DISABLED" ? 503 : 502);
+        return { error: currentStatus.error.code, message: currentStatus.error.message };
+      }
+
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "trading_wallet.deposit_wallet_activation_started",
+        subject: `wallet:${user.walletAddress}`,
+        metadata: {
+          embeddedAddress: wallet.embeddedAddress,
+          depositWalletAddress: currentStatus.value.depositWalletAddress,
+          alreadyDeployed: currentStatus.value.deployed,
+        },
+      });
+
+      const deployment = currentStatus.value.deployed
+        ? ({ ok: true, value: { ...currentStatus.value, submitted: false } } as const)
+        : await deps.depositWalletRelayer.deployDepositWallet(owner);
+
+      if (!deployment.ok) {
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "trading_wallet.deposit_wallet_activation_failed",
+          subject: `wallet:${user.walletAddress}`,
+          metadata: {
+            embeddedAddress: wallet.embeddedAddress,
+            depositWalletAddress: currentStatus.value.depositWalletAddress,
+            code: deployment.error.code,
+          },
+        });
+        reply.code(deployment.error.code === "RELAYER_DISABLED" ? 503 : 502);
+        return { error: deployment.error.code, message: deployment.error.message };
+      }
+
+      const ready = deployment.value.deployed || isDepositWalletConfirmed(deployment.value.state);
+      const status = ready ? "needs_funding" : "needs_deposit_wallet";
+      const account = await deps.tradingAccounts.upsertInternalPrivy({
+        ownerWalletAddress: user.walletAddress,
+        signerAddress: wallet.embeddedAddress,
+        privyWalletId: wallet.privyWalletId,
+        depositWalletAddress: deployment.value.depositWalletAddress,
+        status,
+        makePrimary: false,
+        metadata: {
+          source: "deposit_wallet_activation",
+          relayerRequired: true,
+          relayerDeployment: {
+            state: deployment.value.state,
+            submitted: deployment.value.submitted,
+            transactionId: deployment.value.transactionId,
+            transactionHash: deployment.value.transactionHash,
+          },
+        },
+      });
+
+      if (ready) {
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "trading_wallet.deposit_wallet_activation_ready",
+          subject: `trading_account:${account.id}`,
+          metadata: {
+            embeddedAddress: wallet.embeddedAddress,
+            depositWalletAddress: deployment.value.depositWalletAddress,
+            state: deployment.value.state,
+            transactionId: deployment.value.transactionId,
+          },
+        });
+      }
+
+      return {
+        ok: true,
+        tradingAccountId: account.id,
+        embeddedAddress: wallet.embeddedAddress,
+        depositWalletAddress: deployment.value.depositWalletAddress,
+        status: account.status,
+        relayer: {
+          submitted: deployment.value.submitted,
+          deployed: ready,
+          state: deployment.value.state,
+          transactionId: deployment.value.transactionId,
+          transactionHash: deployment.value.transactionHash,
+        },
+        nextAction: ready ? "top_up" : "activate_deposit_wallet",
+      };
+    },
+  );
 
   // ── POST /api/trading-wallet/delegate ─────────────────────────────────────
   app.post("/api/trading-wallet/delegate", { preHandler: requireAuth }, async (req, reply) => {
@@ -128,10 +292,21 @@ export const registerTradingWalletRoutes = (
     const user = req.user!;
     const wallet = await deps.privyWallets.find(user.walletAddress);
     const delegation = wallet ? await deps.delegations.findActive(user.walletAddress) : null;
+    const internalAccount = wallet
+      ? (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
+          (account) =>
+            account.kind === "internal_privy" &&
+            account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase(),
+        )
+      : null;
     return {
       privySigningEnabled: deps.config.features.privySigning,
+      relayerEnabled: deps.config.features.relayer && deps.depositWalletRelayer.enabled,
       provisioned: wallet !== null,
       embeddedAddress: wallet?.embeddedAddress ?? null,
+      tradingAccountId: internalAccount?.id ?? null,
+      tradingAccountStatus: internalAccount?.status ?? null,
+      depositWalletAddress: internalAccount?.depositWalletAddress ?? null,
       allowancesBootstrapped: wallet?.allowancesBootstrappedAt != null,
       delegationActive: delegation !== null,
       delegationExpiresAt: delegation?.expiresAt.toISOString() ?? null,
@@ -155,27 +330,12 @@ export const registerTradingWalletRoutes = (
           message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
         };
       }
-      if (!deps.allowanceReader) {
-        reply.code(503);
-        return {
-          error: "RPC_NOT_CONFIGURED",
-          message: "POLYGON_RPC_URL is required to read + bootstrap on-chain allowances.",
-        };
-      }
-      const result = await ensureAllowances(
-        {
-          signer: deps.tradingSigner,
-          reader: deps.allowanceReader,
-          privyWallets: deps.privyWallets,
-          auditStore: deps.auditStore,
-        },
-        wallet,
-      );
-      if (!result.ok) {
-        reply.code(502);
-        return { error: "ALLOWANCE_BOOTSTRAP_FAILED", message: result.error.message };
-      }
-      return { ok: true, txHashes: result.value.txHashes };
+      reply.code(409);
+      return {
+        error: "DEPOSIT_WALLET_REQUIRED",
+        message:
+          "Allowance bootstrap must be executed from the Polymarket deposit wallet through the relayer. The embedded signer EOA is not a valid live CLOB maker.",
+      };
     },
   );
 

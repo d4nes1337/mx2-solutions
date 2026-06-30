@@ -4,6 +4,31 @@ _Last updated: 2026-06-30_
 
 ## Recent
 
+- **Deposit-wallet relayer activation slice (built, behind `FEATURE_RELAYER`).** Added the official
+  builder-relayer integration seam and API wiring for internal Privy wallets: backend-only relayer
+  config (`POLYMARKET_RELAYER_URL`, builder API key/secret/passphrase, `POLYGON_RPC_URL`) now fails
+  closed at config load; `apps/api` constructs a Polymarket `RelayClient` with a Privy-backed minimal
+  viem wallet-client adapter; `POST /api/trading-wallet/activate-deposit-wallet` checks/submits
+  deposit-wallet deployment and persists the deposit wallet on the internal `trading_account`; the
+  account selector UI now exposes an **Activate deposit wallet** action. Added a tested
+  `DepositWalletRelayer` adapter in `@mx2/polymarket-client` and route tests for disabled + confirmed
+  deployment states. Important compatibility finding: `builder-relayer-client@0.0.10` currently
+  types against `builder-signing-sdk@^0.0.8`, so the API pins `@polymarket/builder-signing-sdk@0.0.8`
+  even though the standalone signing package has a newer npm release. Quality gates:
+  `format:check` ✓, `lint` ✓, root `typecheck` ✓, backend `test` **183 pass / 3 skipped**,
+  web `typecheck` ✓, web `test` **37 pass**.
+
+- **Trading account selection + deposit-wallet fail-closed rewrite (built).** Owner approved a
+  two-mode UX: users may trade from any added external Polymarket wallet with browser signatures,
+  while every login can auto-provision an internal Privy trading wallet that becomes no-popup only
+  after Polymarket deposit-wallet/relayer activation. Added `trading_accounts` and
+  `trading_account_clob_credentials` (migration `0007`), account-scoped CLOB credential setup,
+  account-aware preview/submit/cancel routes, restored trading-layer geoblock preHandlers, and
+  updated the order ticket / trigger confirmation to use the selected primary account. The old
+  Privy bare-EOA `signatureType 0` submit and embedded-EOA allowance bootstrap paths now fail closed
+  with relayer/deposit-wallet errors. Quality gates: DB build ✓, API build ✓, web typecheck ✓,
+  focused trading route tests **46 pass / 3 skipped**.
+
 - **Home feed methodology + UI refresh (built).** Replaced the four-column raw-sort dashboard with
   three backend-ranked columns: **Now** (new + moving + resolving soon), **Top Markets** (deep,
   active, non-extreme overall markets), and **Favorites** suggestions with a stronger sign-in/watchlist
@@ -55,20 +80,14 @@ _Last updated: 2026-06-30_
 
 ## Current gate
 
-Gate 6 — server-side signing + unattended execution (Privy): **deployed to production
-(arima.finance) and staging-validated end-to-end on 2026-06-30** — except the final CLOB order,
-which is blocked by Polymarket's deposit-wallet requirement (see RFC-0002 §9). **Validated live:**
-Privy wallet provisioning, "sign once / no popup" order + ClobAuth signing, on-chain allowance
-approvals signed by Privy under the policy, and the **policy negative test (a transfer to a
-non-exchange address is DENIED)**. `FEATURE_PRIVY_SIGNING=true`, `FEATURE_LIVE_TRADING=false`,
-`FEATURE_CONDITIONAL_LIVE_EXECUTION=false` on the box. Policy-method/case/typed-data fixes are folded
-into `createPolymarketTradingPolicy`. **🔴 BLOCKER (R-001):** Polymarket's CLOB rejects orders from
-our wallet (`"maker address not allowed, please use the deposit wallet flow"`) for both
-`signatureType 0` (bare EOA) and the derived proxy — it requires a proxy registered through
-Polymarket's deposit onboarding. **Next (RFC-0002 §9 TODO):** integrate the Polymarket
-deposit-wallet/relayer flow (deferred `FEATURE_RELAYER`), re-key the order path to `signatureType 2`
-with the registered proxy as maker, add a withdrawal rule, then re-run the order + auto-rule. The
-deployed app's read-only product (feed, cockpit, portfolio, shadow rules) is **live and usable now**.
+Gate 6 — selectable trading accounts + server-side signing: **in progress; safe slices built on
+2026-06-30**. The product now distinguishes external wallet trading (manual signatures) from internal
+Privy trading wallets (no-popup target). Deposit-wallet activation is wired behind `FEATURE_RELAYER`,
+but **🔴 BLOCKER (R-017/R-001)** remains for actual no-popup orders until the next slices complete:
+relayer allowance batches, top-up/funding UX, official SDK `signatureType 3 / POLY_1271` order
+creation, withdrawal/return-funds flow, and a low-value staging order + cancel + monitoring review.
+Bare Privy EOA `signatureType 0` remains intentionally disabled.
+`FEATURE_LIVE_TRADING=false` and `FEATURE_CONDITIONAL_LIVE_EXECUTION=false` remain the safe defaults.
 
 Gate 5 — conditional rules (shadow / alert / manual-confirm): **built** (quality gates green).
 The pure `@mx2/rules` engine + worker evaluator + rules API + web rule-builder/alert/confirm are
@@ -82,9 +101,7 @@ signing) **built**; trading submit is now wired but still fail-closed behind `FE
 Next: **Gate 4 owner review** + a low-value staging trade once CLOB creds + a funded test wallet are
 available.
 
-> ⚠️ **Temporary local deviation:** route-level geoblock is commented out in
-> `apps/api/src/routes/trade.ts` (and its 3 route tests skipped) for local testing —
-> search `TODO(geoblock)`. **Restore `[requireAuth, geoblockCheck]` before any staging/live use.**
+> Trading-layer geoblock preHandlers are restored on preview, submit, account, and cancel routes.
 
 > 🔴 **LIVE TRADING ENABLED locally (owner manual test, 2026-06-23).** Root `.env` (gitignored) sets
 > `FEATURE_LIVE_TRADING=true` + a generated `APP_ENCRYPTION_MASTER_KEY` + `TRADING_ADMIN_SECRET`. The

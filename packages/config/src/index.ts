@@ -44,6 +44,12 @@ const EnvSchema = z.object({
 
   // Non-secret identifier. Optional until provided by the owner.
   POLYMARKET_BUILDER_CODE: z.string().optional(),
+  // Builder relayer onboarding credentials (backend-only). Required when
+  // FEATURE_RELAYER=true, never exposed to the browser.
+  POLYMARKET_RELAYER_URL: z.string().url().optional(),
+  POLYMARKET_BUILDER_API_KEY: z.string().optional(),
+  POLYMARKET_BUILDER_SECRET: z.string().optional(),
+  POLYMARKET_BUILDER_PASSPHRASE: z.string().optional(),
 
   // Session configuration. Derived cookieSecure from APP_ENV at runtime.
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
@@ -113,6 +119,12 @@ export type AppConfig = {
     dataBaseUrl: string;
     chainId: number;
     builderCode: string | undefined;
+    relayer: {
+      url: string | undefined;
+      builderApiKey: string | undefined;
+      builderSecret: string | undefined;
+      builderPassphrase: string | undefined;
+    };
   };
   session: {
     ttlSeconds: number;
@@ -178,6 +190,26 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     }
   }
 
+  if (e.FEATURE_RELAYER) {
+    const hasBuilderCreds =
+      e.POLYMARKET_BUILDER_API_KEY &&
+      e.POLYMARKET_BUILDER_SECRET &&
+      e.POLYMARKET_BUILDER_PASSPHRASE;
+    if (
+      !e.FEATURE_PRIVY_SIGNING ||
+      !e.POLYMARKET_RELAYER_URL ||
+      !e.POLYGON_RPC_URL ||
+      !hasBuilderCreds
+    ) {
+      throw new ConfigError(
+        "FEATURE_RELAYER=true requires FEATURE_PRIVY_SIGNING=true, POLYGON_RPC_URL, " +
+          "POLYMARKET_RELAYER_URL, " +
+          "POLYMARKET_BUILDER_API_KEY, POLYMARKET_BUILDER_SECRET, and " +
+          "POLYMARKET_BUILDER_PASSPHRASE.",
+      );
+    }
+  }
+
   return {
     env: e.APP_ENV,
     baseUrl: e.APP_BASE_URL,
@@ -195,6 +227,12 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       dataBaseUrl: e.POLYMARKET_DATA_BASE_URL,
       chainId: e.POLYGON_CHAIN_ID,
       builderCode: e.POLYMARKET_BUILDER_CODE,
+      relayer: {
+        url: e.POLYMARKET_RELAYER_URL,
+        builderApiKey: e.POLYMARKET_BUILDER_API_KEY,
+        builderSecret: e.POLYMARKET_BUILDER_SECRET,
+        builderPassphrase: e.POLYMARKET_BUILDER_PASSPHRASE,
+      },
     },
     session: {
       ttlSeconds: e.SESSION_TTL_SECONDS,

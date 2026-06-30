@@ -11,7 +11,8 @@ import { Badge, Button, cn } from "./ui";
 const NAV = [
   { href: "/", label: "Markets" },
   { href: "/rules", label: "Rules" },
-  { href: "/profile", label: "Portfolio" },
+  { href: "/portfolio", label: "Portfolio" },
+  { href: "/profile", label: "Profile" },
 ];
 
 function isActive(pathname: string, href: string) {

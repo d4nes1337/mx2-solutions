@@ -21,6 +21,10 @@ import type {
   DelegationStore,
   PrivyWalletRow,
   TradingDelegationRow,
+  TradingAccountStore,
+  TradingAccountRow,
+  TradingAccountClobCredentialStore,
+  TradingAccountClobCredentialRow,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -29,6 +33,7 @@ import type {
   AuthenticatedClobClient,
   GeoblockClient,
   PolymarketError,
+  DepositWalletRelayer,
 } from "@mx2/polymarket-client";
 import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
@@ -62,6 +67,21 @@ const configPrivy = loadConfig({
   MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
 });
 
+const configRelayer = loadConfig({
+  DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+  APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
+  TRADING_ADMIN_SECRET: "test-admin-secret-123",
+  FEATURE_LIVE_TRADING: "true",
+  FEATURE_PRIVY_SIGNING: "true",
+  FEATURE_RELAYER: "true",
+  MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+  POLYGON_RPC_URL: "https://polygon.example.test",
+  POLYMARKET_RELAYER_URL: "https://relayer.example.test",
+  POLYMARKET_BUILDER_API_KEY: "builder-key",
+  POLYMARKET_BUILDER_SECRET: "builder-secret",
+  POLYMARKET_BUILDER_PASSPHRASE: "builder-passphrase",
+});
+
 const logger = createLogger({ name: "trade-test", level: "silent" });
 
 const upstreamErr: PolymarketError = {
@@ -71,6 +91,8 @@ const upstreamErr: PolymarketError = {
 };
 
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+const TRADING_ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
+const FUNDER = "0xf000000000000000000000000000000000000001";
 
 // ── Mock stores ───────────────────────────────────────────────────────────────
 
@@ -246,6 +268,46 @@ const mockDelegations: DelegationStore = {
   expireLapsed: async () => {},
 };
 
+const makeTradingAccountRow = (overrides: Partial<TradingAccountRow> = {}): TradingAccountRow => ({
+  id: TRADING_ACCOUNT_ID,
+  ownerWalletAddress: WALLET,
+  kind: "external_wallet",
+  label: "Connected Polymarket wallet",
+  signerAddress: WALLET,
+  funderAddress: FUNDER,
+  signatureType: 2,
+  signingMode: "browser",
+  status: "ready",
+  isPrimary: true,
+  privyWalletId: null,
+  depositWalletAddress: null,
+  metadata: {},
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+});
+
+const mockTradingAccounts: TradingAccountStore = {
+  listByOwner: async () => [makeTradingAccountRow()],
+  findByOwner: async (_owner, id) => (id === TRADING_ACCOUNT_ID ? makeTradingAccountRow() : null),
+  getPrimary: async () => makeTradingAccountRow(),
+  setPrimary: async (_owner, id) => (id === TRADING_ACCOUNT_ID ? makeTradingAccountRow() : null),
+  upsertExternal: async () => makeTradingAccountRow(),
+  upsertInternalPrivy: async (opts) =>
+    makeTradingAccountRow({
+      kind: "internal_privy",
+      signerAddress: opts.signerAddress,
+      funderAddress: opts.depositWalletAddress ?? null,
+      signatureType: 3,
+      signingMode: opts.status === "ready" ? "server" : "unavailable",
+      status: opts.status,
+      privyWalletId: opts.privyWalletId,
+      depositWalletAddress: opts.depositWalletAddress ?? null,
+    }),
+  markReady: async () => {},
+  updateStatus: async () => {},
+};
+
 const makePrivyWalletRow = (): PrivyWalletRow => ({
   walletAddress: WALLET,
   privyUserId: WALLET,
@@ -285,6 +347,36 @@ const makeFakeCredsRow = (): UserClobCredentialRow => {
   };
 };
 
+const makeFakeAccountCredsRow = (): TradingAccountClobCredentialRow => {
+  const encrypted = encryptCredentials(
+    {
+      apiKey: "test-api-key",
+      secret: Buffer.from("test-secret").toString("base64"),
+      passphrase: "test-pass",
+    },
+    ENCRYPTION_KEY,
+  );
+  return {
+    tradingAccountId: TRADING_ACCOUNT_ID,
+    ownerWalletAddress: WALLET,
+    encryptedCreds: encrypted,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+};
+
+const mockAccountClobCredentials: TradingAccountClobCredentialStore = {
+  upsert: async (tradingAccountId, ownerWalletAddress, encryptedCreds) => ({
+    tradingAccountId,
+    ownerWalletAddress,
+    encryptedCreds,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
+  find: async () => makeFakeAccountCredsRow(),
+  delete: async () => {},
+};
+
 const buildTestApp = (
   overrides: {
     cfg?: ReturnType<typeof loadConfig>;
@@ -292,15 +384,18 @@ const buildTestApp = (
     clobCredentials?: ClobCredentialStore;
     orderIntents?: OrderIntentStore;
     runtimeFlags?: RuntimeFlagStore;
+    tradingAccounts?: TradingAccountStore;
+    accountClobCredentials?: TradingAccountClobCredentialStore;
     tradingClobClient?: AuthenticatedClobClient;
     geoblockClient?: GeoblockClient;
     tradingSigner?: TradingSigner;
+    depositWalletRelayer?: DepositWalletRelayer;
     privyWallets?: PrivyWalletStore;
     delegations?: DelegationStore;
     allowanceReader?: AllowanceReader | null;
   } = {},
-) =>
-  buildApp({
+) => {
+  const deps: Parameters<typeof buildApp>[0] = {
     config: overrides.cfg ?? config,
     logger,
     db: mockDb,
@@ -314,6 +409,8 @@ const buildTestApp = (
     sessions: overrides.sessions ?? mockSessions,
     allowlist: mockAllowlist,
     clobCredentials: overrides.clobCredentials ?? mockClobCredentials,
+    tradingAccounts: overrides.tradingAccounts ?? mockTradingAccounts,
+    accountClobCredentials: overrides.accountClobCredentials ?? mockAccountClobCredentials,
     orderIntents: overrides.orderIntents ?? mockOrderIntents,
     runtimeFlags: overrides.runtimeFlags ?? mockRuntimeFlags,
     ruleStore: mockRuleStore,
@@ -324,7 +421,10 @@ const buildTestApp = (
     tradingSigner: overrides.tradingSigner ?? mockTradingSigner,
     geoblockClient: overrides.geoblockClient ?? mockGeoblockClient,
     allowanceReader: overrides.allowanceReader ?? null,
-  });
+  };
+  if (overrides.depositWalletRelayer) deps.depositWalletRelayer = overrides.depositWalletRelayer;
+  return buildApp(deps);
+};
 
 // ── GET /api/trade/status ──────────────────────────────────────────────────────
 
@@ -438,11 +538,11 @@ describe("POST /api/trade/credentials/setup", () => {
 
   it("encrypts and stores CLOB credentials on success", async () => {
     let stored: unknown = null;
-    const captureCreds: ClobCredentialStore = {
-      ...mockClobCredentials,
-      upsert: async (wallet, encrypted) => {
+    const captureCreds: TradingAccountClobCredentialStore = {
+      ...mockAccountClobCredentials,
+      upsert: async (_accountId, _owner, encrypted) => {
         stored = encrypted;
-        return makeFakeCredsRow();
+        return makeFakeAccountCredsRow();
       },
     };
     const successClient: AuthenticatedClobClient = {
@@ -452,7 +552,7 @@ describe("POST /api/trade/credentials/setup", () => {
     const app = buildTestApp({
       sessions: mockSessionsAuthed,
       tradingClobClient: successClient,
-      clobCredentials: captureCreds,
+      accountClobCredentials: captureCreds,
     });
     const res = await app.inject({
       method: "POST",
@@ -494,7 +594,11 @@ describe("GET /api/trade/account", () => {
   });
 
   it("returns 400 when CLOB credentials not set up", async () => {
-    const app = buildTestApp({ cfg: configTradingEnabled, sessions: mockSessionsAuthed });
+    const app = buildTestApp({
+      cfg: configTradingEnabled,
+      sessions: mockSessionsAuthed,
+      accountClobCredentials: { ...mockAccountClobCredentials, find: async () => null },
+    });
     const res = await app.inject({
       method: "GET",
       url: "/api/trade/account",
@@ -507,10 +611,6 @@ describe("GET /api/trade/account", () => {
   });
 
   it("returns account data when credentials exist", async () => {
-    const credsStore: ClobCredentialStore = {
-      ...mockClobCredentials,
-      find: async () => makeFakeCredsRow(),
-    };
     const balClient: AuthenticatedClobClient = {
       ...mockTradingClobClient,
       getBalanceAllowance: async () => ok({ balance: "500.0", allowance: "1000.0" }),
@@ -519,7 +619,6 @@ describe("GET /api/trade/account", () => {
     const app = buildTestApp({
       cfg: configTradingEnabled,
       sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
       tradingClobClient: balClient,
     });
     const res = await app.inject({
@@ -614,6 +713,7 @@ describe("POST /api/trade/orders", () => {
   // New contract: the client sends a fully-signed CLOB order struct plus
   // human-readable price/size/conditionId for the intent record.
   const validOrderBody = {
+    tradingAccountId: TRADING_ACCOUNT_ID,
     idempotencyKey: "test-idem-key-1",
     conditionId: "0xcondition",
     price: "0.45",
@@ -621,8 +721,8 @@ describe("POST /api/trade/orders", () => {
     orderType: "GTC",
     order: {
       salt: "123456",
-      maker: "0xfunder",
-      signer: "0xsigner",
+      maker: FUNDER,
+      signer: WALLET,
       tokenId: "0xtoken",
       makerAmount: "45000000",
       takerAmount: "100000000",
@@ -666,6 +766,7 @@ describe("POST /api/trade/orders", () => {
     const existingIntent: OrderIntentRow = {
       id: "existing-id",
       walletAddress: WALLET,
+      tradingAccountId: TRADING_ACCOUNT_ID,
       idempotencyKey: "test-idem-key-1",
       conditionId: "0xcondition",
       tokenId: "0xtoken",
@@ -673,7 +774,10 @@ describe("POST /api/trade/orders", () => {
       price: "0.45",
       size: "100",
       orderType: "GTC",
-      funder: "0xfunder",
+      funder: FUNDER,
+      signer: WALLET,
+      signatureType: 2,
+      signingMode: "browser",
       status: "submitted",
       clobOrderId: "clob-order-abc",
       errorMessage: null,
@@ -769,6 +873,7 @@ describe("POST /api/trade/orders", () => {
     const createdIntent: OrderIntentRow = {
       id: "intent-1",
       walletAddress: WALLET,
+      tradingAccountId: TRADING_ACCOUNT_ID,
       idempotencyKey: "test-idem-key-1",
       conditionId: "0xcondition",
       tokenId: "0xtoken",
@@ -776,7 +881,10 @@ describe("POST /api/trade/orders", () => {
       price: "0.45",
       size: "100",
       orderType: "GTC",
-      funder: "0xfunder",
+      funder: FUNDER,
+      signer: WALLET,
+      signatureType: 2,
+      signingMode: "browser",
       status: "pending",
       clobOrderId: null,
       errorMessage: null,
@@ -821,9 +929,10 @@ describe("POST /api/trade/orders", () => {
 
 // ── POST /api/trade/orders (Privy server-side signing) ────────────────────────
 
-describe("POST /api/trade/orders (Privy server-signing)", () => {
+describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
   const EMBEDDED = "0x1111111111111111111111111111111111111111";
   const privyOrderBody = {
+    tradingAccountId: TRADING_ACCOUNT_ID,
     idempotencyKey: "privy-idem-1",
     conditionId: "0xcondition",
     tokenId: "123456",
@@ -833,59 +942,60 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
     orderType: "GTC",
   };
 
-  const provisionedWallets: PrivyWalletStore = {
-    ...mockPrivyWallets,
-    find: async () => makePrivyWalletRow(),
+  const internalPendingAccounts: TradingAccountStore = {
+    ...mockTradingAccounts,
+    getPrimary: async () =>
+      makeTradingAccountRow({
+        kind: "internal_privy",
+        signerAddress: EMBEDDED,
+        funderAddress: null,
+        signatureType: 3,
+        signingMode: "unavailable",
+        status: "needs_deposit_wallet",
+        privyWalletId: "pw-test",
+      }),
+    findByOwner: async () =>
+      makeTradingAccountRow({
+        kind: "internal_privy",
+        signerAddress: EMBEDDED,
+        funderAddress: null,
+        signatureType: 3,
+        signingMode: "unavailable",
+        status: "needs_deposit_wallet",
+        privyWalletId: "pw-test",
+      }),
   };
-  const activeDelegations: DelegationStore = {
-    ...mockDelegations,
-    findActive: async () => makeActiveDelegationRow(),
+  const internalReadyAccounts: TradingAccountStore = {
+    ...mockTradingAccounts,
+    getPrimary: async () =>
+      makeTradingAccountRow({
+        kind: "internal_privy",
+        signerAddress: EMBEDDED,
+        funderAddress: FUNDER,
+        signatureType: 3,
+        signingMode: "server",
+        status: "ready",
+        privyWalletId: "pw-test",
+        depositWalletAddress: FUNDER,
+      }),
+    findByOwner: async () =>
+      makeTradingAccountRow({
+        kind: "internal_privy",
+        signerAddress: EMBEDDED,
+        funderAddress: FUNDER,
+        signatureType: 3,
+        signingMode: "server",
+        status: "ready",
+        privyWalletId: "pw-test",
+        depositWalletAddress: FUNDER,
+      }),
   };
-  const credsStore: ClobCredentialStore = {
-    ...mockClobCredentials,
-    find: async () => makeFakeCredsRow(),
-  };
-  const createdIntent = (): OrderIntentRow => ({
-    id: "intent-privy-1",
-    walletAddress: WALLET,
-    idempotencyKey: "privy-idem-1",
-    conditionId: "0xcondition",
-    tokenId: "123456",
-    side: "BUY",
-    price: "0.45",
-    size: "100",
-    orderType: "GTC",
-    funder: EMBEDDED,
-    status: "pending",
-    clobOrderId: null,
-    errorMessage: null,
-    metadata: {},
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
 
-  it("server-signs (signatureType 0) and submits with no signed body (201)", async () => {
-    let forwarded: { order: Record<string, unknown> } | null = null;
-    const submittingClob: AuthenticatedClobClient = {
-      ...mockTradingClobClient,
-      submitOrder: async (order) => {
-        forwarded = { order: order as unknown as Record<string, unknown> };
-        return ok({ orderID: "clob-privy", status: "live" });
-      },
-    };
-    const intentsStore: OrderIntentStore = {
-      ...mockOrderIntents,
-      create: async () => createdIntent(),
-      updateStatus: async () => {},
-    };
+  it("returns 409 until the Privy wallet has a registered deposit wallet", async () => {
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
-      orderIntents: intentsStore,
-      tradingClobClient: submittingClob,
-      privyWallets: provisionedWallets,
-      delegations: activeDelegations,
+      tradingAccounts: internalPendingAccounts,
     });
     const res = await app.inject({
       method: "POST",
@@ -893,28 +1003,16 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify(privyOrderBody),
     });
-    expect(res.statusCode).toBe(201);
-    const body = res.json() as Record<string, unknown>;
-    expect(body.clobOrderId).toBe("clob-privy");
-    // The server built an EOA (type 0) order: maker == signer == embedded address,
-    // with a real signature produced by the (mock) signer — no client popup.
-    expect(forwarded).not.toBeNull();
-    expect(forwarded!.order).toMatchObject({
-      signatureType: 0,
-      maker: EMBEDDED,
-      signer: EMBEDDED,
-    });
-    expect(typeof forwarded!.order.signature).toBe("string");
-    expect(forwarded!.order.signature as string).toMatch(/^0x[0-9a-f]+$/);
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as Record<string, unknown>).error).toBe("TRADING_ACCOUNT_NOT_READY");
     await app.close();
   });
 
-  it("returns 400 when the trading wallet is not provisioned", async () => {
+  it("returns 409 for server-signing accounts until the relayer order path is enabled", async () => {
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
-      // default mockPrivyWallets.find → null
+      tradingAccounts: internalReadyAccounts,
     });
     const res = await app.inject({
       method: "POST",
@@ -922,50 +1020,8 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify(privyOrderBody),
     });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as Record<string, unknown>).error).toBe("TRADING_WALLET_NOT_PROVISIONED");
-    await app.close();
-  });
-
-  it("returns 401 when the trading delegation has expired", async () => {
-    const app = buildTestApp({
-      cfg: configPrivy,
-      sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
-      privyWallets: provisionedWallets,
-      // default mockDelegations.findActive → null (expired/none)
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders",
-      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
-      body: JSON.stringify(privyOrderBody),
-    });
-    expect(res.statusCode).toBe(401);
-    expect((res.json() as Record<string, unknown>).error).toBe("DELEGATION_EXPIRED");
-    await app.close();
-  });
-
-  it("returns 400 when wallet allowances are not bootstrapped (fail-closed)", async () => {
-    const unbootstrapped: PrivyWalletStore = {
-      ...mockPrivyWallets,
-      find: async () => ({ ...makePrivyWalletRow(), allowancesBootstrappedAt: null }),
-    };
-    const app = buildTestApp({
-      cfg: configPrivy,
-      sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
-      privyWallets: unbootstrapped,
-      delegations: activeDelegations,
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders",
-      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
-      body: JSON.stringify(privyOrderBody),
-    });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as Record<string, unknown>).error).toBe("ALLOWANCES_NOT_BOOTSTRAPPED");
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as Record<string, unknown>).error).toBe("RELAYER_ORDER_PATH_NOT_ENABLED");
     await app.close();
   });
 
@@ -977,9 +1033,6 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
-      clobCredentials: credsStore,
-      privyWallets: provisionedWallets,
-      delegations: activeDelegations,
       orderIntents: overLimit,
     });
     const res = await app.inject({
@@ -993,7 +1046,7 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
     await app.close();
   });
 
-  it("POST /bootstrap-allowances signs the missing approvals", async () => {
+  it("POST /bootstrap-allowances is blocked until the relayer deposit wallet exists", async () => {
     const reader: AllowanceReader = {
       erc20Allowance: async () => 0n,
       isApprovedForAll: async () => false,
@@ -1017,33 +1070,17 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
       url: "/api/trading-wallet/bootstrap-allowances",
       headers: { cookie: "mx2_session=tok" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(409);
     const body = res.json() as Record<string, unknown>;
-    expect((body.txHashes as unknown[]).length).toBeGreaterThan(0);
-    expect(marked).toBe(true);
+    expect(body.error).toBe("DEPOSIT_WALLET_REQUIRED");
+    expect(marked).toBe(false);
     await app.close();
   });
 
-  it("derives CLOB credentials server-side via the signer (no l1Signature)", async () => {
-    let stored: unknown = null;
-    const captureCreds: ClobCredentialStore = {
-      ...mockClobCredentials,
-      upsert: async (_wallet, encrypted) => {
-        stored = encrypted;
-        return makeFakeCredsRow();
-      },
-    };
-    const successClient: AuthenticatedClobClient = {
-      ...mockTradingClobClient,
-      getServerTime: async () => ok(1_782_226_240),
-      deriveApiKey: async () => ok({ apiKey: "ak-privy", secret: "c2VjcmV0", passphrase: "pass" }),
-    };
+  it("requires a manual CLOB auth signature until deposit-wallet auth is implemented", async () => {
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
-      tradingClobClient: successClient,
-      clobCredentials: captureCreds,
-      privyWallets: provisionedWallets,
     });
     const res = await app.inject({
       method: "POST",
@@ -1051,10 +1088,9 @@ describe("POST /api/trade/orders (Privy server-signing)", () => {
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify({}),
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(409);
     const body = res.json() as Record<string, unknown>;
-    expect(body.apiKey).toBe("ak-privy");
-    expect(stored).not.toBeNull();
+    expect(body.error).toBe("MANUAL_SIGNATURE_REQUIRED");
     await app.close();
   });
 });
@@ -1161,6 +1197,97 @@ describe("Trading wallet onboarding", () => {
     expect(upserted).not.toBeNull();
     expect(body.embeddedAddress).toBe(upserted!.embeddedAddress);
     expect(body.embeddedAddress as string).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    await app.close();
+  });
+
+  it("POST /activate-deposit-wallet returns 503 when the relayer is disabled", async () => {
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/activate-deposit-wallet",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as Record<string, unknown>).error).toBe("RELAYER_DISABLED");
+    await app.close();
+  });
+
+  it("POST /activate-deposit-wallet records a confirmed relayer deployment", async () => {
+    const depositWalletAddress = "0x2222222222222222222222222222222222222222";
+    let upserted: {
+      depositWalletAddress: string | null | undefined;
+      status: string;
+      signerAddress: string;
+    } | null = null;
+    const relayer: DepositWalletRelayer = {
+      enabled: true,
+      deriveDepositWalletAddress: async (owner) =>
+        ok({ ownerAddress: owner.ownerAddress, depositWalletAddress }),
+      getDeploymentStatus: async (owner) =>
+        ok({
+          ownerAddress: owner.ownerAddress,
+          depositWalletAddress,
+          deployed: false,
+          state: "STATE_NEW",
+        }),
+      deployDepositWallet: async (owner) =>
+        ok({
+          ownerAddress: owner.ownerAddress,
+          depositWalletAddress,
+          deployed: true,
+          submitted: true,
+          state: "STATE_MINED",
+          transactionId: "relayer-tx-1",
+          transactionHash: "0xabc",
+        }),
+    };
+    const tradingAccounts: TradingAccountStore = {
+      ...mockTradingAccounts,
+      upsertInternalPrivy: async (opts) => {
+        upserted = {
+          depositWalletAddress: opts.depositWalletAddress,
+          status: opts.status,
+          signerAddress: opts.signerAddress,
+        };
+        return makeTradingAccountRow({
+          kind: "internal_privy",
+          signerAddress: opts.signerAddress,
+          funderAddress: opts.depositWalletAddress ?? null,
+          signatureType: 3,
+          signingMode: opts.status === "ready" ? "server" : "unavailable",
+          status: opts.status,
+          privyWalletId: opts.privyWalletId,
+          depositWalletAddress: opts.depositWalletAddress ?? null,
+        });
+      },
+    };
+    const app = buildTestApp({
+      cfg: configRelayer,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingAccounts,
+      depositWalletRelayer: relayer,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/activate-deposit-wallet",
+      headers: { cookie: "mx2_session=tok" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.depositWalletAddress).toBe(depositWalletAddress);
+    expect(body.nextAction).toBe("top_up");
+    expect(upserted).toEqual({
+      depositWalletAddress,
+      status: "needs_funding",
+      signerAddress: makePrivyWalletRow().embeddedAddress,
+    });
     await app.close();
   });
 

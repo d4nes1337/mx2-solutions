@@ -1,6 +1,5 @@
 import type { AppConfig } from "@mx2/config";
 import type { Logger } from "@mx2/observability";
-import { decryptCredentials } from "@mx2/core";
 import type {
   AuditStore,
   RuleStore,
@@ -10,10 +9,8 @@ import type {
   PrivyWalletStore,
   DelegationStore,
   RuntimeFlagStore,
-  EncryptedCreds,
 } from "@mx2/db";
-import type { AuthenticatedClobClient, L2Credentials } from "@mx2/polymarket-client";
-import { buildAndSignEoaOrder } from "@mx2/polymarket-client";
+import type { AuthenticatedClobClient } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import type { RuleDefinition, TriggerEvidence } from "@mx2/rules";
 
@@ -85,21 +82,9 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
     );
   };
 
-  const fail = async (rule: AutoExecRule, triggerId: string, reason: string): Promise<void> => {
-    await deps.ruleStore.markExecutionFailed(rule.id, reason);
-    await deps.auditStore.emit({
-      actor: rule.walletAddress,
-      action: "rule.execution.failed",
-      subject: `rule:${rule.id}`,
-      metadata: { triggerId, reason },
-    });
-    deps.logger.warn({ ruleId: rule.id, triggerId, reason }, "Auto-execution failed");
-  };
-
   return {
     async execute({ rule, triggerId, nowMs }) {
       const wallet = rule.walletAddress;
-      const action = rule.def.action;
 
       // ── Pre-flight guards (fail-closed → degrade to manual). ──
       if (!deps.config.features.liveTrading) return skip(rule, triggerId, "live_trading_disabled");
@@ -125,120 +110,9 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
         return skip(rule, triggerId, "rate_limited");
       }
 
-      // ── Claim for execution (CAS; a concurrent confirm/cancel wins). ──
-      const claimed = await deps.ruleStore.markExecuting(rule.id);
-      if (!claimed) return skip(rule, triggerId, "cas_lost");
-
-      // Idempotency: deterministic key prevents double-submit across restarts.
-      const idempotencyKey = `auto:${rule.id}:${triggerId}`;
-      const existing = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
-      if (existing) {
-        await deps.ruleStore.markAutoExecuted(rule.id);
-        return;
-      }
-
-      const credsRow = await deps.clobCredentials.find(wallet);
-      if (!credsRow) return fail(rule, triggerId, "clob_credentials_missing");
-      let creds: L2Credentials;
-      try {
-        creds = decryptCredentials<L2Credentials>(
-          credsRow.encryptedCreds as EncryptedCreds,
-          deps.config.encryptionMasterKey,
-        );
-      } catch {
-        return fail(rule, triggerId, "creds_decrypt_failed");
-      }
-
-      // ── Build + sign (signatureType 0) via the seam. ──
-      const built = await buildAndSignEoaOrder(
-        {
-          tokenId: rule.tokenId,
-          side: action.side,
-          price: String(action.price),
-          size: String(action.size),
-          address: pw.embeddedAddress,
-          chainId: deps.config.polymarket.chainId,
-          negRisk: rule.def.negRisk ?? false,
-          ...(rule.def.tickSize !== undefined ? { tickSize: rule.def.tickSize } : {}),
-          builderCode: deps.config.polymarket.builderCode ?? null,
-        },
-        (typedData) =>
-          deps.tradingSigner.signOrder({
-            wallet: { walletId: pw.privyWalletId, address: pw.embeddedAddress },
-            typedData,
-          }),
-      );
-      if (!built.ok) return fail(rule, triggerId, `sign_failed:${built.error.code}`);
-
-      // ── Record intent (idempotent) then submit. ──
-      const intent = await deps.orderIntents.create({
-        walletAddress: wallet,
-        idempotencyKey,
-        conditionId: rule.def.conditionId,
-        tokenId: rule.tokenId,
-        side: action.side,
-        price: String(action.price),
-        size: String(action.size),
-        orderType: action.orderType,
-        funder: pw.embeddedAddress,
-        metadata: { auto: true, ruleId: rule.id, triggerId },
-      });
-      await deps.auditStore.emit({
-        actor: wallet,
-        action: "order.intent",
-        subject: `intent:${intent.id}`,
-        metadata: {
-          auto: true,
-          ruleId: rule.id,
-          tokenId: rule.tokenId,
-          side: action.side,
-          price: String(action.price),
-          size: String(action.size),
-        },
-      });
-
-      const submit = await deps.tradingClobClient.submitOrder(
-        built.value,
-        action.orderType,
-        creds,
-        // built.value.maker is the checksummed embedded address (POLY_ADDRESS).
-        built.value.maker as `0x${string}`,
-        idempotencyKey,
-      );
-      if (!submit.ok) {
-        await deps.orderIntents.updateStatus(intent.id, "failed", {
-          errorMessage: submit.error.message,
-        });
-        await deps.auditStore.emit({
-          actor: wallet,
-          action: "order.failed",
-          subject: `intent:${intent.id}`,
-          metadata: { error: submit.error.code, message: submit.error.message },
-        });
-        return fail(rule, triggerId, "submit_failed");
-      }
-
-      await deps.orderIntents.updateStatus(intent.id, "submitted", {
-        clobOrderId: submit.value.orderID,
-      });
-      await deps.triggerStore.updateStatus(triggerId, "confirmed", { orderIntentId: intent.id });
-      await deps.ruleStore.markAutoExecuted(rule.id);
-      await deps.auditStore.emit({
-        actor: wallet,
-        action: "order.submitted",
-        subject: `intent:${intent.id}`,
-        metadata: { clobOrderId: submit.value.orderID, auto: true },
-      });
-      await deps.auditStore.emit({
-        actor: wallet,
-        action: "rule.executed_auto",
-        subject: `rule:${rule.id}`,
-        metadata: { triggerId, orderIntentId: intent.id, clobOrderId: submit.value.orderID },
-      });
-      deps.logger.info(
-        { ruleId: rule.id, triggerId, clobOrderId: submit.value.orderID },
-        "Conditional rule auto-executed",
-      );
+      // Polymarket live CLOB rejects bare Privy EOA makers. Until the relayer
+      // deposit-wallet path is wired, unattended execution must degrade to manual.
+      return skip(rule, triggerId, "deposit_wallet_relayer_required");
     },
   };
 };

@@ -10,7 +10,7 @@ import type { Result } from "@mx2/core";
  * The production adapter delegates to Privy, which signs inside a secure enclave.
  */
 
-/** EIP-712 typed data in eth_signTypedData_v4 JSON shape (includes EIP712Domain). */
+/** EIP-712 typed data in eth_signTypedData_v4-compatible JSON shape. */
 export interface Eip712TypedData {
   primaryType: string;
   types: Record<string, ReadonlyArray<{ name: string; type: string }>>;
@@ -37,7 +37,7 @@ export interface SignerError {
 export interface TradingWalletRef {
   /** Privy wallet id — used for all signing/transaction calls. */
   walletId: string;
-  /** The embedded EOA address (maker == signer == funder for signatureType 0). */
+  /** The embedded EOA address that owns/signs for the Polymarket deposit wallet. */
   address: string;
 }
 

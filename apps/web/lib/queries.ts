@@ -28,9 +28,15 @@ import type {
   SetupCredentialsResponse,
   SubmitOrderRequest,
   SubmitOrderResponse,
+  TradingAccountsResponse,
+  TradingAccountResponse,
+  TradingWalletActivationResponse,
+  TradingWalletProvisionResponse,
+  TradingWalletStatusResponse,
   TradeStatus,
   TriggerDetailResponse,
   TriggersResponse,
+  UpsertExternalTradingAccountRequest,
 } from "./types";
 
 // ── Public read-only data ────────────────────────────────────────────────────
@@ -151,6 +157,79 @@ export function useTradeStatus() {
   });
 }
 
+export function useTradingAccounts(enabled = true) {
+  return useQuery({
+    queryKey: ["trading-accounts"],
+    queryFn: () => api.get<TradingAccountsResponse>("/api/trading-accounts"),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useSetPrimaryTradingAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<TradingAccountResponse>(`/api/trading-accounts/${id}/primary`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
+  });
+}
+
+export function useUpsertExternalTradingAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: UpsertExternalTradingAccountRequest) =>
+      api.post<TradingAccountResponse>("/api/trading-accounts/external", req),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
+  });
+}
+
+export function useProvisionTradingWallet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<TradingWalletProvisionResponse>("/api/trading-wallet/provision"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
+  });
+}
+
+export function useActivateDepositWallet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<TradingWalletActivationResponse>("/api/trading-wallet/activate-deposit-wallet"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
+  });
+}
+
+export function useTradingWallet(enabled = true) {
+  return useQuery({
+    queryKey: ["trading-wallet"],
+    queryFn: () => api.get<TradingWalletStatusResponse>("/api/trading-wallet"),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+  });
+}
+
+export function useBootstrapAllowances() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ ok: boolean; status: string }>("/api/trading-wallet/bootstrap-allowances"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+    },
+  });
+}
+
 // ── Authenticated portfolio ──────────────────────────────────────────────────
 // The Data API keys off the deposit/proxy wallet, so callers may pass an
 // optional proxyWallet override (see PnL limitations text).
@@ -240,9 +319,13 @@ export function useOrderPreview() {
 // ── CLOB credential setup (one-time per user; L1-signature → derived L2 key) ──
 
 export function useSetupCredentials() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (req: SetupCredentialsRequest) =>
       api.post<SetupCredentialsResponse>("/api/trade/credentials/setup", req),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
   });
 }
 

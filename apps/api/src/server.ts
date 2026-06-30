@@ -9,6 +9,8 @@ import {
   createSessionStore,
   createAllowlistStore,
   createClobCredentialStore,
+  createTradingAccountStore,
+  createTradingAccountClobCredentialStore,
   createOrderIntentStore,
   createRuntimeFlagStore,
   createRuleStore,
@@ -25,6 +27,7 @@ import {
 } from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
 import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
+import { createDepositWalletRelayerFromConfig } from "./trade/deposit-wallet-relayer-factory.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
 const main = async (): Promise<void> => {
@@ -43,6 +46,8 @@ const main = async (): Promise<void> => {
   const sessions = createSessionStore(dbHandle.db);
   const allowlist = createAllowlistStore(dbHandle.db);
   const clobCredentials = createClobCredentialStore(dbHandle.db);
+  const tradingAccounts = createTradingAccountStore(dbHandle.db);
+  const accountClobCredentials = createTradingAccountClobCredentialStore(dbHandle.db);
   const orderIntents = createOrderIntentStore(dbHandle.db);
   const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
   const ruleStore = createRuleStore(dbHandle.db);
@@ -50,6 +55,7 @@ const main = async (): Promise<void> => {
   const privyWallets = createPrivyWalletStore(dbHandle.db);
   const delegations = createDelegationStore(dbHandle.db);
   const tradingSigner = createTradingSignerFromConfig(config);
+  const depositWalletRelayer = createDepositWalletRelayerFromConfig(config, tradingSigner);
 
   const gammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
   const clobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
@@ -70,6 +76,8 @@ const main = async (): Promise<void> => {
     sessions,
     allowlist,
     clobCredentials,
+    tradingAccounts,
+    accountClobCredentials,
     orderIntents,
     runtimeFlags,
     ruleStore,
@@ -81,6 +89,7 @@ const main = async (): Promise<void> => {
     dataClient,
     tradingClobClient,
     tradingSigner,
+    depositWalletRelayer,
     geoblockClient,
   });
 
