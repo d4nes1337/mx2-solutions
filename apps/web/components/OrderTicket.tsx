@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useAccount } from "wagmi";
 import { Check, KeyRound, Plus, RefreshCcw, Wallet, Zap } from "lucide-react";
 import {
@@ -84,10 +85,18 @@ export function OrderTicket({
     activeAccount?.signingMode === "browser" &&
     activeAccount.credentialsReady &&
     connectedMatchesActive;
+  const serverWalletBlockedReason =
+    activeAccount?.signingMode !== "browser"
+      ? activeAccount?.status === "needs_deposit_wallet"
+        ? "Activate your trading account on the Profile page →"
+        : activeAccount?.status === "needs_funding"
+          ? "Fund your trading wallet on the Profile page →"
+          : "Complete wallet setup on the Profile page →"
+      : null;
   const submitBlockedReason = !activeAccount
     ? "Select a trading account first"
-    : activeAccount.signingMode !== "browser"
-      ? "Deposit-wallet no-signature trading is not active yet"
+    : serverWalletBlockedReason
+      ? serverWalletBlockedReason
       : !activeAccount.credentialsReady
         ? "Set up trading credentials first"
         : !connectedMatchesActive
@@ -102,7 +111,11 @@ export function OrderTicket({
       : !activeAccount
         ? "Select wallet"
         : activeAccount.signingMode !== "browser"
-          ? "No-signature wallet pending"
+          ? activeAccount.status === "needs_deposit_wallet"
+            ? "Wallet not activated"
+            : activeAccount.status === "needs_funding"
+              ? "Wallet not funded"
+              : "Wallet setup incomplete"
           : !activeAccount.credentialsReady
             ? "Credentials needed"
             : !connectedMatchesActive
@@ -619,6 +632,20 @@ export function OrderTicket({
           <p className="text-warn">{preview.data.warning}</p>
         </div>
       ) : null}
+
+      {/* Server wallet setup hint */}
+      {activeAccount?.signingMode !== "browser" && (
+        <div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-warn">
+          {activeAccount?.status === "needs_deposit_wallet"
+            ? "Activate your trading account first."
+            : activeAccount?.status === "needs_funding"
+              ? "Fund your trading wallet with USDC."
+              : "Complete wallet setup."}{" "}
+          <Link href="/profile" className="font-medium underline">
+            Go to Profile →
+          </Link>
+        </div>
+      )}
 
       {signError ? <ErrorNote message={signError} /> : null}
       {submitError ? (

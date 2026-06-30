@@ -25,6 +25,7 @@ import { PortfolioDisclaimer } from "@/components/portfolio/PortfolioDisclaimer"
 import { PortfolioEquityChart, useEquityWindow } from "@/components/portfolio/PortfolioEquityChart";
 import { PortfolioAllocation } from "@/components/portfolio/PortfolioAllocation";
 import { OpenOrdersTable } from "@/components/portfolio/OpenOrdersTable";
+import { WalletsSection } from "@/components/profile/WalletsSection";
 
 export default function PortfolioPage() {
   const session = useSession();
@@ -94,6 +95,8 @@ export default function PortfolioPage() {
 
   return (
     <div className="space-y-4">
+      <WalletsSection signedIn={signedIn} />
+
       <PortfolioHeader
         signerAddress={session.data!.address}
         queryAddress={overview.data?.queryAddress}

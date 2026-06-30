@@ -32,6 +32,7 @@ import type {
   TradingAccountResponse,
   TradingWalletActivationResponse,
   TradingWalletProvisionResponse,
+  TradingWalletStatusResponse,
   TradeStatus,
   TriggerDetailResponse,
   TriggersResponse,
@@ -204,6 +205,27 @@ export function useActivateDepositWallet() {
       api.post<TradingWalletActivationResponse>("/api/trading-wallet/activate-deposit-wallet"),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    },
+  });
+}
+
+export function useTradingWallet(enabled = true) {
+  return useQuery({
+    queryKey: ["trading-wallet"],
+    queryFn: () => api.get<TradingWalletStatusResponse>("/api/trading-wallet"),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+  });
+}
+
+export function useBootstrapAllowances() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ ok: boolean; status: string }>("/api/trading-wallet/bootstrap-allowances"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
     },
   });
 }

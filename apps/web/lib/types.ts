@@ -188,6 +188,19 @@ export interface TradingAccountResponse {
   account: TradingAccount;
 }
 
+export interface TradingWalletStatusResponse {
+  privySigningEnabled: boolean;
+  relayerEnabled: boolean;
+  provisioned: boolean;
+  embeddedAddress: string | null;
+  tradingAccountId: string | null;
+  tradingAccountStatus: string | null;
+  depositWalletAddress: string | null;
+  allowancesBootstrapped: boolean;
+  delegationActive: boolean;
+  delegationExpiresAt: string | null;
+}
+
 export interface TradingWalletProvisionResponse {
   ok: boolean;
   tradingAccountId: string;
