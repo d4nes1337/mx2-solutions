@@ -142,6 +142,7 @@ export interface FeatureFlags {
   conditionalRules: boolean;
   conditionalLiveExecution: boolean;
   relayer: boolean;
+  privySigning: boolean;
 }
 
 export interface TradeStatus {
@@ -149,6 +150,68 @@ export interface TradeStatus {
   featureFlag: boolean;
   runtimePaused: boolean;
   geoblock: { status: string; country?: string; error?: string };
+}
+
+export type TradingAccountKind = "external_wallet" | "internal_privy";
+export type TradingSigningMode = "browser" | "server" | "unavailable";
+
+export interface TradingAccount {
+  id: string;
+  kind: TradingAccountKind;
+  label: string;
+  signerAddress: string;
+  funderAddress: string | null;
+  signatureType: number;
+  signingMode: TradingSigningMode;
+  status: string;
+  credentialsReady: boolean;
+  isPrimary: boolean;
+  depositWalletAddress: string | null;
+  nextAction: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TradingAccountsResponse {
+  accounts: TradingAccount[];
+  primaryAccount: TradingAccount | null;
+}
+
+export interface UpsertExternalTradingAccountRequest {
+  address: string;
+  funderAddress?: string;
+  label?: string;
+  makePrimary?: boolean;
+}
+
+export interface TradingAccountResponse {
+  account: TradingAccount;
+}
+
+export interface TradingWalletProvisionResponse {
+  ok: boolean;
+  tradingAccountId: string;
+  embeddedAddress: string;
+  depositWalletAddress: string | null;
+  allowancesBootstrapped?: boolean;
+  alreadyProvisioned: boolean;
+  fundingInstructions?: string;
+}
+
+export interface TradingWalletActivationResponse {
+  ok: boolean;
+  tradingAccountId: string;
+  embeddedAddress: string;
+  depositWalletAddress: string;
+  status: string;
+  relayer: {
+    submitted: boolean;
+    deployed: boolean;
+    state?: string;
+    transactionId?: string;
+    transactionHash?: string;
+  };
+  nextAction: string;
 }
 
 export interface Me {
@@ -302,6 +365,7 @@ export type OrderSide = "BUY" | "SELL";
 export type OrderType = "GTC" | "GTD" | "FOK";
 
 export interface OrderPreviewRequest {
+  tradingAccountId?: string;
   conditionId: string;
   tokenId: string;
   side: OrderSide;
@@ -312,6 +376,10 @@ export interface OrderPreviewRequest {
 }
 
 export interface OrderPreviewResponse {
+  tradingAccountId: string;
+  tradingAccountLabel: string;
+  signingMode: TradingSigningMode;
+  requiresSignature: boolean;
   conditionId: string;
   tokenId: string;
   side: OrderSide;
@@ -345,6 +413,7 @@ export interface SignedClobOrder {
 }
 
 export interface SetupCredentialsRequest {
+  tradingAccountId?: string;
   l1Signature: string;
   timestamp: string;
   nonce: string;
@@ -353,21 +422,24 @@ export interface SetupCredentialsRequest {
 export interface SetupCredentialsResponse {
   ok: boolean;
   apiKey: string;
+  tradingAccountId: string;
 }
 
 export interface SubmitOrderRequest {
+  tradingAccountId?: string;
   idempotencyKey: string;
   conditionId: string;
   price: string;
   size: string;
   orderType: OrderType;
-  order: SignedClobOrder;
+  order?: SignedClobOrder;
 }
 
 export interface SubmitOrderResponse {
   intentId: string;
   clobOrderId: string | null;
   status: string;
+  tradingAccountId?: string;
   idempotent?: boolean;
 }
 

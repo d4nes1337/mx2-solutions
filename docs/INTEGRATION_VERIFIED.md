@@ -120,7 +120,12 @@ Relayer operations (wallet deploy, approvals) are only available in TS/Python SD
 - Source: `@polymarket/builder-relayer-client` `src/builder/derive.ts#deriveSafe`,
   `src/config/index.ts`, `src/constants/index.ts`.
 
-## 10. CLOB order signing (verified 2026-06-23, Slice 5/A-021)
+## 10. CLOB order signing (verified 2026-06-23, Slice 5/A-021; superseded 2026-06-30)
+
+> 2026-06-30 update: this Slice 5 section documents the legacy browser-signed Gnosis Safe path.
+> Current Polymarket docs and `@polymarket/clob-client-v2` support the newer deposit-wallet
+> `POLY_1271` flow. New internal no-popup accounts must use `signatureType = 3`, maker/signer/funder
+> as the registered deposit wallet, and the SDK's ERC-7739-wrapped signature. See §12.
 
 Source: `@polymarket/clob-client` (`src/order-utils/*`, `src/order-builder/helpers.ts`,
 `src/config.ts`, `src/utilities.ts`).
@@ -133,11 +138,9 @@ verifyingContract: <exchange> }`.
 - **Order struct (primaryType "Order"):** `salt uint256, maker address, signer address,
 taker address, tokenId uint256, makerAmount uint256, takerAmount uint256, expiration uint256,
 nonce uint256, feeRateBps uint256, side uint8, signatureType uint8`.
-- **signatureType — CORRECTION:** canonical enum is `EOA=0, POLY_PROXY=1, POLY_GNOSIS_SAFE=2`.
-  There is **no type 3**. Since our users' deposit wallets are Gnosis Safes (§9), orders MUST use
-  **signatureType = 2 (POLY_GNOSIS_SAFE)**. (ADR-0002 / Slice-3 backend said "POLY_1271 / type 3";
-  that was wrong and is corrected here. The EOA signs the Order EIP-712 directly via
-  `eth_signTypedData_v4`; no ERC-7739 nesting is required for type 2.)
+- **signatureType — historical Slice 5 assumption:** this path used
+  `signatureType = 2 (POLY_GNOSIS_SAFE)`. It is not the current target for new internal no-popup
+  accounts.
 - **maker / signer:** `maker` = deposit (Safe) wallet = `funder`; `signer` = EOA. `taker` =
   zero address (public order). `feeRateBps`/`nonce` default "0".
 - **Amounts (6-decimal USDC/CTF):** `side BUY → takerAmt = roundDown(size, sizeDp),
@@ -174,3 +177,30 @@ Verified against official Polymarket + Privy docs:
 - **To verify on staging** (see A-044–A-048): exact `@privy-io/node` method shapes + policy JSON,
   CLOB `signatureType 0` funder semantics, the allowance spender set, gas funding, and server-side
   ClobAuth acceptance.
+
+## 12. Current deposit-wallet / relayer target (verified 2026-06-30; ADR-0008)
+
+Sources checked: official Polymarket authentication, deposit-wallet, builder-relayer, and geographic
+restriction docs; `@polymarket/clob-client-v2@1.0.6`;
+`@polymarket/builder-relayer-client@0.0.10`; `@polymarket/builder-signing-sdk@1.0.0`.
+Implementation note: `builder-relayer-client@0.0.10` itself depends on
+`@polymarket/builder-signing-sdk@^0.0.8` and its `RelayClient` constructor is typed against that
+class, so `apps/api` pins `@polymarket/builder-signing-sdk@0.0.8` until the relayer package updates.
+
+- **Existing account / external wallet mode:** user signs in browser. L2 credentials authenticate
+  CLOB requests but do not remove per-order signatures. This mode remains manual-signature.
+- **No-popup internal mode:** must use a Polymarket-registered deposit wallet, not a bare Privy EOA.
+  The owner/session signer signs through the official relayer/deposit-wallet flow.
+- **Signature type:** new deposit-wallet API users should use `POLY_1271` / `signatureType = 3`.
+- **Order identity:** for deposit-wallet orders, maker, signer, and funder are the deposit wallet.
+  The SDK wraps the owner/session signature for ERC-1271 / ERC-7739 validation.
+- **Funding/approvals:** pUSD/funds and approvals belong to the deposit wallet. Embedded EOA
+  allowance bootstrap is not valid for live CLOB orders and is disabled in the app.
+- **Relayer:** use `builder-relayer-client` to derive/deploy/register deposit wallets and execute
+  deposit-wallet batches. The old pure Safe derivation is historical only for legacy browser wallets.
+- **SDK signer bridge:** the current TS relayer client accepts Ethers `Wallet`/`JsonRpcSigner` or a
+  viem `WalletClient`. Our production signer is Privy typed-data signing, so the API wraps it as a
+  minimal viem wallet client that exposes address + `signTypedData` only; raw messages and direct
+  transactions intentionally throw.
+- **Compliance:** trading preview/submit/account/cancel routes must enforce Polymarket geoblock
+  fail-closed. Read-only routes remain globally accessible per D-004.

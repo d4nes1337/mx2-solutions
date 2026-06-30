@@ -13,3 +13,4 @@ export * from "./data/client.js";
 export * from "./geoblock/schema.js";
 export * from "./geoblock/client.js";
 export * from "./wallet/derive.js";
+export * from "./relayer/deposit-wallet.js";

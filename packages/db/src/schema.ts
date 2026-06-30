@@ -155,6 +155,65 @@ export const userClobCredentials = pgTable("user_clob_credentials", {
 export type UserClobCredentialRow = typeof userClobCredentials.$inferSelect;
 
 /**
+ * User-selectable trading accounts. A login wallet can own many trading accounts:
+ * external Polymarket wallets that require browser signatures, and internal
+ * Privy/deposit-wallet accounts that become no-popup once the relayer flow is
+ * complete. The selected/primary row is the default funding + signing context
+ * for order preview, submit, cancel, and CLOB credentials.
+ */
+export const tradingAccounts = pgTable(
+  "trading_accounts",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    ownerWalletAddress: text("owner_wallet_address").notNull(),
+    kind: text("kind").notNull(),
+    label: text("label").notNull(),
+    signerAddress: text("signer_address").notNull(),
+    funderAddress: text("funder_address"),
+    signatureType: integer("signature_type").notNull(),
+    signingMode: text("signing_mode").notNull(),
+    status: text("status").notNull().default("needs_credentials"),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    privyWalletId: text("privy_wallet_id"),
+    depositWalletAddress: text("deposit_wallet_address"),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("trading_accounts_owner_idx").on(t.ownerWalletAddress),
+    index("trading_accounts_owner_primary_idx").on(t.ownerWalletAddress, t.isPrimary),
+    index("trading_accounts_signer_idx").on(t.signerAddress),
+  ],
+);
+
+export type TradingAccountRow = typeof tradingAccounts.$inferSelect;
+export type NewTradingAccountRow = typeof tradingAccounts.$inferInsert;
+
+/**
+ * Per-trading-account encrypted L2 CLOB API credentials. New multi-wallet flows
+ * use this table. user_clob_credentials remains for legacy single-wallet rows
+ * and compatibility while the migration rolls forward.
+ */
+export const tradingAccountClobCredentials = pgTable(
+  "trading_account_clob_credentials",
+  {
+    tradingAccountId: uuid("trading_account_id").primaryKey(),
+    ownerWalletAddress: text("owner_wallet_address").notNull(),
+    encryptedCreds: jsonb("encrypted_creds").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("trading_account_clob_credentials_owner_idx").on(t.ownerWalletAddress)],
+);
+
+export type TradingAccountClobCredentialRow = typeof tradingAccountClobCredentials.$inferSelect;
+
+/**
  * Idempotent order intents — one row per user intent to place an order.
  * idempotency_key is client-supplied and prevents double-submit.
  * status machine: pending → submitted → acknowledged → filled | cancelled | failed | unknown
@@ -166,6 +225,7 @@ export const orderIntents = pgTable(
       .primaryKey()
       .default(sql`gen_random_uuid()`),
     walletAddress: text("wallet_address").notNull(),
+    tradingAccountId: uuid("trading_account_id"),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     conditionId: text("condition_id").notNull(),
     tokenId: text("token_id").notNull(),
@@ -174,6 +234,9 @@ export const orderIntents = pgTable(
     size: text("size").notNull(),
     orderType: text("order_type").notNull(),
     funder: text("funder"),
+    signer: text("signer"),
+    signatureType: integer("signature_type"),
+    signingMode: text("signing_mode"),
     status: text("status").notNull().default("pending"),
     clobOrderId: text("clob_order_id"),
     errorMessage: text("error_message"),
@@ -185,6 +248,7 @@ export const orderIntents = pgTable(
   },
   (t) => [
     index("order_intents_wallet_idx").on(t.walletAddress),
+    index("order_intents_trading_account_idx").on(t.tradingAccountId),
     index("order_intents_idempotency_key_idx").on(t.idempotencyKey),
     index("order_intents_status_idx").on(t.status),
   ],

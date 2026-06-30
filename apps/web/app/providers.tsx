@@ -1,11 +1,13 @@
 "use client";
 
 import "@rainbow-me/rainbowkit/styles.css";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { WagmiProvider } from "wagmi";
 import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { wagmiConfig } from "@/lib/wagmi";
+import { useSession } from "@/lib/auth";
+import { useFeatureFlags, useProvisionTradingWallet } from "@/lib/queries";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -26,9 +28,25 @@ export function Providers({ children }: { children: ReactNode }) {
             fontStack: "system",
           })}
         >
+          <AutoProvisionTradingWallet />
           {children}
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );
+}
+
+function AutoProvisionTradingWallet() {
+  const session = useSession();
+  const flags = useFeatureFlags();
+  const provision = useProvisionTradingWallet();
+  const { mutate, isError, isPending, isSuccess } = provision;
+
+  useEffect(() => {
+    if (!session.data?.address || !flags.data?.privySigning || isPending) return;
+    if (isSuccess || isError) return;
+    mutate();
+  }, [flags.data?.privySigning, isError, isPending, isSuccess, mutate, session.data?.address]);
+
+  return null;
 }

@@ -117,28 +117,27 @@ the Gate 6 sequence end-to-end against the **real** Privy API + Polygon mainnet 
 - A separate **`eth_signTypedData_v4`** rule (scoped to chainId 137) is required for order/auth
   signing. (`personal_sign`/`secp256k1_sign` are intentionally NOT allowed.)
 
-**🔴 BLOCKER — Polymarket deposit-wallet requirement (RISK R-001 materialized):**
+**🔴 BLOCKER — Polymarket deposit-wallet requirement (RISK R-017/R-001 materialized):**
 
 The CLOB rejects orders from our wallet with `"maker address not allowed, please use the deposit
-wallet flow"` — for **both** the bare EOA (`signatureType 0`) **and** its counterfactual derived
-proxy (`signatureType 2`). Polymarket only accepts orders from a proxy that was created + registered
-through **Polymarket's own deposit onboarding** (their relayer deploys/registers it; funds live in
-the proxy). Our Privy embedded wallet signs correctly but is not a registered Polymarket trader. The
-signing path is correct — this is a Polymarket platform constraint that only surfaces against the
-live CLOB.
+wallet flow"` — for **both** the bare EOA (`signatureType 0`) **and** the historical derived proxy.
+Polymarket only accepts orders from a deposit wallet that was created + registered through
+**Polymarket's own deposit onboarding** (their relayer deploys/registers it; funds live in the
+deposit wallet). Our Privy embedded wallet signs correctly but is not itself a registered CLOB maker.
+The original type-0 path is now disabled fail-closed.
 
 **TODO to finish live trading (the remaining integration):**
 
-1. **Deposit-wallet / relayer onboarding** for the Privy EOA: deploy + register the Polymarket proxy
-   (the deferred `FEATURE_RELAYER` path — see `builder-relayer-client` in
-   `docs/INTEGRATION_VERIFIED.md`), move funds into the proxy, and set the proxy's allowances.
-2. **Re-key the order path to `signatureType 2`**: maker/funder = the registered proxy, signer = the
-   Privy EOA. Today `buildAndSignEoaOrder` uses `signatureType 0` / the bare EOA.
+1. **Deposit-wallet / relayer onboarding** for the Privy EOA: activation is now wired behind
+   `FEATURE_RELAYER` (`POST /api/trading-wallet/activate-deposit-wallet`, ADR-0009). Remaining:
+   move funds into the deposit wallet and set deposit-wallet allowances through the relayer.
+2. **Re-key the order path to `signatureType 3 / POLY_1271`**: maker/funder/signer = the registered
+   deposit wallet; the Privy owner/session signer produces the wrapped signature via the official SDK.
 3. **Withdrawal path**: the policy denies all transfers, so funds are locked to Polymarket. Add a
    per-user rule allowing `USDC.transfer` to the user's own registered address (or operator-assisted
    withdrawal) before onboarding real users.
-4. **Re-run the Gate 6 order + auto-rule** once the deposit-wallet flow is in place; restore route
-   geoblock (R-005) before opening to beta users.
+4. **Re-run the Gate 6 order + auto-rule** once the deposit-wallet flow is in place; trading-layer
+   geoblock (R-005) must remain fail-closed before opening to beta users.
 
 **Current live state on the box:** `FEATURE_PRIVY_SIGNING=true`, `FEATURE_LIVE_TRADING=false`,
 `FEATURE_CONDITIONAL_LIVE_EXECUTION=false`. Working policy id `ka7qnt4o4otovh5y91n1quua`. Test wallet

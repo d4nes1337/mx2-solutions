@@ -11,6 +11,8 @@ import type {
   SessionStore,
   AllowlistStore,
   ClobCredentialStore,
+  TradingAccountStore,
+  TradingAccountClobCredentialStore,
   OrderIntentStore,
   RuntimeFlagStore,
   RuleStore,
@@ -24,7 +26,9 @@ import type {
   DataClient,
   AuthenticatedClobClient,
   GeoblockClient,
+  DepositWalletRelayer,
 } from "@mx2/polymarket-client";
+import { createDisabledDepositWalletRelayer } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
 import { registerEventsRoutes } from "./routes/events.js";
@@ -34,6 +38,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerTradeRoutes } from "./routes/trade.js";
 import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
+import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import type {} from "./auth/types.js";
@@ -54,6 +59,8 @@ export interface AppDeps {
   sessions: SessionStore;
   allowlist: AllowlistStore;
   clobCredentials: ClobCredentialStore;
+  tradingAccounts?: TradingAccountStore;
+  accountClobCredentials?: TradingAccountClobCredentialStore;
   orderIntents: OrderIntentStore;
   runtimeFlags: RuntimeFlagStore;
   ruleStore: RuleStore;
@@ -65,6 +72,7 @@ export interface AppDeps {
   dataClient: DataClient;
   tradingClobClient: AuthenticatedClobClient;
   tradingSigner: TradingSigner;
+  depositWalletRelayer?: DepositWalletRelayer;
   geoblockClient: GeoblockClient;
   /** Optional: injected in tests; otherwise built from POLYGON_RPC_URL. */
   allowanceReader?: AllowanceReader | null;
@@ -76,6 +84,32 @@ export interface AppDeps {
  */
 export const buildApp = (deps: AppDeps) => {
   const app = Fastify({ loggerInstance: deps.logger, disableRequestLogging: false });
+  const tradingAccounts =
+    deps.tradingAccounts ??
+    ({
+      listByOwner: async () => [],
+      findByOwner: async () => null,
+      getPrimary: async () => null,
+      setPrimary: async () => null,
+      upsertExternal: async () => {
+        throw new Error("trading account store not configured");
+      },
+      upsertInternalPrivy: async () => {
+        throw new Error("trading account store not configured");
+      },
+      markReady: async () => {},
+      updateStatus: async () => {},
+    } satisfies TradingAccountStore);
+  const accountClobCredentials =
+    deps.accountClobCredentials ??
+    ({
+      upsert: async () => {
+        throw new Error("account CLOB credential store not configured");
+      },
+      find: async () => null,
+      delete: async () => {},
+    } satisfies TradingAccountClobCredentialStore);
+  const depositWalletRelayer = deps.depositWalletRelayer ?? createDisabledDepositWalletRelayer();
 
   // Expose req.user on every request (null until auth middleware sets it).
   app.decorateRequest("user", null);
@@ -147,14 +181,12 @@ export const buildApp = (deps: AppDeps) => {
     config: deps.config,
     sessions: deps.sessions,
     auditStore: deps.auditStore,
-    clobCredentials: deps.clobCredentials,
+    tradingAccounts,
+    accountClobCredentials,
     orderIntents: deps.orderIntents,
     runtimeFlags: deps.runtimeFlags,
     tradingClobClient: deps.tradingClobClient,
     geoblockClient: deps.geoblockClient,
-    tradingSigner: deps.tradingSigner,
-    privyWallets: deps.privyWallets,
-    delegations: deps.delegations,
   });
   const allowanceReader =
     deps.allowanceReader ??
@@ -165,8 +197,16 @@ export const buildApp = (deps: AppDeps) => {
     auditStore: deps.auditStore,
     tradingSigner: deps.tradingSigner,
     privyWallets: deps.privyWallets,
+    tradingAccounts,
     delegations: deps.delegations,
     allowanceReader,
+    depositWalletRelayer,
+  });
+  registerTradingAccountsRoutes(fastifyApp, {
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    tradingAccounts,
+    accountClobCredentials,
   });
   registerAdminRoutes(fastifyApp, {
     config: deps.config,

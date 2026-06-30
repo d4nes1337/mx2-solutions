@@ -43,6 +43,33 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, FEATURE_PRIVY_SIGNING: "true" })).toThrow(ConfigError);
   });
 
+  it("fails closed if relayer is enabled without builder config", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        FEATURE_RELAYER: "true",
+        FEATURE_PRIVY_SIGNING: "true",
+        MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it("accepts relayer config only when the signer and builder credentials are present", () => {
+    const cfg = loadConfig({
+      ...base,
+      FEATURE_RELAYER: "true",
+      FEATURE_PRIVY_SIGNING: "true",
+      MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+      POLYGON_RPC_URL: "https://polygon.example.test",
+      POLYMARKET_RELAYER_URL: "https://relayer.example.test",
+      POLYMARKET_BUILDER_API_KEY: "builder-key",
+      POLYMARKET_BUILDER_SECRET: "builder-secret",
+      POLYMARKET_BUILDER_PASSPHRASE: "builder-passphrase",
+    });
+    expect(cfg.features.relayer).toBe(true);
+    expect(cfg.polymarket.relayer.url).toBe("https://relayer.example.test");
+  });
+
   it("rejects an invalid log level", () => {
     expect(() => loadConfig({ ...base, APP_LOG_LEVEL: "loud" })).toThrow(ConfigError);
   });

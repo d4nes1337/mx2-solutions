@@ -5,11 +5,12 @@ import { useAccount } from "wagmi";
 import {
   useConfirmTrigger,
   useDismissTrigger,
+  useSetPrimaryTradingAccount,
   useSubmitOrder,
   useTradeStatus,
+  useTradingAccounts,
   useTriggerDetail,
 } from "@/lib/queries";
-import { useSession } from "@/lib/auth";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
 import { Badge, Button, ErrorNote, Spinner, cn } from "./ui";
 
@@ -22,21 +23,55 @@ import { Badge, Button, ErrorNote, Spinner, cn } from "./ui";
 export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onClose: () => void }) {
   const detail = useTriggerDetail(triggerId);
   const { address, connector } = useAccount();
-  const session = useSession();
+  const tradingAccounts = useTradingAccounts();
   const tradeStatus = useTradeStatus();
+  const setPrimaryAccount = useSetPrimaryTradingAccount();
   const submit = useSubmitOrder();
   const confirm = useConfirmTrigger();
   const dismiss = useDismissTrigger();
   const [signError, setSignError] = useState<string | null>(null);
 
-  const funder = session.data?.depositWallet ?? "";
+  const activeAccount = tradingAccounts.data?.primaryAccount ?? null;
+  const accounts = tradingAccounts.data?.accounts ?? [];
+  const funder = activeAccount?.funderAddress ?? "";
   const tradingEnabled = tradeStatus.data?.tradingEnabled === true;
+  const connectedMatchesActive =
+    Boolean(address && activeAccount) &&
+    address!.toLowerCase() === activeAccount!.signerAddress.toLowerCase();
+  const selectedBrowserAccountReady =
+    activeAccount?.signingMode === "browser" &&
+    activeAccount.credentialsReady &&
+    connectedMatchesActive;
+  const submitButtonLabel =
+    submit.isPending || confirm.isPending
+      ? "Signing…"
+      : !activeAccount
+        ? "Select wallet"
+        : activeAccount.signingMode !== "browser"
+          ? "Wallet pending"
+          : !activeAccount.credentialsReady
+            ? "Credentials needed"
+            : !connectedMatchesActive
+              ? "Connect selected wallet"
+              : tradingEnabled
+                ? "Sign & submit"
+                : "Submit (trading disabled)";
   const d = detail.data;
 
   const signAndSubmit = async () => {
     setSignError(null);
+    if (!activeAccount) return setSignError("Select a trading account first.");
+    if (activeAccount.signingMode !== "browser") {
+      return setSignError("This trading account is not ready for triggered live orders yet.");
+    }
+    if (!activeAccount.credentialsReady) {
+      return setSignError("Set up trading credentials for this wallet in the order ticket first.");
+    }
     if (!address || !connector) return setSignError("Connect a wallet first.");
-    if (!funder) return setSignError("No deposit wallet derived for this session.");
+    if (address.toLowerCase() !== activeAccount.signerAddress.toLowerCase()) {
+      return setSignError("Switch your connected wallet to the selected trading account first.");
+    }
+    if (!funder) return setSignError("No funder configured for the selected trading account.");
     if (!d) return;
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
@@ -46,13 +81,14 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
         price: d.preview.price,
         size: d.preview.size,
         funder,
-        signer: address,
+        signer: activeAccount.signerAddress,
         builderCode: d.preview.builderCode,
         chainId: 137,
         // MVP: neg-risk markets for triggered orders are a follow-up (see RFC-0001).
         negRisk: false,
       });
       const res = await submit.mutateAsync({
+        tradingAccountId: activeAccount.id,
         idempotencyKey: `trigger:${triggerId}`,
         conditionId: d.preview.conditionId,
         price: d.preview.price,
@@ -117,14 +153,46 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
             <div className="space-y-1 rounded-md border border-border bg-surface-2 p-3">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-semibold text-fg">Prepared order (fresh)</span>
-                <Badge tone="warn">awaiting your signature</Badge>
+                <Badge tone="warn">
+                  {activeAccount?.signingMode === "browser"
+                    ? "awaiting signature"
+                    : "wallet pending"}
+                </Badge>
               </div>
+              <select
+                value={activeAccount?.id ?? ""}
+                onChange={(e) => {
+                  if (e.target.value) setPrimaryAccount.mutate(e.target.value);
+                }}
+                disabled={tradingAccounts.isLoading || setPrimaryAccount.isPending}
+                className="mb-2 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
+              >
+                {accounts.length ? null : <option value="">No trading accounts</option>}
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.label} · {shortAddress(account.signerAddress)}
+                  </option>
+                ))}
+              </select>
               <Row k="Side" v={d.preview.side} />
               <Row k="Price" v={d.preview.price} />
               <Row k="Size" v={d.preview.size} />
               <Row k="Max spend" v={`$${d.preview.maxSpend}`} />
               <Row k="Order type" v={d.preview.orderType} />
-              <Row k="Funder (deposit)" v={funder || "—"} mono />
+              <Row k="Trading account" v={activeAccount?.label ?? "—"} />
+              <Row k="Funder" v={funder || "—"} mono />
+              {activeAccount?.signingMode === "browser" ? (
+                <Row
+                  k="Connected"
+                  v={
+                    connectedMatchesActive
+                      ? "selected signer"
+                      : address
+                        ? shortAddress(address)
+                        : "not connected"
+                  }
+                />
+              ) : null}
               <Row k="Builder code" v={d.preview.builderCode ?? "—"} mono />
               <p className="mt-1 text-warn">{d.warning}</p>
             </div>
@@ -172,16 +240,27 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
               <Button
                 className="flex-1"
                 onClick={() => void signAndSubmit()}
-                disabled={!tradingEnabled || submit.isPending || confirm.isPending}
+                disabled={
+                  !tradingEnabled ||
+                  submit.isPending ||
+                  confirm.isPending ||
+                  !selectedBrowserAccountReady
+                }
                 title={
-                  tradingEnabled ? "Sign and submit" : "Live trading is disabled on the server"
+                  !activeAccount
+                    ? "Select a trading account first"
+                    : activeAccount.signingMode !== "browser"
+                      ? "Deposit-wallet no-signature trading is not active yet"
+                      : !activeAccount.credentialsReady
+                        ? "Set up trading credentials first"
+                        : !connectedMatchesActive
+                          ? "Connect the selected signer wallet"
+                          : tradingEnabled
+                            ? "Sign and submit"
+                            : "Live trading is disabled on the server"
                 }
               >
-                {submit.isPending || confirm.isPending
-                  ? "Signing…"
-                  : tradingEnabled
-                    ? "Sign & submit"
-                    : "Submit (trading disabled)"}
+                {submitButtonLabel}
               </Button>
             </div>
             {!tradingEnabled ? (
@@ -197,6 +276,10 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
 }
 
 const fmtMs = (ms: number) => new Date(ms).toLocaleTimeString();
+
+function shortAddress(address: string) {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
 
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (

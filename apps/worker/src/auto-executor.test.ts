@@ -67,6 +67,7 @@ const walletRow: PrivyWalletRow = {
 const intentRow: OrderIntentRow = {
   id: "intent-1",
   walletAddress: WALLET,
+  tradingAccountId: null,
   idempotencyKey: "auto:rule-1:trig-1",
   conditionId: "cond-1",
   tokenId: "123456789",
@@ -75,6 +76,9 @@ const intentRow: OrderIntentRow = {
   size: "10",
   orderType: "GTC",
   funder: EMBEDDED,
+  signer: EMBEDDED,
+  signatureType: 0,
+  signingMode: "server",
   status: "pending",
   clobOrderId: null,
   errorMessage: null,
@@ -212,13 +216,12 @@ const run = async (h: Harness) => {
 };
 
 describe("auto-executor", () => {
-  it("builds, signs, and submits on the happy path → EXECUTED_AUTO", async () => {
+  it("degrades to manual until the deposit-wallet relayer path is enabled", async () => {
     const h = makeHarness();
     await run(h);
-    expect(h.submitted()).toBe(true);
-    expect(h.ruleStatus()).toBe("EXECUTED_AUTO");
-    expect(h.audits).toContain("order.submitted");
-    expect(h.audits).toContain("rule.executed_auto");
+    expect(h.submitted()).toBe(false);
+    expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
+    expect(h.audits).toContain("rule.execution.skipped");
   });
 
   it("skips (no submit) when the kill switch is active", async () => {
@@ -261,15 +264,15 @@ describe("auto-executor", () => {
     const h = makeHarness({ existingIntent: true });
     await run(h);
     expect(h.submitted()).toBe(false);
-    expect(h.ruleStatus()).toBe("EXECUTED_AUTO");
+    expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
+    expect(h.audits).toContain("rule.execution.skipped");
   });
 
-  it("marks EXECUTION_FAILED when submission fails", async () => {
+  it("does not reach CLOB submission while the relayer path is missing", async () => {
     const h = makeHarness({ submitOk: false });
     await run(h);
-    expect(h.submitted()).toBe(true);
-    expect(h.ruleStatus()).toContain("EXECUTION_FAILED");
-    expect(h.audits).toContain("order.failed");
-    expect(h.audits).toContain("rule.execution.failed");
+    expect(h.submitted()).toBe(false);
+    expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
+    expect(h.audits).toContain("rule.execution.skipped");
   });
 });

@@ -18,6 +18,8 @@
     "@mx2/polymarket-client": "workspace:*",
     "@mx2/rules": "workspace:*",
     "@mx2/trading-signer": "workspace:*",
+    "@polymarket/builder-relayer-client": "0.0.10",
+    "@polymarket/builder-signing-sdk": "0.0.8",
     "fastify": "^5.2.1",
     "viem": "^2.21.0",
     "zod": "^3.24.1"
