@@ -11,6 +11,7 @@ import { isDepositWalletConfirmed, type DepositWalletRelayer } from "@mx2/polyma
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
 
 export interface TradingWalletRoutesDeps {
   config: AppConfig;
@@ -70,67 +71,34 @@ export const registerTradingWalletRoutes = (
     if (!ensureEnabled(reply)) return;
     const user = req.user!;
 
-    const existing = await deps.privyWallets.find(user.walletAddress);
-    if (existing) {
-      const account = await deps.tradingAccounts.upsertInternalPrivy({
-        ownerWalletAddress: user.walletAddress,
-        signerAddress: existing.embeddedAddress,
-        privyWalletId: existing.privyWalletId,
-        status: "needs_deposit_wallet",
-        makePrimary: false,
-        metadata: { source: "privy_existing", relayerRequired: true },
-      });
-      return {
-        ok: true,
-        tradingAccountId: account.id,
-        embeddedAddress: existing.embeddedAddress,
-        depositWalletAddress: account.depositWalletAddress,
-        allowancesBootstrapped: existing.allowancesBootstrappedAt !== null,
-        alreadyProvisioned: true,
-      };
-    }
-
-    const provisioned = await deps.tradingSigner.provisionWallet(user.walletAddress);
-    if (!provisioned.ok) {
-      reply.code(502);
-      return { error: "PROVISION_FAILED", message: provisioned.error.message };
-    }
-
-    const row = await deps.privyWallets.upsert({
-      walletAddress: user.walletAddress,
-      privyUserId: user.walletAddress,
-      privyWalletId: provisioned.value.walletId,
-      embeddedAddress: provisioned.value.address,
-      policyId: deps.config.privy.tradingPolicyId ?? null,
-    });
-    const account = await deps.tradingAccounts.upsertInternalPrivy({
-      ownerWalletAddress: user.walletAddress,
-      signerAddress: row.embeddedAddress,
-      privyWalletId: row.privyWalletId,
-      status: "needs_deposit_wallet",
-      makePrimary: false,
-      metadata: { source: "privy_provision", relayerRequired: true },
-    });
-
-    await deps.auditStore.emit({
-      actor: user.walletAddress,
-      action: "trading_wallet.provisioned",
-      subject: `wallet:${user.walletAddress}`,
-      metadata: {
-        embeddedAddress: row.embeddedAddress,
-        policyId: row.policyId,
-        tradingAccountId: account.id,
+    const result = await ensureTradingWalletProvisioned(
+      {
+        config: deps.config,
+        auditStore: deps.auditStore,
+        tradingSigner: deps.tradingSigner,
+        privyWallets: deps.privyWallets,
+        tradingAccounts: deps.tradingAccounts,
       },
-    });
+      user.walletAddress,
+    );
+    if (!result.ok) {
+      reply.code(502);
+      return { error: result.code, message: result.message };
+    }
 
     return {
       ok: true,
-      tradingAccountId: account.id,
-      embeddedAddress: row.embeddedAddress,
-      depositWalletAddress: account.depositWalletAddress,
-      alreadyProvisioned: false,
-      fundingInstructions:
-        "Deposit-wallet activation is required before funding. Once active, fund the Polymarket deposit wallet, not the embedded signer EOA.",
+      tradingAccountId: result.tradingAccountId,
+      embeddedAddress: result.embeddedAddress,
+      depositWalletAddress: result.depositWalletAddress,
+      allowancesBootstrapped: result.allowancesBootstrapped,
+      alreadyProvisioned: result.alreadyProvisioned,
+      ...(result.alreadyProvisioned
+        ? {}
+        : {
+            fundingInstructions:
+              "Deposit-wallet activation is required before funding. Once active, fund the Polymarket deposit wallet, not the embedded signer EOA.",
+          }),
     };
   });
 

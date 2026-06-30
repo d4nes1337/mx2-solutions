@@ -1,6 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import type { ChallengeStore, UserStore, SessionStore, AllowlistStore, AuditStore } from "@mx2/db";
+import type {
+  ChallengeStore,
+  UserStore,
+  SessionStore,
+  AllowlistStore,
+  AuditStore,
+  PrivyWalletStore,
+  TradingAccountStore,
+} from "@mx2/db";
 import type { AppConfig } from "@mx2/config";
+import type { TradingSigner } from "@mx2/trading-signer";
+import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
 import {
   createLoginChallenge,
   verifyLoginSignature,
@@ -20,6 +30,9 @@ export interface AuthRoutesDeps {
   sessions: SessionStore;
   allowlist: AllowlistStore;
   auditStore: AuditStore;
+  tradingSigner: TradingSigner;
+  privyWallets: PrivyWalletStore;
+  tradingAccounts: TradingAccountStore;
 }
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -188,6 +201,32 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       subject: `wallet:${address}`,
       metadata: { method: "eip712" },
     });
+
+    // Auto-provision a Privy trading wallet so every user is trade-ready straight
+    // after login. Idempotent and fail-soft: a Privy hiccup must never block login —
+    // the user can still retry via POST /api/trading-wallet/provision.
+    if (deps.config.features.privySigning) {
+      try {
+        const result = await ensureTradingWalletProvisioned(
+          {
+            config: deps.config,
+            auditStore: deps.auditStore,
+            tradingSigner: deps.tradingSigner,
+            privyWallets: deps.privyWallets,
+            tradingAccounts: deps.tradingAccounts,
+          },
+          address,
+        );
+        if (!result.ok) {
+          req.log.warn(
+            { walletAddress: address, code: result.code, message: result.message },
+            "auto-provision of trading wallet failed on login",
+          );
+        }
+      } catch (err) {
+        req.log.error({ err, walletAddress: address }, "auto-provision of trading wallet threw on login");
+      }
+    }
 
     // Set httpOnly session cookie.
     void reply.setCookie(SESSION_COOKIE_NAME, token, {

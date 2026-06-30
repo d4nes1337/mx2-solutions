@@ -57,8 +57,11 @@ export const api = {
   post: <T>(path: string, body?: unknown): Promise<T> =>
     request<T>(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // Only advertise a JSON body when we actually send one — Fastify rejects an
+      // empty body when Content-Type is application/json ("Body cannot be empty…").
+      ...(body === undefined
+        ? {}
+        : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     }),
   del: <T>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
 };

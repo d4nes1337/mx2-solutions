@@ -168,6 +168,9 @@ export const buildApp = (deps: AppDeps) => {
     sessions: deps.sessions,
     allowlist: deps.allowlist,
     auditStore: deps.auditStore,
+    tradingSigner: deps.tradingSigner,
+    privyWallets: deps.privyWallets,
+    tradingAccounts,
   });
   registerProfileRoutes(fastifyApp, {
     dataClient: deps.dataClient,
