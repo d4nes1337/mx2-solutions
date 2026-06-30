@@ -91,3 +91,56 @@ Unknown CLOB submit result → no blind retry (reconcile).
 
 Operating automated order placement on behalf of users needs the same legal sign-off flagged in
 RFC-0001 §5 and D-004 (geoblock) before any production enablement.
+
+## 9. Staging validation (2026-06-30) — arima.finance
+
+Deployed the full all-in-one stack to the production box (arima.finance, Docker + Caddy) and ran
+the Gate 6 sequence end-to-end against the **real** Privy API + Polygon mainnet + Polymarket CLOB.
+
+**✅ Validated and working in production:**
+
+- Privy wallet provisioning (an app-managed server wallet owned by the configured key quorum).
+- **"Sign once, no popup"** order + ClobAuth signing inside the Privy enclave.
+- On-chain allowance approvals (`USDC.approve` + `CTF.setApprovalForAll`) signed by Privy, under
+  the policy, confirmed on-chain.
+- The contract-allowlist **policy as the destination backstop** — the **negative test PASSED**: a
+  `USDC.transfer` to a non-exchange address was **DENIED** by the policy.
+- L2 CLOB credential derivation (server-side ClobAuth signing).
+
+**Policy fixes folded into `createPolymarketTradingPolicy` (`packages/trading-signer/src/privy-client.ts`):**
+
+- Transaction rules must target **`eth_signTransaction`** (viem signs via Privy then broadcasts the
+  raw tx itself, so Privy's policy sees the SIGN method) — the original `eth_sendTransaction` denied
+  everything. Both methods are now allowed.
+- `ethereum_calldata` `field` is `functionName.argumentName` (e.g. `approve.spender`) and its
+  address `value` must be **lowercase**; the `to` value is the checksummed contract address.
+- A separate **`eth_signTypedData_v4`** rule (scoped to chainId 137) is required for order/auth
+  signing. (`personal_sign`/`secp256k1_sign` are intentionally NOT allowed.)
+
+**🔴 BLOCKER — Polymarket deposit-wallet requirement (RISK R-001 materialized):**
+
+The CLOB rejects orders from our wallet with `"maker address not allowed, please use the deposit
+wallet flow"` — for **both** the bare EOA (`signatureType 0`) **and** its counterfactual derived
+proxy (`signatureType 2`). Polymarket only accepts orders from a proxy that was created + registered
+through **Polymarket's own deposit onboarding** (their relayer deploys/registers it; funds live in
+the proxy). Our Privy embedded wallet signs correctly but is not a registered Polymarket trader. The
+signing path is correct — this is a Polymarket platform constraint that only surfaces against the
+live CLOB.
+
+**TODO to finish live trading (the remaining integration):**
+
+1. **Deposit-wallet / relayer onboarding** for the Privy EOA: deploy + register the Polymarket proxy
+   (the deferred `FEATURE_RELAYER` path — see `builder-relayer-client` in
+   `docs/INTEGRATION_VERIFIED.md`), move funds into the proxy, and set the proxy's allowances.
+2. **Re-key the order path to `signatureType 2`**: maker/funder = the registered proxy, signer = the
+   Privy EOA. Today `buildAndSignEoaOrder` uses `signatureType 0` / the bare EOA.
+3. **Withdrawal path**: the policy denies all transfers, so funds are locked to Polymarket. Add a
+   per-user rule allowing `USDC.transfer` to the user's own registered address (or operator-assisted
+   withdrawal) before onboarding real users.
+4. **Re-run the Gate 6 order + auto-rule** once the deposit-wallet flow is in place; restore route
+   geoblock (R-005) before opening to beta users.
+
+**Current live state on the box:** `FEATURE_PRIVY_SIGNING=true`, `FEATURE_LIVE_TRADING=false`,
+`FEATURE_CONDITIONAL_LIVE_EXECUTION=false`. Working policy id `ka7qnt4o4otovh5y91n1quua`. Test wallet
+`0xB282e01348E7AaCde4DCB384302c8EFB34593296` holds ~2.38 USDC.e + 10 POL (policy-locked; return via
+a withdrawal rule when convenient).

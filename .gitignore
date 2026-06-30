@@ -38,3 +38,6 @@ exports/
 # Claude local-only preferences
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Codex agent local tooling/session data
+.codex/

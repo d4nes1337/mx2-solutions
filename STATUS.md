@@ -55,14 +55,20 @@ _Last updated: 2026-06-30_
 
 ## Current gate
 
-Gate 6 — server-side signing + unattended execution (Privy): **built behind flags** (quality
-gates green; default OFF). Delivers the owner's "sign once, no per-order popup" request for both
-manual and conditional orders, with the raw key held only in Privy's enclave. **Next: Gate 6 owner
-review + the security review (RFC-0002 threat model) + a low-value staging test** (real Privy test
-app, a Privy wallet funded with $5–20, bootstrap allowances, one tiny manual order + one tiny auto
-rule, and the policy negative test) before flipping `FEATURE_PRIVY_SIGNING` /
-`FEATURE_CONDITIONAL_LIVE_EXECUTION`. The `@privy-io/node` client + policy schema is the remaining
-staging integration step (the signer seam + all guard logic are done and tested via the mock).
+Gate 6 — server-side signing + unattended execution (Privy): **deployed to production
+(arima.finance) and staging-validated end-to-end on 2026-06-30** — except the final CLOB order,
+which is blocked by Polymarket's deposit-wallet requirement (see RFC-0002 §9). **Validated live:**
+Privy wallet provisioning, "sign once / no popup" order + ClobAuth signing, on-chain allowance
+approvals signed by Privy under the policy, and the **policy negative test (a transfer to a
+non-exchange address is DENIED)**. `FEATURE_PRIVY_SIGNING=true`, `FEATURE_LIVE_TRADING=false`,
+`FEATURE_CONDITIONAL_LIVE_EXECUTION=false` on the box. Policy-method/case/typed-data fixes are folded
+into `createPolymarketTradingPolicy`. **🔴 BLOCKER (R-001):** Polymarket's CLOB rejects orders from
+our wallet (`"maker address not allowed, please use the deposit wallet flow"`) for both
+`signatureType 0` (bare EOA) and the derived proxy — it requires a proxy registered through
+Polymarket's deposit onboarding. **Next (RFC-0002 §9 TODO):** integrate the Polymarket
+deposit-wallet/relayer flow (deferred `FEATURE_RELAYER`), re-key the order path to `signatureType 2`
+with the registered proxy as maker, add a withdrawal rule, then re-run the order + auto-rule. The
+deployed app's read-only product (feed, cockpit, portfolio, shadow rules) is **live and usable now**.
 
 Gate 5 — conditional rules (shadow / alert / manual-confirm): **built** (quality gates green).
 The pure `@mx2/rules` engine + worker evaluator + rules API + web rule-builder/alert/confirm are

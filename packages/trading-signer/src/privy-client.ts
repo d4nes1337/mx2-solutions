@@ -105,51 +105,82 @@ export interface CreatePolicyInput {
   usdc: string;
   ctf: string;
   exchanges: string[];
+  /** EIP-712 domain chainId allowed for order/auth signing. Defaults to 137 (Polygon). */
+  chainId?: number;
 }
 
 /**
- * Create the Polymarket-only wallet policy (the destination backstop). It ALLOWs
- * only: USDC `approve(spender ∈ exchanges)` and CTF `setApprovalForAll(operator ∈
- * exchanges)`. Everything else — crucially `USDC.transfer` to any address — is
- * denied by default, so funds can only ever be committed to Polymarket. Verify on
- * staging that an out-of-allowlist transfer is rejected (the policy negative test).
+ * Create the Polymarket-only wallet policy (the destination backstop). It ALLOWs only:
+ *  - USDC `approve(spender ∈ exchanges)` and CTF `setApprovalForAll(operator ∈ exchanges)`,
+ *  - typed-data signing on the Polygon chainId (orders + ClobAuth) — which cannot move funds.
+ * Everything else — crucially `USDC.transfer` to any address — is denied by default, so funds
+ * can only ever be committed to Polymarket. Validated on staging (2026-06-30): an out-of-allowlist
+ * transfer is DENIED (the policy negative test passes).
+ *
+ * Staging-validated details — do NOT "simplify" these or the policy silently denies everything:
+ *  - Transaction rules MUST target `eth_signTransaction` (viem signs via Privy and broadcasts the
+ *    raw tx itself, so Privy's policy sees the SIGN method, not `eth_sendTransaction`). Both are
+ *    allowed for safety across viem versions.
+ *  - `ethereum_calldata` condition `field` is `functionName.argumentName` (e.g. `approve.spender`),
+ *    and its address `value` must be LOWERCASE (the decoded calldata address is lowercase); the
+ *    `to` (ethereum_transaction) value is the checksummed contract address.
+ *  - Order/ClobAuth signing is `eth_signTypedData_v4`, scoped here to the Polygon chainId.
  */
 export const createPolymarketTradingPolicy = async (
   input: CreatePolicyInput,
 ): Promise<{ policyId: string }> => {
   const privy = new PrivyClient({ appId: input.appId, appSecret: input.appSecret });
-  const rules = input.exchanges.flatMap((exchange) => [
-    {
-      name: `usdc-approve-${exchange.slice(0, 8)}`,
-      method: "eth_sendTransaction",
-      action: "ALLOW",
-      conditions: [
-        { field: "to", field_source: "ethereum_transaction", operator: "eq", value: input.usdc },
-        {
-          field: "spender",
-          field_source: "ethereum_calldata",
-          operator: "eq",
-          value: exchange,
-          abi: APPROVE_ABI,
-        },
-      ],
-    },
-    {
-      name: `ctf-approve-${exchange.slice(0, 8)}`,
-      method: "eth_sendTransaction",
-      action: "ALLOW",
-      conditions: [
-        { field: "to", field_source: "ethereum_transaction", operator: "eq", value: input.ctf },
-        {
-          field: "operator",
-          field_source: "ethereum_calldata",
-          operator: "eq",
-          value: exchange,
-          abi: SET_APPROVAL_ABI,
-        },
-      ],
-    },
-  ]);
+  const chainId = String(input.chainId ?? 137);
+  const lc = (a: string): string => a.toLowerCase();
+  const rules: unknown[] = [];
+  for (const method of ["eth_signTransaction", "eth_sendTransaction"]) {
+    for (const exchange of input.exchanges) {
+      rules.push({
+        name: `usdc-${method.slice(4, 8)}-${exchange.slice(2, 8)}`,
+        method,
+        action: "ALLOW",
+        conditions: [
+          { field: "to", field_source: "ethereum_transaction", operator: "eq", value: input.usdc },
+          {
+            field: "approve.spender",
+            field_source: "ethereum_calldata",
+            operator: "eq",
+            value: lc(exchange),
+            abi: APPROVE_ABI,
+          },
+        ],
+      });
+      rules.push({
+        name: `ctf-${method.slice(4, 8)}-${exchange.slice(2, 8)}`,
+        method,
+        action: "ALLOW",
+        conditions: [
+          { field: "to", field_source: "ethereum_transaction", operator: "eq", value: input.ctf },
+          {
+            field: "setApprovalForAll.operator",
+            field_source: "ethereum_calldata",
+            operator: "eq",
+            value: lc(exchange),
+            abi: SET_APPROVAL_ABI,
+          },
+        ],
+      });
+    }
+  }
+  // Order + ClobAuth signing (typed data on Polygon). Cannot move funds (transfers stay denied).
+  rules.push({
+    name: "sign-typeddata",
+    method: "eth_signTypedData_v4",
+    action: "ALLOW",
+    conditions: [
+      {
+        field: "chainId",
+        field_source: "ethereum_typed_data_domain",
+        operator: "eq",
+        value: chainId,
+      },
+    ],
+  });
   const policy = await privy.policies().create({
     name: "polymarket-trading-only",
     chain_type: "ethereum",
