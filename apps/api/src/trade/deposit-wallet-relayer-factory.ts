@@ -1,5 +1,5 @@
 import { BuilderConfig } from "@polymarket/builder-signing-sdk";
-import { RelayClient, RelayerTxType } from "@polymarket/builder-relayer-client";
+import { RelayClient, RelayerTxType, TransactionType } from "@polymarket/builder-relayer-client";
 import type { AppConfig } from "@mx2/config";
 import {
   createDepositWalletRelayer,
@@ -88,7 +88,12 @@ export const createDepositWalletRelayerFromConfig = (
 
   return createDepositWalletRelayer({
     waitForConfirmation: false,
-    transactionType: RelayerTxType.PROXY,
+    // Deposit wallets are queried under the SDK's "WALLET" transaction-type
+    // bucket (see executeDepositWalletBatch's getNonce call), not "PROXY"
+    // (the relay-transport mode used by RelayClient's constructor below).
+    // Passing PROXY here makes getDeployed() look up the wrong bucket and
+    // return a false negative for an already-deployed wallet.
+    transactionType: TransactionType.WALLET,
     clientForOwner: (owner) =>
       new RelayClient(
         relayerUrl,

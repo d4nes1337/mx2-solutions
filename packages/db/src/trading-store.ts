@@ -284,9 +284,14 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
   },
 
   async markReady(id) {
+    // Only flips `status`; signing mode is decided at account-creation time
+    // (browser for external_wallet, server for internal_privy once
+    // provisioned) and must not be overwritten here. The only caller today
+    // is the external-wallet credential-setup flow, where stamping
+    // signingMode "server" wrongly disabled manual browser-signed orders.
     await db
       .update(tradingAccounts)
-      .set({ status: "ready", signingMode: "server", updatedAt: sql`now()` })
+      .set({ status: "ready", updatedAt: sql`now()` })
       .where(eq(tradingAccounts.id, id));
   },
 

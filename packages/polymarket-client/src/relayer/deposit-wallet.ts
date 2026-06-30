@@ -90,6 +90,18 @@ const toError = (message: string, cause: unknown): DepositWalletRelayerError => 
   cause,
 });
 
+/**
+ * The relayer rejects a redundant deploy with a 4xx body like
+ * `{ "error": "wallet already deployed" }`. Our own deployment-status check
+ * should already filter this out, but treat it as success defensively in
+ * case of upstream indexing lag rather than surfacing a hard failure.
+ */
+const isAlreadyDeployedError = (cause: unknown): boolean => {
+  const data = (cause as { data?: { error?: unknown } } | undefined)?.data;
+  const message = typeof data?.error === "string" ? data.error : undefined;
+  return typeof message === "string" && message.toLowerCase().includes("already deployed");
+};
+
 const confirmedStates = new Set<RelayerTransactionState>(["STATE_MINED", "STATE_CONFIRMED"]);
 
 export const isDepositWalletConfirmed = (state: RelayerTransactionState | undefined): boolean =>
@@ -172,6 +184,9 @@ export const createDepositWalletRelayer = (
         if (transactionHash) value.transactionHash = transactionHash;
         return ok(value);
       } catch (cause) {
+        if (isAlreadyDeployedError(cause)) {
+          return ok({ ...address.value, deployed: true, submitted: false, state: "STATE_CONFIRMED" });
+        }
         return err(toError("Could not submit Polymarket deposit-wallet deployment.", cause));
       }
     },
