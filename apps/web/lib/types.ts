@@ -60,6 +60,51 @@ export interface EventsResponse {
   count: number;
 }
 
+export type FeedKind = "now" | "top" | "suggestedFavorites";
+
+export interface FeedMeta {
+  kind: FeedKind;
+  score: number;
+  selectedMarketId: string;
+  reasons: string[];
+  metrics: {
+    mid: number;
+    spread: number;
+    liquidity: number;
+    volume24h: number;
+    volume1wk: number;
+    ageHours: number;
+    resolveHours: number;
+    competitive: number;
+    featured: boolean;
+    primaryTag: string | null;
+    endDate: string | null;
+  };
+}
+
+export type RankedGammaEvent = GammaEvent & { _feed: FeedMeta };
+
+export interface FeedColumnResponse {
+  kind: FeedKind;
+  events: RankedGammaEvent[];
+  count: number;
+  candidateCount: number;
+  rejectedCount: number;
+}
+
+export interface HomeFeedResponse {
+  generatedAt: string;
+  degraded: boolean;
+  sourceCount: number;
+  candidateCount: number;
+  tuning: Record<string, number>;
+  feeds: {
+    now: FeedColumnResponse;
+    top: FeedColumnResponse;
+    suggestedFavorites: FeedColumnResponse;
+  };
+}
+
 export interface OrderLevel {
   price: string;
   size: string;

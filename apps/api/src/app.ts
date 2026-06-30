@@ -28,6 +28,7 @@ import type {
 import type { TradingSigner } from "@mx2/trading-signer";
 import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
 import { registerEventsRoutes } from "./routes/events.js";
+import { registerFeedRoutes } from "./routes/feed.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
@@ -120,6 +121,7 @@ export const buildApp = (deps: AppDeps) => {
   const fastifyApp = app as unknown as FastifyInstance;
 
   registerEventsRoutes(fastifyApp, { gammaClient: deps.gammaClient });
+  registerFeedRoutes(fastifyApp, { gammaClient: deps.gammaClient });
   registerMarketsRoutes(fastifyApp, {
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,

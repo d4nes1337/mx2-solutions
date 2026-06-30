@@ -59,6 +59,24 @@ describe("primaryMarket", () => {
     });
     expect(primaryMarket(e)?.id).toBe("b");
   });
+
+  it("prefers the backend-selected feed market when present", () => {
+    const e = event({
+      _feed: {
+        selectedMarketId: "a",
+        kind: "top",
+        score: 0.9,
+        reasons: ["balanced"],
+        metrics: {},
+      },
+      markets: [
+        market({ id: "a", liquidity: "100", closed: false }),
+        market({ id: "b", liquidity: "900", closed: false }),
+      ],
+    } as Partial<GammaEvent>);
+
+    expect(primaryMarket(e)?.id).toBe("a");
+  });
 });
 
 describe("yesTopOfBook / noTopOfBook", () => {

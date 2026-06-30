@@ -1,8 +1,21 @@
 # Project Status
 
-_Last updated: 2026-06-29_
+_Last updated: 2026-06-30_
 
 ## Recent
+
+- **Home feed methodology + UI refresh (built).** Replaced the four-column raw-sort dashboard with
+  three backend-ranked columns: **Now** (new + moving + resolving soon), **Top Markets** (deep,
+  active, non-extreme overall markets), and **Favorites** suggestions with a stronger sign-in/watchlist
+  prompt. New API routes: `GET /api/feed/home` and `GET /api/feed?kind=...`; ranking lives in
+  `apps/api/src/feed/ranking.ts` with hard gates for 99/1 odds, nearly-ended markets, newborn
+  no-liquidity markets, wide spreads, long horizons, duplicate event clusters, and tag over-concentration.
+  The candidate pool uses Polymarket-like public signals (`competitive`, `volume_24hr`, `liquidity`,
+  `start_date`, `end_date`) before applying stricter terminal quality filters. Tuning guide:
+  `docs/FEED_TUNING.md`; ADR-0007; decision D-015. Quality gates: `format:check` ✓, `lint` ✓,
+  root `typecheck` ✓, web `typecheck` ✓, root `test` **177 pass / 3 skipped**, web `test`
+  **37 pass**. Live Gamma sample returned full 20-row `Now`, `Top Markets`, and Favorites-suggestion
+  columns after applying the read-only `restricted` policy from D-004.
 
 - **Server-side "sign once" trading + unattended conditional execution (built, behind flags).**
   Adopted **Privy embedded wallets + server session signers + in-enclave policy engine**
@@ -198,11 +211,9 @@ available.
 
 ## In progress
 
-- **Home feed UI refresh (2026-06-24):** four-column utility dashboard (Latest / Volume 7d /
-  Hottest / Favorites placeholder) with top-of-book bid·ask·liquidity per outcome on the home page.
-  **Favorites persistence — planned, not built:** needs `user_favorites` table (wallet + market/event id),
-  `GET/POST/DELETE /api/favorites`, authenticated CRUD, and the fourth column switching from the
-  default new×volume picks to the user's saved list after sign-in.
+- **Favorites persistence — planned, not built:** needs `user_favorites` table (wallet + market/event id),
+  `GET/POST/DELETE /api/favorites`, authenticated CRUD, and the Favorites column switching from
+  ranked suggestions to the user's saved list after sign-in.
 - **Gate 5 review:** owner acceptance of the conditional-rules slice (live demo path below).
 - **Gate 4 review:** owner acceptance of Slice 3 deliverables below.
 

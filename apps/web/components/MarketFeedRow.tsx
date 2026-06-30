@@ -50,6 +50,7 @@ export function MarketFeedRow({ event, compact }: { event: GammaEvent; compact?:
   const liq = toNum(market.liquidity);
   const resolveIn = formatResolveIn(marketEndMs(market, event));
   const spread = yes.bid > 0 && yes.ask > 0 ? yes.ask - yes.bid : 0;
+  const reasons = feedReasons(event);
 
   return (
     <MarketHoverCard
@@ -103,6 +104,19 @@ export function MarketFeedRow({ event, compact }: { event: GammaEvent; compact?:
               <span className="tabular">Vol {usdCompact(eventVolume(event))}</span>
               <span className="tabular">Resolves {resolveIn}</span>
             </div>
+
+            {reasons.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {reasons.slice(0, 3).map((reason) => (
+                  <span
+                    key={reason}
+                    className="rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted"
+                  >
+                    {reasonLabel(reason)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       </Link>
@@ -192,4 +206,26 @@ function PreviewStat({ label, value }: { label: string; value: string }) {
 
 function eventVolume(event: GammaEvent): number {
   return toNum(event.volume1wk ?? event.volume);
+}
+
+function feedReasons(event: GammaEvent): string[] {
+  const meta = event["_feed"] as { reasons?: unknown } | undefined;
+  return Array.isArray(meta?.reasons)
+    ? meta.reasons.filter((r): r is string => typeof r === "string")
+    : [];
+}
+
+function reasonLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    active: "Active",
+    balanced: "Live odds",
+    competitive: "Competitive",
+    featured: "Featured",
+    fresh: "Fresh",
+    liquid: "Liquid",
+    soon: "Soon",
+    tight: "Tight",
+    volume: "Volume",
+  };
+  return labels[reason] ?? reason;
 }

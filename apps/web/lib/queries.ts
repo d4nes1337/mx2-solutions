@@ -10,6 +10,7 @@ import type {
   EvaluateNowResponse,
   EventsResponse,
   FeatureFlags,
+  HomeFeedResponse,
   HistoryResponse,
   HistoryTypeFilter,
   MarketDetail,
@@ -35,6 +36,15 @@ import type {
 // ── Public read-only data ────────────────────────────────────────────────────
 
 const FEED_BASE = `/api/events?limit=${FEED_LIMIT}&active=true&closed=false`;
+
+export function useHomeFeed() {
+  return useQuery({
+    queryKey: ["feed", "home"],
+    queryFn: () => api.get<HomeFeedResponse>("/api/feed/home"),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
 
 export function useLatestFeed() {
   return useQuery({

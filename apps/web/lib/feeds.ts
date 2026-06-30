@@ -7,9 +7,19 @@ export type FeedKind = "latest" | "volumeWeek" | "hottest" | "favoritesDefault";
 
 /** Pick the most liquid open market in an event for feed display. */
 export function primaryMarket(event: GammaEvent): GammaMarket | undefined {
+  const selectedId = selectedFeedMarketId(event);
+  if (selectedId) {
+    const selected = event.markets.find((m) => m.id === selectedId && !m.closed);
+    if (selected) return selected;
+  }
   return [...event.markets]
     .filter((m) => !m.closed)
     .sort((a, b) => toNum(b.liquidity) - toNum(a.liquidity))[0];
+}
+
+function selectedFeedMarketId(event: GammaEvent): string | null {
+  const meta = event["_feed"] as { selectedMarketId?: unknown } | undefined;
+  return typeof meta?.selectedMarketId === "string" ? meta.selectedMarketId : null;
 }
 
 export function eventVolume1wk(event: GammaEvent): number {

@@ -4,12 +4,11 @@ import { TradingStatusBanner } from "@/components/Banners";
 import { FavoritesFeedColumn } from "@/components/FavoritesFeedColumn";
 import { MarketFeedColumn } from "@/components/MarketFeedColumn";
 import { LiveDot } from "@/components/ui";
-import { useHottestFeed, useLatestFeed, useVolumeWeekFeed } from "@/lib/queries";
+import { useHomeFeed } from "@/lib/queries";
 
 export default function MarketsFeedPage() {
-  const latest = useLatestFeed();
-  const volumeWeek = useVolumeWeekFeed();
-  const hottest = useHottestFeed();
+  const home = useHomeFeed();
+  const err = home.error as Error | null;
 
   return (
     <div className="space-y-4">
@@ -28,29 +27,26 @@ export default function MarketsFeedPage() {
 
       <TradingStatusBanner />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         <MarketFeedColumn
-          title="Hottest"
-          subtitle="Near resolve × weekly volume"
-          events={hottest.data?.events}
-          isLoading={hottest.isLoading}
-          error={hottest.error as Error | null}
+          title="Now"
+          subtitle="New + moving + resolving soon"
+          events={home.data?.feeds.now.events}
+          isLoading={home.isLoading}
+          error={err}
         />
         <MarketFeedColumn
-          title="Volume · 7d"
-          subtitle="Most traded this week"
-          events={volumeWeek.data?.events}
-          isLoading={volumeWeek.isLoading}
-          error={volumeWeek.error as Error | null}
+          title="Top Markets"
+          subtitle="Deep, active, non-extreme odds"
+          events={home.data?.feeds.top.events}
+          isLoading={home.isLoading}
+          error={err}
         />
-        <MarketFeedColumn
-          title="Latest"
-          subtitle="Newest listings"
-          events={latest.data?.events}
-          isLoading={latest.isLoading}
-          error={latest.error as Error | null}
+        <FavoritesFeedColumn
+          events={home.data?.feeds.suggestedFavorites.events}
+          isLoading={home.isLoading}
+          error={err}
         />
-        <FavoritesFeedColumn />
       </div>
     </div>
   );
