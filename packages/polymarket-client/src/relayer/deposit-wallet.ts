@@ -185,7 +185,12 @@ export const createDepositWalletRelayer = (
         return ok(value);
       } catch (cause) {
         if (isAlreadyDeployedError(cause)) {
-          return ok({ ...address.value, deployed: true, submitted: false, state: "STATE_CONFIRMED" });
+          return ok({
+            ...address.value,
+            deployed: true,
+            submitted: false,
+            state: "STATE_CONFIRMED",
+          });
         }
         return err(toError("Could not submit Polymarket deposit-wallet deployment.", cause));
       }

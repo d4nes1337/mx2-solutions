@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronRight, Copy, ExternalLink, Loader2, Trash2, Wallet, Zap } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  Loader2,
+  Trash2,
+  Wallet,
+  Zap,
+} from "lucide-react";
 import {
   useActivateDepositWallet,
   useArchiveTradingAccount,
@@ -39,22 +48,49 @@ function CopyButton({ text }: { text: string }) {
 function StatusBadge({ account }: { account: TradingAccount }) {
   if (account.signingMode === "browser") {
     if (account.credentialsReady) {
-      return <Badge tone="pos" dot>Ready</Badge>;
+      return (
+        <Badge tone="pos" dot>
+          Ready
+        </Badge>
+      );
     }
-    return <Badge tone="warn" dot>Needs credentials</Badge>;
+    return (
+      <Badge tone="warn" dot>
+        Needs credentials
+      </Badge>
+    );
   }
   // server-side (Privy) wallet
   const s = account.status;
-  if (s === "needs_deposit_wallet") return <Badge tone="warn" dot>Needs activation</Badge>;
-  if (s === "needs_funding") return <Badge tone="warn" dot>Needs funding</Badge>;
-  if (s === "needs_delegation") return <Badge tone="warn" dot>Needs delegation</Badge>;
-  if (s === "ready") return <Badge tone="pos" dot>Ready</Badge>;
+  if (s === "needs_deposit_wallet")
+    return (
+      <Badge tone="warn" dot>
+        Needs activation
+      </Badge>
+    );
+  if (s === "needs_funding")
+    return (
+      <Badge tone="warn" dot>
+        Needs funding
+      </Badge>
+    );
+  if (s === "needs_delegation")
+    return (
+      <Badge tone="warn" dot>
+        Needs delegation
+      </Badge>
+    );
+  if (s === "ready")
+    return (
+      <Badge tone="pos" dot>
+        Ready
+      </Badge>
+    );
   return <Badge tone="neutral">{s}</Badge>;
 }
 
 function ModeChip({ account }: { account: TradingAccount }) {
-  if (account.signingMode === "browser")
-    return <Badge tone="neutral">Browser signing</Badge>;
+  if (account.signingMode === "browser") return <Badge tone="neutral">Browser signing</Badge>;
   return <Badge tone="accent">Server signing</Badge>;
 }
 
@@ -76,9 +112,7 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const depositWalletAddress =
-    account.depositWalletAddress ??
-    walletStatus.data?.depositWalletAddress ??
-    null;
+    account.depositWalletAddress ?? walletStatus.data?.depositWalletAddress ?? null;
 
   const isPrivy = account.kind === "internal_privy";
   const isLoginWallet = account.signerAddress.toLowerCase() === loginAddress.toLowerCase();
@@ -101,14 +135,12 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
     });
   };
 
-  const activateError =
-    activateDeposit.isError
-      ? (activateDeposit.error as Error)?.message ?? "Activation failed"
-      : null;
-  const bootstrapError =
-    bootstrap.isError
-      ? (bootstrap.error as Error)?.message ?? "Bootstrap failed"
-      : null;
+  const activateError = activateDeposit.isError
+    ? ((activateDeposit.error as Error)?.message ?? "Activation failed")
+    : null;
+  const bootstrapError = bootstrap.isError
+    ? ((bootstrap.error as Error)?.message ?? "Bootstrap failed")
+    : null;
 
   return (
     <>
@@ -157,9 +189,13 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
         {/* Deposit wallet address (Privy) */}
         {isPrivy && depositWalletAddress && (
           <div className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2">
-            <div className="text-[10px] uppercase tracking-wide text-muted">Deposit wallet (Polygon)</div>
+            <div className="text-[10px] uppercase tracking-wide text-muted">
+              Deposit wallet (Polygon)
+            </div>
             <div className="mt-0.5 flex items-center gap-1.5">
-              <span className="font-mono text-[12px] text-fg">{shortAddress(depositWalletAddress)}</span>
+              <span className="font-mono text-[12px] text-fg">
+                {shortAddress(depositWalletAddress)}
+              </span>
               <CopyButton text={depositWalletAddress} />
               <a
                 href={`https://polygonscan.com/address/${depositWalletAddress}`}
@@ -191,11 +227,7 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
 
           {/* Browser wallet: setup credentials */}
           {account.signingMode === "browser" && !account.credentialsReady && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onSetupCredentials(account)}
-            >
+            <Button size="sm" variant="outline" onClick={() => onSetupCredentials(account)}>
               <ChevronRight size={13} />
               Setup credentials
             </Button>
@@ -203,12 +235,7 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
 
           {/* Privy: activate deposit wallet */}
           {isPrivy && account.nextAction === "activate_deposit_wallet" && (
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={isBusy}
-              onClick={handleActivate}
-            >
+            <Button size="sm" variant="primary" disabled={isBusy} onClick={handleActivate}>
               {activateDeposit.isPending ? (
                 <Loader2 size={12} className="animate-spin" />
               ) : (
@@ -220,23 +247,14 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
 
           {/* Privy: top up */}
           {isPrivy && account.nextAction === "top_up" && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setTopUpOpen(true)}
-            >
+            <Button size="sm" variant="primary" onClick={() => setTopUpOpen(true)}>
               Top up USDC
             </Button>
           )}
 
           {/* Privy: bootstrap (after funding, if status still needs_funding) */}
           {isPrivy && account.status === "needs_funding" && depositWalletAddress && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isBusy}
-              onClick={handleBootstrap}
-            >
+            <Button size="sm" variant="outline" disabled={isBusy} onClick={handleBootstrap}>
               {bootstrap.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
               Check & activate trading
             </Button>
@@ -285,12 +303,8 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
         </div>
 
         {/* Errors */}
-        {activateError && (
-          <p className="mt-2 text-[12px] text-neg">{activateError}</p>
-        )}
-        {bootstrapError && (
-          <p className="mt-2 text-[12px] text-neg">{bootstrapError}</p>
-        )}
+        {activateError && <p className="mt-2 text-[12px] text-neg">{activateError}</p>}
+        {bootstrapError && <p className="mt-2 text-[12px] text-neg">{bootstrapError}</p>}
       </div>
 
       {isPrivy && depositWalletAddress && (

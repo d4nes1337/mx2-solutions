@@ -19,7 +19,12 @@ function CopyButton({ text }: { text: string }) {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <button type="button" onClick={copy} className="rounded p-1 text-muted hover:text-fg" title="Copy">
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded p-1 text-muted hover:text-fg"
+      title="Copy"
+    >
       {copied ? <Check size={13} className="text-pos" /> : <Copy size={13} />}
     </button>
   );
@@ -54,7 +59,12 @@ export function TopUpSheet({ open, onClose, depositWalletAddress }: TopUpSheetPr
     query: { enabled: open && !!address },
   });
 
-  const { writeContract, data: txHash, isPending: isSending, reset: resetWrite } = useWriteContract();
+  const {
+    writeContract,
+    data: txHash,
+    isPending: isSending,
+    reset: resetWrite,
+  } = useWriteContract();
 
   const { isLoading: isConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
@@ -130,11 +140,15 @@ export function TopUpSheet({ open, onClose, depositWalletAddress }: TopUpSheetPr
         {/* Deposit wallet address */}
         <div className="mb-4 rounded-lg border border-border bg-surface-2 p-3">
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wide text-muted">Your deposit wallet (Polygon)</span>
+            <span className="text-[10px] uppercase tracking-wide text-muted">
+              Your deposit wallet (Polygon)
+            </span>
             <Badge tone="neutral">USDC.e</Badge>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="flex-1 break-all font-mono text-[12px] text-fg">{depositWalletAddress}</span>
+            <span className="flex-1 break-all font-mono text-[12px] text-fg">
+              {depositWalletAddress}
+            </span>
             <CopyButton text={depositWalletAddress} />
             <a
               href={`https://polygonscan.com/address/${depositWalletAddress}`}
@@ -172,9 +186,7 @@ export function TopUpSheet({ open, onClose, depositWalletAddress }: TopUpSheetPr
             <div className="text-[11px] text-muted">
               Send from connected wallet
               {connectedBalanceFormatted !== null ? (
-                <span className="ml-1 text-fg">
-                  (balance: ${connectedBalanceFormatted} USDC)
-                </span>
+                <span className="ml-1 text-fg">(balance: ${connectedBalanceFormatted} USDC)</span>
               ) : null}
             </div>
 
@@ -198,7 +210,11 @@ export function TopUpSheet({ open, onClose, depositWalletAddress }: TopUpSheetPr
                     </a>
                   )}
                 </span>
-                <button type="button" onClick={handleReset} className="ml-auto text-pos/60 hover:text-pos">
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="ml-auto text-pos/60 hover:text-pos"
+                >
                   <X size={13} />
                 </button>
               </div>
@@ -256,8 +272,9 @@ export function TopUpSheet({ open, onClose, depositWalletAddress }: TopUpSheetPr
         )}
 
         <p className="mt-4 text-[11px] text-muted">
-          You can also bridge USDC from Ethereum or other chains and send to the deposit wallet address above.
-          After funding, click &ldquo;Check &amp; activate trading&rdquo; on the wallet card.
+          You can also bridge USDC from Ethereum or other chains and send to the deposit wallet
+          address above. After funding, click &ldquo;Check &amp; activate trading&rdquo; on the
+          wallet card.
         </p>
       </div>
     </div>

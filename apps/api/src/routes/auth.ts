@@ -224,7 +224,10 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
           );
         }
       } catch (err) {
-        req.log.error({ err, walletAddress: address }, "auto-provision of trading wallet threw on login");
+        req.log.error(
+          { err, walletAddress: address },
+          "auto-provision of trading wallet threw on login",
+        );
       }
     }
 
