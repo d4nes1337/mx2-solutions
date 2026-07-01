@@ -204,3 +204,29 @@ class, so `apps/api` pins `@polymarket/builder-signing-sdk@0.0.8` until the rela
   transactions intentionally throw.
 - **Compliance:** trading preview/submit/account/cancel routes must enforce Polymarket geoblock
   fail-closed. Read-only routes remain globally accessible per D-004.
+
+## 13. Profile / portfolio PnL endpoints (verified 2026-07-01; D-018)
+
+Sources checked: official Polymarket API reference pages for Data API profile endpoints and Gamma
+public profiles.
+
+- **Public profile:** `GET https://gamma-api.polymarket.com/public-profile?address=<wallet>` returns
+  display fields including `name`, `pseudonym`, `xUsername`, `profileImage`, and `proxyWallet`.
+  The owner EOA `0x77117F39dc33292c657a366643Dd995010b7E36d` maps to proxy wallet
+  `0x997c95d8be61d5779edfb49aaf5dd83d85f31434`.
+- **Current positions:** `GET https://data-api.polymarket.com/positions?user=<proxy>` returns open
+  position rows with `currentValue`, `cashPnl`, `percentPnl`, `totalBought`, `realizedPnl`,
+  `curPrice`, market labels, icon, slug, and outcome identifiers.
+- **Closed positions:** `GET https://data-api.polymarket.com/closed-positions?user=<proxy>` returns
+  historical closed rows with `realizedPnl`, `avgPrice`, `totalBought`, `curPrice`, `timestamp`,
+  and market labels. Max page size is 50; do not treat one page as all-time realized PnL.
+- **Activity:** `GET https://data-api.polymarket.com/activity?user=<proxy>&start=1` supports
+  activity types including `TRADE`, `SPLIT`, `MERGE`, `REDEEM`, deposits/withdrawals/rewards, and
+  includes profile-image fields in activity rows when available.
+- **Position value:** `GET https://data-api.polymarket.com/value?user=<proxy>` returns a single
+  `{ user, value }` row. Live samples can lag or differ from summing `/positions`; preserve
+  provenance when displaying.
+- **Account-level PnL:** `GET https://data-api.polymarket.com/v1/leaderboard?timePeriod=ALL&orderBy=PNL&user=<proxy>`
+  returns `pnl`, `vol`, rank, username, and profile image for the trader. Use this as the current
+  account-level total PnL anchor when available; derive realized top-line PnL as total minus open
+  unrealized.

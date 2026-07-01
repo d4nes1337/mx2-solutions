@@ -1,6 +1,17 @@
 import type { Result } from "@mx2/core";
 import { ok, err } from "@mx2/core";
-import { PositionSchema, ActivitySchema, type Position, type Activity } from "./schema.js";
+import {
+  ActivitySchema,
+  ClosedPositionSchema,
+  LeaderboardEntrySchema,
+  PositionSchema,
+  PositionValueSchema,
+  type Activity,
+  type ClosedPosition,
+  type LeaderboardEntry,
+  type Position,
+  type PositionValue,
+} from "./schema.js";
 import {
   networkError,
   upstreamError,
@@ -14,16 +25,57 @@ export interface GetPositionsParams {
   user: string;
   sizeThreshold?: number;
   limit?: number;
+  offset?: number;
 }
 
 export interface GetActivityParams {
   user: string;
   limit?: number;
+  offset?: number;
+  start?: number;
+  end?: number;
+  type?: string;
+  sortDirection?: "ASC" | "DESC";
+}
+
+export interface GetClosedPositionsParams {
+  user: string;
+  limit?: number;
+  offset?: number;
+  sortBy?: "REALIZEDPNL" | "TITLE" | "PRICE" | "AVGPRICE" | "TIMESTAMP";
+  sortDirection?: "ASC" | "DESC";
+}
+
+export interface GetLeaderboardParams {
+  user: string;
+  category?:
+    | "OVERALL"
+    | "POLITICS"
+    | "SPORTS"
+    | "ESPORTS"
+    | "CRYPTO"
+    | "CULTURE"
+    | "MENTIONS"
+    | "WEATHER"
+    | "ECONOMICS"
+    | "TECH"
+    | "FINANCE";
+  timePeriod?: "DAY" | "WEEK" | "MONTH" | "ALL";
+  orderBy?: "PNL" | "VOL";
 }
 
 export interface DataClient {
   getPositions(params: GetPositionsParams): Promise<Result<Position[], PolymarketError>>;
+  getClosedPositions(
+    params: GetClosedPositionsParams,
+  ): Promise<Result<ClosedPosition[], PolymarketError>>;
   getActivity(params: GetActivityParams): Promise<Result<Activity[], PolymarketError>>;
+  getPositionValue(params: {
+    user: string;
+  }): Promise<Result<PositionValue | null, PolymarketError>>;
+  getLeaderboardEntry(
+    params: GetLeaderboardParams,
+  ): Promise<Result<LeaderboardEntry | null, PolymarketError>>;
 }
 
 export interface DataClientOptions {
@@ -82,13 +134,59 @@ export const createDataClient = (opts?: DataClientOptions): DataClient => {
       const q: Record<string, string> = { user: params.user };
       if (params.sizeThreshold !== undefined) q["sizeThreshold"] = String(params.sizeThreshold);
       if (params.limit !== undefined) q["limit"] = String(params.limit);
+      if (params.offset !== undefined) q["offset"] = String(params.offset);
       return fetchJson(buildUrl(baseUrl, "/positions", q), PositionSchema.array(), timeoutMs);
+    },
+
+    getClosedPositions(params) {
+      const q: Record<string, string> = { user: params.user };
+      if (params.limit !== undefined) q["limit"] = String(params.limit);
+      if (params.offset !== undefined) q["offset"] = String(params.offset);
+      if (params.sortBy !== undefined) q["sortBy"] = params.sortBy;
+      if (params.sortDirection !== undefined) q["sortDirection"] = params.sortDirection;
+      return fetchJson(
+        buildUrl(baseUrl, "/closed-positions", q),
+        ClosedPositionSchema.array(),
+        timeoutMs,
+      );
     },
 
     getActivity(params) {
       const q: Record<string, string> = { user: params.user };
       if (params.limit !== undefined) q["limit"] = String(params.limit);
+      if (params.offset !== undefined) q["offset"] = String(params.offset);
+      if (params.start !== undefined) q["start"] = String(params.start);
+      if (params.end !== undefined) q["end"] = String(params.end);
+      if (params.type !== undefined) q["type"] = params.type;
+      if (params.sortDirection !== undefined) q["sortDirection"] = params.sortDirection;
       return fetchJson(buildUrl(baseUrl, "/activity", q), ActivitySchema.array(), timeoutMs);
+    },
+
+    async getPositionValue(params) {
+      const result = await fetchJson(
+        buildUrl(baseUrl, "/value", { user: params.user }),
+        PositionValueSchema.array(),
+        timeoutMs,
+      );
+      if (!result.ok) return result;
+      return ok(result.value[0] ?? null);
+    },
+
+    async getLeaderboardEntry(params) {
+      const q: Record<string, string> = {
+        user: params.user,
+        category: params.category ?? "OVERALL",
+        timePeriod: params.timePeriod ?? "ALL",
+        orderBy: params.orderBy ?? "PNL",
+        limit: "1",
+      };
+      const result = await fetchJson(
+        buildUrl(baseUrl, "/v1/leaderboard", q),
+        LeaderboardEntrySchema.array(),
+        timeoutMs,
+      );
+      if (!result.ok) return result;
+      return ok(result.value[0] ?? null);
     },
   };
 };

@@ -88,7 +88,22 @@ export const GammaEventSchema = z
 // Each point is {t: Unix seconds, p: probability 0–1}
 export const PricePointSchema = z.object({ t: z.number(), p: z.number() }).passthrough();
 
+export const PublicProfileSchema = z
+  .object({
+    createdAt: z.string().nullable().optional(),
+    proxyWallet: z.string().nullable().optional(),
+    profileImage: z.string().nullable().optional(),
+    displayUsernamePublic: z.boolean().nullable().optional(),
+    bio: z.string().nullable().optional(),
+    pseudonym: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    xUsername: z.string().nullable().optional(),
+    verifiedBadge: z.boolean().nullable().optional(),
+  })
+  .passthrough();
+
 export type GammaTag = z.infer<typeof GammaTagSchema>;
 export type GammaMarket = z.infer<typeof GammaMarketSchema>;
 export type GammaEvent = z.infer<typeof GammaEventSchema>;
 export type PricePoint = z.infer<typeof PricePointSchema>;
+export type PublicProfile = z.infer<typeof PublicProfileSchema>;

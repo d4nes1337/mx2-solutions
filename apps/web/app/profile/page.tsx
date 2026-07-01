@@ -25,6 +25,7 @@ import { PortfolioDisclaimer } from "@/components/portfolio/PortfolioDisclaimer"
 import { PortfolioEquityChart, useEquityWindow } from "@/components/portfolio/PortfolioEquityChart";
 import { PortfolioAllocation } from "@/components/portfolio/PortfolioAllocation";
 import { OpenOrdersTable } from "@/components/portfolio/OpenOrdersTable";
+import { MarketPnlFeed } from "@/components/portfolio/MarketPnlFeed";
 import { WalletsSection } from "@/components/profile/WalletsSection";
 import { ShareButton } from "@/components/share/ShareButton";
 import { flexModelFromPortfolio } from "@/components/share/factories";
@@ -42,7 +43,7 @@ export default function PortfolioPage() {
   const { window, setWindow } = useEquityWindow("30d");
   const equity = useEquityHistory(signedIn, window, proxy);
 
-  const [tab, setTab] = useState<"positions" | "orders" | "history">("positions");
+  const [tab, setTab] = useState<"positions" | "market-pnl" | "orders" | "history">("market-pnl");
   const [historyType, setHistoryType] = useState<HistoryTypeFilter>("all");
   const [historyLimit, setHistoryLimit] = useState(25);
 
@@ -100,6 +101,7 @@ export default function PortfolioPage() {
       <PortfolioHeader
         signerAddress={session.data!.address}
         queryAddress={overview.data?.queryAddress}
+        profile={overview.data?.profile}
         derivedDeposit={derivedDeposit}
         onRefresh={refreshAll}
         refreshing={refreshing}
@@ -108,8 +110,14 @@ export default function PortfolioPage() {
         actions={
           overview.data ? (
             <ShareButton
-              makeModel={() => flexModelFromPortfolio(overview.data!.summary)}
-              label="Share PnL"
+              makeModel={() =>
+                flexModelFromPortfolio(overview.data!.summary, {
+                  handle:
+                    overview.data?.profile?.name ?? overview.data?.profile?.xUsername ?? undefined,
+                  avatarUrl: overview.data?.profile?.profileImage,
+                })
+              }
+              label="Export PnL"
             />
           ) : undefined
         }
@@ -162,6 +170,7 @@ export default function PortfolioPage() {
             onTab={setTab}
             positionCount={overview.data?.positions.length ?? 0}
             orderCount={openOrders.data?.count ?? overview.data?.counts.openOrders ?? 0}
+            marketPnlCount={overview.data?.marketPnl.length ?? overview.data?.counts.marketPnl ?? 0}
           />
         </div>
         <div className="p-4">
@@ -172,6 +181,16 @@ export default function PortfolioPage() {
               <ErrorNote message={(overview.error as Error).message} />
             ) : overview.data ? (
               <PositionsTable positions={overview.data.positions} />
+            ) : null
+          ) : null}
+
+          {tab === "market-pnl" ? (
+            overview.isLoading ? (
+              <Spinner />
+            ) : overview.error ? (
+              <ErrorNote message={(overview.error as Error).message} />
+            ) : overview.data ? (
+              <MarketPnlFeed items={overview.data.marketPnl} profile={overview.data.profile} />
             ) : null
           ) : null}
 

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { GammaEventSchema, GammaMarketSchema, PricePointSchema } from "./gamma/schema.js";
+import {
+  GammaEventSchema,
+  GammaMarketSchema,
+  PricePointSchema,
+  PublicProfileSchema,
+} from "./gamma/schema.js";
 
 const sampleMarket: unknown = {
   id: "508994",
@@ -128,5 +133,21 @@ describe("PricePointSchema", () => {
     if (result.success) {
       expect(result.data).toHaveLength(2);
     }
+  });
+});
+
+describe("PublicProfileSchema", () => {
+  it("parses a public profile", () => {
+    const result = PublicProfileSchema.safeParse({
+      createdAt: "2025-03-27T11:02:34.945426Z",
+      proxyWallet: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+      profileImage: "https://example.com/profile.webp",
+      displayUsernamePublic: true,
+      pseudonym: "Round-Endive",
+      name: "ydsmx2",
+      xUsername: "ydsmx2",
+      verifiedBadge: false,
+    });
+    expect(result.success).toBe(true);
   });
 });

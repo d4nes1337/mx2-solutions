@@ -3,8 +3,10 @@ import { ok, err } from "@mx2/core";
 import {
   GammaEventSchema,
   GammaMarketSchema,
+  PublicProfileSchema,
   type GammaEvent,
   type GammaMarket,
+  type PublicProfile,
 } from "./schema.js";
 import {
   networkError,
@@ -41,6 +43,7 @@ export interface GammaClient {
   getEvent(id: string): Promise<Result<GammaEvent, PolymarketError>>;
   listMarkets(params?: ListMarketsParams): Promise<Result<GammaMarket[], PolymarketError>>;
   getMarket(id: string): Promise<Result<GammaMarket, PolymarketError>>;
+  getPublicProfile(address: string): Promise<Result<PublicProfile | null, PolymarketError>>;
   /** Best-effort lookup by condition id or CLOB token id (Gamma /markets filters). */
   findMarket(params: FindMarketParams): Promise<Result<GammaMarket | null, PolymarketError>>;
 }
@@ -160,6 +163,18 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
         GammaMarketSchema,
         timeoutMs,
       ),
+
+    async getPublicProfile(address) {
+      const result = await fetchJson(
+        buildUrl(baseUrl, "/public-profile", { address }),
+        PublicProfileSchema,
+        timeoutMs,
+      );
+      if (!result.ok && result.error.code === "UPSTREAM_ERROR" && result.error.statusCode === 404) {
+        return ok(null);
+      }
+      return result;
+    },
 
     findMarket: async (params) => {
       if (params.conditionId) {

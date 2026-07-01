@@ -8,17 +8,17 @@ const data: EquityHistoryResponse = {
   queryAddress: "0x2",
   window: "30d",
   points: [
-    { t: 1, equity: 10 },
-    { t: 2, equity: 20 },
+    { t: 1, pnl: 10 },
+    { t: 2, pnl: 20 },
   ],
-  disclaimer: "Approximate equity curve derived from trade activity.",
-  methodology: "Walk TRADE activity chronologically.",
+  disclaimer: "Approximate PnL curve derived from closed positions.",
+  methodology: "Walk closed positions chronologically.",
   computedAt: new Date().toISOString(),
 };
 
 describe("PortfolioEquityChart", () => {
   it("shows disclaimer text", () => {
     render(<PortfolioEquityChart data={data} window="30d" onWindow={() => {}} />);
-    expect(screen.getByText(/Approximate equity curve/)).toBeInTheDocument();
+    expect(screen.getByText(/Approximate PnL curve/)).toBeInTheDocument();
   });
 });

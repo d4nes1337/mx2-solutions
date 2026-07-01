@@ -46,6 +46,7 @@ const mockGammaClient: GammaClient = {
   getEvent: async () => err(upstreamErr),
   listMarkets: async () => ok([]),
   getMarket: async () => err(upstreamErr),
+  getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
 };
 
@@ -59,7 +60,10 @@ const mockClobClient: ClobClient = {
 
 const mockDataClient: DataClient = {
   getPositions: async () => ok([]),
+  getClosedPositions: async () => ok([]),
   getActivity: async () => ok([]),
+  getPositionValue: async () => ok(null),
+  getLeaderboardEntry: async () => ok(null),
 };
 
 const mockMarketSnapshots: MarketSnapshotStore = {

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { EquityHistoryResponse, EquityWindow } from "@/lib/types";
-import { signedUsd, usd } from "@/lib/format";
+import { signedUsd } from "@/lib/format";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { AnimatedNumber, FlashOnChange } from "@/components/motion";
 import { Card, cn, ErrorNote, Segmented, Skeleton } from "@/components/ui";
@@ -27,23 +27,23 @@ export function PortfolioEquityChart({
   onWindow: (w: EquityWindow) => void;
 }) {
   const points = data?.points ?? [];
-  const series: ChartPoint[] = points.map((p) => ({ t: p.t, v: p.equity }));
-  const startEquity = points[0]?.equity;
-  const endEquity = points[points.length - 1]?.equity;
-  const change = startEquity != null && endEquity != null ? endEquity - startEquity : undefined;
+  const series: ChartPoint[] = points.map((p) => ({ t: p.t, v: p.pnl }));
+  const startPnl = points[0]?.pnl;
+  const endPnl = points[points.length - 1]?.pnl;
+  const change = startPnl != null && endPnl != null ? endPnl - startPnl : undefined;
   const up = (change ?? 0) >= 0;
 
   return (
     <Card className="flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted">Equity (approx)</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">PnL (account)</div>
           <div className="mt-0.5 flex items-baseline gap-2">
-            {endEquity != null ? (
-              <FlashOnChange value={endEquity}>
+            {endPnl != null ? (
+              <FlashOnChange value={endPnl}>
                 <AnimatedNumber
-                  value={endEquity}
-                  format={(v) => usd(v)}
+                  value={endPnl}
+                  format={(v) => signedUsd(v)}
                   className="text-xl font-semibold leading-none text-fg"
                 />
               </FlashOnChange>
@@ -70,12 +70,12 @@ export function PortfolioEquityChart({
             data={series}
             height={200}
             color="var(--accent)"
-            valueFormat={(v) => usd(v)}
-            label="Equity"
+            valueFormat={(v) => signedUsd(v)}
+            label="PnL"
           />
         ) : (
           <div className="flex h-[200px] items-center justify-center text-sm text-muted">
-            Not enough activity to chart equity.
+            Not enough closed-position history to chart PnL.
           </div>
         )}
         {data?.disclaimer ? (

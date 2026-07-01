@@ -254,6 +254,22 @@ export interface Position {
   [key: string]: unknown;
 }
 
+export interface ClosedPosition {
+  proxyWallet: string;
+  asset: string;
+  conditionId: string;
+  avgPrice: number;
+  totalBought: number;
+  realizedPnl: number;
+  curPrice: number;
+  timestamp: number;
+  title?: string;
+  slug?: string;
+  icon?: string;
+  outcome?: string;
+  [key: string]: unknown;
+}
+
 export interface PositionsResponse {
   signerAddress: string;
   queryAddress: string;
@@ -277,6 +293,48 @@ export interface Activity {
   [key: string]: unknown;
 }
 
+export type MarketPnlStatus =
+  | "OPEN_PROFIT"
+  | "OPEN_LOSS"
+  | "WON"
+  | "LOST"
+  | "SOLD_PROFIT"
+  | "SOLD_LOSS"
+  | "FLAT";
+
+export interface MarketPnlItem {
+  id: string;
+  source: "positions" | "closed-positions";
+  conditionId: string;
+  asset: string;
+  title?: string;
+  slug?: string;
+  icon?: string;
+  outcome?: string;
+  status: MarketPnlStatus;
+  statusLabel: string;
+  pnl: number;
+  pnlPct: number | null;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  currentValue: number;
+  exposure: number;
+  totalBought: number;
+  avgPrice: number;
+  curPrice?: number;
+  size: number | null;
+  closed: boolean;
+  lastActivityAt: number | null;
+}
+
+export interface PortfolioProfile {
+  name?: string;
+  profileImage: string | null;
+  proxyWallet: string;
+  xUsername: string | null;
+  verifiedBadge: boolean;
+}
+
 export interface HistoryResponse {
   signerAddress: string;
   queryAddress: string;
@@ -293,15 +351,19 @@ export type HistoryTypeFilter = "all" | "trade" | "redeem" | "other";
 export interface PortfolioOverviewResponse {
   signerAddress: string;
   queryAddress: string;
+  profile: PortfolioProfile | null;
   fetchedAt: string;
   dataSource: string;
   summary: PnlSummary;
   positions: Position[];
+  closedPositions: ClosedPosition[];
+  marketPnl: MarketPnlItem[];
   activityPreview: Activity[];
   counts: {
     openOrders: number;
     usdcBalance: string | null;
     setupRequired: boolean;
+    marketPnl: number;
   };
   methodology: string;
   limitations: string[];
@@ -311,7 +373,7 @@ export type EquityWindow = "7d" | "30d" | "all";
 
 export interface EquityPoint {
   t: number;
-  equity: number;
+  pnl: number;
 }
 
 export interface EquityHistoryResponse {
@@ -361,7 +423,19 @@ export interface PnlSummary {
   realizedPnl: string;
   totalPnl: string;
   currentPortfolioValue: string;
+  positionValue?: string;
+  dataApiPositionValue?: string | null;
+  exposure?: string;
+  cashBalance?: string | null;
+  cashBalanceKnown?: boolean;
   openPositions: number;
+  sources?: {
+    totalPnl: string;
+    unrealizedPnl: string;
+    realizedPnl: string;
+    exposure: string;
+    cashBalance: string;
+  };
 }
 
 export interface PnlResponse {

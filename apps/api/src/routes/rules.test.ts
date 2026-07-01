@@ -318,6 +318,7 @@ const buildRulesApp = (opts: {
     getEvent: async () => err(upstreamErr),
     listMarkets: async () => ok([]),
     getMarket: async () => err(upstreamErr),
+    getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
   };
   const clob: ClobClient = {
@@ -327,7 +328,13 @@ const buildRulesApp = (opts: {
     getLastTradePrice: async () => err(upstreamErr),
     getPricesHistory: async () => err(upstreamErr),
   };
-  const data: DataClient = { getPositions: async () => ok([]), getActivity: async () => ok([]) };
+  const data: DataClient = {
+    getPositions: async () => ok([]),
+    getClosedPositions: async () => ok([]),
+    getActivity: async () => ok([]),
+    getPositionValue: async () => ok(null),
+    getLeaderboardEntry: async () => ok(null),
+  };
   const trading: AuthenticatedClobClient = {
     getServerTime: async () => ok(0),
     deriveApiKey: async () => err(upstreamErr),

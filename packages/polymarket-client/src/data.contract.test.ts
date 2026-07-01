@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { PositionSchema, ActivitySchema } from "./data/schema.js";
+import {
+  ActivitySchema,
+  ClosedPositionSchema,
+  LeaderboardEntrySchema,
+  PositionSchema,
+  PositionValueSchema,
+} from "./data/schema.js";
 
 // Fixtures captured from the live Polymarket Data API on 2026-06-22.
 const samplePosition: unknown = {
@@ -44,6 +50,20 @@ const sampleTradeActivity: unknown = {
   side: "BUY",
   outcomeIndex: 0,
   title: "Will X happen?",
+  outcome: "Yes",
+};
+
+const sampleClosedPosition: unknown = {
+  proxyWallet: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+  asset: "123",
+  conditionId: "0x9c183f63913cee589ec7a8d584fb7743a541f724edc047837c053c027bdf9074",
+  avgPrice: 0.49,
+  totalBought: 170,
+  realizedPnl: -42.5,
+  curPrice: 0.235,
+  timestamp: 1782937889,
+  title: "Will Belgium win on 2026-07-01?",
+  slug: "fifwc-bel-sen-2026-07-01-bel",
   outcome: "Yes",
 };
 
@@ -118,5 +138,41 @@ describe("ActivitySchema", () => {
       price: 1.0,
     };
     expect(ActivitySchema.safeParse(redeem).success).toBe(true);
+  });
+});
+
+describe("ClosedPositionSchema", () => {
+  it("parses a closed position", () => {
+    const result = ClosedPositionSchema.safeParse(sampleClosedPosition);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.realizedPnl).toBe(-42.5);
+      expect(result.data.curPrice).toBe(0.235);
+    }
+  });
+});
+
+describe("PositionValueSchema", () => {
+  it("parses user position value", () => {
+    expect(
+      PositionValueSchema.safeParse({
+        user: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+        value: 134.312,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("LeaderboardEntrySchema", () => {
+  it("parses all-time leaderboard PnL for one user", () => {
+    const result = LeaderboardEntrySchema.safeParse({
+      rank: "123448",
+      proxyWallet: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+      userName: "ydsmx2",
+      vol: 137621.586188,
+      pnl: 400.27321950723183,
+      profileImage: "https://example.com/avatar.webp",
+    });
+    expect(result.success).toBe(true);
   });
 });

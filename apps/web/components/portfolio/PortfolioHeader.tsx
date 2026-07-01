@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { shortAddress } from "@/lib/format";
+import type { PortfolioProfile } from "@/lib/types";
 import { Button, cn } from "@/components/ui";
 
 const PROXY_STORAGE_KEY = "mx2.proxyWallet";
@@ -25,6 +26,7 @@ export function useWalletOverride(derivedDeposit?: string) {
 export function PortfolioHeader({
   signerAddress,
   queryAddress,
+  profile,
   derivedDeposit,
   onRefresh,
   refreshing,
@@ -34,6 +36,7 @@ export function PortfolioHeader({
 }: {
   signerAddress: string;
   queryAddress?: string;
+  profile?: PortfolioProfile | null;
   derivedDeposit?: string;
   onRefresh: () => void;
   refreshing?: boolean;
@@ -54,17 +57,33 @@ export function PortfolioHeader({
 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-fg">Portfolio</h1>
-        <p className="tabular mt-1 text-xs text-muted">
-          Signer {shortAddress(signerAddress)}
-          {queryAddress ? (
-            <>
-              {" · "}
-              Deposit {shortAddress(queryAddress)}
-            </>
-          ) : null}
-        </p>
+      <div className="flex min-w-0 items-center gap-3">
+        {profile?.profileImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={profile.profileImage}
+            alt=""
+            className="h-12 w-12 shrink-0 rounded-md border border-border object-cover"
+          />
+        ) : (
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-border bg-surface-2 text-sm font-semibold text-muted">
+            {(profile?.name ?? "P").slice(0, 1).toUpperCase()}
+          </div>
+        )}
+        <div className="min-w-0">
+          <h1 className="truncate text-xl font-semibold tracking-tight text-fg">
+            {profile?.name ?? "Portfolio"}
+          </h1>
+          <p className="tabular mt-1 truncate text-xs text-muted">
+            Signer {shortAddress(signerAddress)}
+            {queryAddress ? (
+              <>
+                {" · "}
+                Deposit {shortAddress(queryAddress)}
+              </>
+            ) : null}
+          </p>
+        </div>
       </div>
       <div className="flex items-center gap-2">
         {actions}
@@ -104,16 +123,19 @@ export function PortfolioTabBar({
   onTab,
   positionCount,
   orderCount,
+  marketPnlCount,
 }: {
-  tab: "positions" | "orders" | "history";
-  onTab: (t: "positions" | "orders" | "history") => void;
+  tab: "positions" | "market-pnl" | "orders" | "history";
+  onTab: (t: "positions" | "market-pnl" | "orders" | "history") => void;
   positionCount: number;
   orderCount: number;
+  marketPnlCount: number;
 }) {
   const tabs = [
     { id: "positions" as const, label: `Positions (${positionCount})` },
+    { id: "market-pnl" as const, label: `Market PnL (${marketPnlCount})` },
     { id: "orders" as const, label: `Open orders (${orderCount})` },
-    { id: "history" as const, label: "History" },
+    { id: "history" as const, label: "Activity" },
   ];
   return (
     <div className="flex gap-1 border-b border-border">

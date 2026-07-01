@@ -234,6 +234,23 @@ available.
 
 ## In progress
 
+- **Portfolio PnL refactor (2026-07-01): Built, pending owner visual acceptance.**
+  - Backend now resolves the Polymarket public profile/proxy wallet, fetches profile avatar/name,
+    account-level all-time PnL from Data API leaderboard, current open positions, recent closed
+    positions, raw activity, and CLOB cash balance when credentials are configured.
+  - Top stats now expose equity, total PnL, unrealized, realized, exposure, and cash. Equity =
+    exposure + known cash; when CLOB credentials are missing, cash remains unknown rather than
+    inferred.
+  - PnL chart now walks closed-position realized PnL and anchors to account-level leaderboard PnL.
+    It no longer charts raw BUY/SELL USDC flows.
+  - Portfolio page includes avatar/name and a new Market PnL tab with open/won/lost/sold in
+    profit/loss rows plus per-market PNG export cards carrying the profile avatar.
+  - Verified against public address `0x77117F39dc33292c657a366643Dd995010b7E36d` → proxy
+    `0x997c95d8be61d5779edfb49aaf5dd83d85f31434`; public leaderboard all-time PnL observed near
+    `$400.27` on 2026-07-01.
+  - Quality gates: `pnpm run typecheck`, `pnpm run test`, `pnpm --filter @mx2/web run typecheck`,
+    `pnpm --filter @mx2/web run test`, `pnpm run lint`.
+
 - **Favorites persistence — planned, not built:** needs `user_favorites` table (wallet + market/event id),
   `GET/POST/DELETE /api/favorites`, authenticated CRUD, and the Favorites column switching from
   ranked suggestions to the user's saved list after sign-in.

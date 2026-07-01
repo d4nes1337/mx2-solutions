@@ -69,6 +69,9 @@ export function DefaultFlexTemplate({ model }: { model: FlexCardModel }) {
           <stop offset="0%" stopColor={toneColor} stopOpacity={0.35} />
           <stop offset="100%" stopColor={toneColor} stopOpacity={0} />
         </linearGradient>
+        <clipPath id="flex-avatar">
+          <rect x={64} y={H - 84} width={44} height={44} rx={10} />
+        </clipPath>
       </defs>
 
       {/* Background */}
@@ -187,7 +190,24 @@ export function DefaultFlexTemplate({ model }: { model: FlexCardModel }) {
       ) : null}
 
       {/* Footer */}
-      <text x={64} y={H - 40} fontFamily={SANS} fontSize={22} fill={C.faint}>
+      {model.avatarUrl ? (
+        <image
+          href={model.avatarUrl}
+          x={64}
+          y={H - 84}
+          width={44}
+          height={44}
+          preserveAspectRatio="xMidYMid slice"
+          clipPath="url(#flex-avatar)"
+        />
+      ) : null}
+      <text
+        x={model.avatarUrl ? 122 : 64}
+        y={H - 52}
+        fontFamily={SANS}
+        fontSize={22}
+        fill={C.faint}
+      >
         {model.handle ? `@${model.handle}` : ""}
       </text>
       <text x={W - 64} y={H - 40} textAnchor="end" fontFamily={SANS} fontSize={22} fill={C.faint}>

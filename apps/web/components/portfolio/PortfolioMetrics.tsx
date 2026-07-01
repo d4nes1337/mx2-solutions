@@ -32,29 +32,48 @@ export function PortfolioMetrics({
   const total = parseFloat(summary.totalPnl);
   const unreal = parseFloat(summary.unrealizedPnl);
   const real = parseFloat(summary.realizedPnl);
+  const exposure = parseFloat(summary.exposure ?? summary.positionValue ?? "0");
+  const cashRaw = summary.cashBalance ?? usdcBalance ?? null;
+  const cash = cashRaw != null ? parseFloat(cashRaw) : null;
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="Equity" value={<Live value={equity} format={money} />} />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        <Stat
+          label="Equity"
+          value={<Live value={equity} format={money} />}
+          hint={summary.sources?.cashBalance}
+        />
         <Stat
           label="Total PnL"
           tone={total >= 0 ? "pos" : "neg"}
           value={<Live value={total} format={pnl} />}
+          hint={summary.sources?.totalPnl}
         />
         <Stat
           label="Unrealized"
           tone={unreal >= 0 ? "pos" : "neg"}
           value={<Live value={unreal} format={pnl} />}
+          hint={summary.sources?.unrealizedPnl}
         />
         <Stat
           label="Realized"
           tone={real >= 0 ? "pos" : "neg"}
           value={<Live value={real} format={pnl} />}
+          hint={summary.sources?.realizedPnl}
+        />
+        <Stat
+          label="Exposure"
+          value={<Live value={exposure} format={money} />}
+          hint={summary.sources?.exposure}
+        />
+        <Stat
+          label="Cash"
+          value={cash != null ? <Live value={cash} format={money} /> : "—"}
+          hint={summary.sources?.cashBalance}
         />
       </div>
       <p className="text-xs text-muted">
-        {usdcBalance != null ? <>USDC {usd(usdcBalance)} · </> : null}
         {summary.openPositions} position{summary.openPositions === 1 ? "" : "s"}
         {openOrderCount != null ? (
           <>
