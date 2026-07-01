@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { EquityHistoryResponse, EquityWindow } from "@/lib/types";
 import { signedUsd, usd } from "@/lib/format";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
+import { AnimatedNumber, FlashOnChange } from "@/components/motion";
 import { Card, cn, ErrorNote, Segmented, Skeleton } from "@/components/ui";
 
 const WINDOWS: { value: EquityWindow; label: string }[] = [
@@ -38,9 +39,17 @@ export function PortfolioEquityChart({
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted">Equity (approx)</div>
           <div className="mt-0.5 flex items-baseline gap-2">
-            <span className="tabular text-xl font-semibold leading-none text-fg">
-              {endEquity != null ? usd(endEquity) : "—"}
-            </span>
+            {endEquity != null ? (
+              <FlashOnChange value={endEquity}>
+                <AnimatedNumber
+                  value={endEquity}
+                  format={(v) => usd(v)}
+                  className="text-xl font-semibold leading-none text-fg"
+                />
+              </FlashOnChange>
+            ) : (
+              <span className="tabular text-xl font-semibold leading-none text-fg">—</span>
+            )}
             {change != null && series.length >= 2 ? (
               <span className={cn("tabular text-sm font-semibold", up ? "text-pos" : "text-neg")}>
                 {up ? "▲" : "▼"} {signedUsd(change)}
@@ -57,7 +66,13 @@ export function PortfolioEquityChart({
         ) : error ? (
           <ErrorNote message={error.message} />
         ) : series.length >= 2 ? (
-          <AreaChart data={series} height={200} color="var(--accent)" valueFormat={(v) => usd(v)} />
+          <AreaChart
+            data={series}
+            height={200}
+            color="var(--accent)"
+            valueFormat={(v) => usd(v)}
+            label="Equity"
+          />
         ) : (
           <div className="flex h-[200px] items-center justify-center text-sm text-muted">
             Not enough activity to chart equity.

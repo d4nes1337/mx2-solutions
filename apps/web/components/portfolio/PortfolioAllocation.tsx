@@ -4,6 +4,9 @@ import { useMemo } from "react";
 import type { Position } from "@/lib/types";
 import { signed, signedUsd, toNum, usd } from "@/lib/format";
 import { Card, CardHeader, cn, Empty } from "@/components/ui";
+import { FlashOnChange } from "@/components/motion";
+import { ShareButton } from "@/components/share/ShareButton";
+import { flexModelFromPosition } from "@/components/share/factories";
 
 export function PortfolioAllocation({ positions }: { positions: Position[] }) {
   const { rows, total, best, worst } = useMemo(() => {
@@ -95,8 +98,8 @@ export function PortfolioAllocation({ positions }: { positions: Position[] }) {
 
         {(best || worst) && (best?.title || worst?.title) ? (
           <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
-            <Mover label="Top mover" position={best} />
-            <Mover label="Worst" position={worst} />
+            <Mover label="Top mover" position={best} share />
+            <Mover label="Worst mover" position={worst} />
           </div>
         ) : null}
       </div>
@@ -104,18 +107,41 @@ export function PortfolioAllocation({ positions }: { positions: Position[] }) {
   );
 }
 
-function Mover({ label, position }: { label: string; position?: Position }) {
+function Mover({
+  label,
+  position,
+  share,
+}: {
+  label: string;
+  position?: Position;
+  share?: boolean;
+}) {
   if (!position) return <div />;
   const pnl = toNum(position.cashPnl);
   const pct = toNum(position.percentPnl);
   return (
     <div className="rounded-md border border-border bg-surface-2/50 px-2.5 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
+      <div className="flex items-center justify-between gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-muted">{label}</span>
+        {share ? (
+          <ShareButton
+            makeModel={() => flexModelFromPosition(position)}
+            label=""
+            size="sm"
+            className="!px-1 !py-0.5 text-[10px]"
+            title="Share this position"
+          />
+        ) : null}
+      </div>
       <div className="mt-1 truncate text-[11px] text-fg" title={position.title}>
         {position.title ?? position.conditionId}
       </div>
-      <div className={cn("tabular mt-1 text-xs font-semibold", pnl >= 0 ? "text-pos" : "text-neg")}>
-        {signedUsd(pnl)}{" "}
+      <div className="mt-1 text-xs font-semibold">
+        <FlashOnChange value={pnl}>
+          <span className={cn("tabular", pnl >= 0 ? "text-pos" : "text-neg")}>
+            {signedUsd(pnl)}
+          </span>
+        </FlashOnChange>{" "}
         <span className="text-[10px] font-normal text-faint">({signed(pct)}%)</span>
       </div>
     </div>

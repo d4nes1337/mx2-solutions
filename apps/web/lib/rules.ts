@@ -3,7 +3,7 @@
 // instant "would-trigger-now" preview before a rule is created, so small drift
 // is acceptable. It deliberately mirrors packages/rules/src/predicates.ts.
 
-import type { OrderLevel, OrderSide, RulePredicateInput } from "./types";
+import type { OrderLevel, OrderSide, RulePredicateInput, RuleStatus } from "./types";
 
 export function fmtDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -13,6 +13,33 @@ export function fmtDuration(ms: number): string {
   if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m`;
   if (m > 0) return `${m}m${s.toString().padStart(2, "0")}s`;
   return `${s}s`;
+}
+
+// Collapse the 10 raw RuleStatus values into 4 visual tones + a friendly label,
+// with an order that floats actionable rules to the top of a list.
+export type RuleStatusTone = "accent" | "warn" | "neutral" | "neg";
+export interface RuleStatusMeta {
+  label: string;
+  tone: RuleStatusTone;
+  live: boolean; // show a pulsing dot
+  order: number;
+}
+
+const RULE_STATUS_META: Record<RuleStatus, RuleStatusMeta> = {
+  TRIGGERED_AWAITING_USER: { label: "Needs confirm", tone: "warn", live: false, order: 0 },
+  ACTIVE_ACCUMULATING: { label: "Accumulating", tone: "accent", live: true, order: 1 },
+  ACTIVE_WAITING: { label: "Active", tone: "accent", live: true, order: 2 },
+  PAUSED: { label: "Paused", tone: "warn", live: false, order: 3 },
+  DRAFT: { label: "Draft", tone: "neutral", live: false, order: 4 },
+  EXECUTED_MANUALLY: { label: "Executed", tone: "neutral", live: false, order: 5 },
+  EXPIRED: { label: "Expired", tone: "neutral", live: false, order: 6 },
+  CANCELLED: { label: "Cancelled", tone: "neutral", live: false, order: 7 },
+  INVALIDATED: { label: "Invalidated", tone: "neg", live: false, order: 8 },
+  ERROR: { label: "Error", tone: "neg", live: false, order: 9 },
+};
+
+export function ruleStatusMeta(status: RuleStatus): RuleStatusMeta {
+  return RULE_STATUS_META[status] ?? { label: status, tone: "neutral", live: false, order: 99 };
 }
 
 const round6 = (n: number): number => Math.round((n + Number.EPSILON) * 1e6) / 1e6;

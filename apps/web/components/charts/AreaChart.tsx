@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useReducedMotion } from "@/components/motion";
 
 export interface ChartPoint {
   t: number; // unix seconds or ms
@@ -22,6 +23,8 @@ export function AreaChart({
   yTicks = 4,
   showAxis = true,
   fill = true,
+  label,
+  baseline,
   className,
 }: {
   data: ChartPoint[];
@@ -33,9 +36,14 @@ export function AreaChart({
   yTicks?: number;
   showAxis?: boolean;
   fill?: boolean;
+  /** Optional legend chip (series name + swatch + live/hovered value). */
+  label?: string;
+  /** Optional horizontal reference line, e.g. 0.5 for a probability chart. */
+  baseline?: number;
   className?: string;
 }) {
   const uid = useId().replace(/:/g, "");
+  const reduced = useReducedMotion();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(640);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -149,6 +157,19 @@ export function AreaChart({
             </g>
           ))}
 
+        {baseline != null && baseline > geom.min && baseline < geom.max ? (
+          <line
+            x1={padL}
+            x2={w - padR}
+            y1={geom.y(baseline)}
+            y2={geom.y(baseline)}
+            stroke="var(--border-strong)"
+            strokeWidth={1}
+            strokeDasharray="3 4"
+            opacity={0.85}
+          />
+        ) : null}
+
         {fill ? <path d={geom.area} fill={`url(#grad-${uid})`} /> : null}
         <path
           d={geom.line}
@@ -159,16 +180,20 @@ export function AreaChart({
           strokeLinecap="round"
         />
 
-        {/* last point + pulse */}
+        {/* last point + live pulse (SMIL gated for reduced-motion) */}
         <circle cx={lastPt[0]} cy={lastPt[1]} r={3} fill={stroke} />
-        <circle cx={lastPt[0]} cy={lastPt[1]} r={5} fill={stroke} opacity={0.2}>
-          <animate attributeName="r" values="4;9;4" dur="2.2s" repeatCount="indefinite" />
-          <animate
-            attributeName="opacity"
-            values="0.28;0;0.28"
-            dur="2.2s"
-            repeatCount="indefinite"
-          />
+        <circle cx={lastPt[0]} cy={lastPt[1]} r={5} fill={stroke} opacity={reduced ? 0.28 : 0.2}>
+          {reduced ? null : (
+            <>
+              <animate attributeName="r" values="4;9;4" dur="2.2s" repeatCount="indefinite" />
+              <animate
+                attributeName="opacity"
+                values="0.28;0;0.28"
+                dur="2.2s"
+                repeatCount="indefinite"
+              />
+            </>
+          )}
         </circle>
 
         {hoverPt ? (
@@ -228,9 +253,17 @@ export function AreaChart({
         />
       </svg>
 
+      {label ? (
+        <div className="glass pointer-events-none absolute left-2 top-2 flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-[10px]">
+          <span className="h-2 w-2 rounded-full" style={{ background: stroke }} />
+          <span className="text-muted">{label}</span>
+          <span className="tabular font-semibold text-fg">{valueFormat(hover?.v ?? last)}</span>
+        </div>
+      ) : null}
+
       {hover && hoverPt ? (
         <div
-          className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-md border border-border-strong bg-surface-3/95 px-2 py-1 text-center shadow-pop backdrop-blur"
+          className="glass pointer-events-none absolute z-10 -translate-x-1/2 rounded-md px-2 py-1 text-center shadow-pop"
           style={{ left: Math.min(w - 48, Math.max(48, hoverPt[0])), top: 2 }}
         >
           <div className="tabular text-xs font-semibold text-fg">{valueFormat(hover.v)}</div>

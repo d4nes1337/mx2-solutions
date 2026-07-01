@@ -31,11 +31,6 @@ export function FavoritesFeedColumn({
   return (
     <MarketFeedColumn
       title="Favorites"
-      subtitle={
-        signedIn
-          ? "Pinned markets will live here. Suggested picks for now."
-          : "Sign in to pin markets like these."
-      }
       events={events}
       isLoading={isLoading}
       error={error}

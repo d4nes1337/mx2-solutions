@@ -3,8 +3,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-const CARD_W = 320;
-const OPEN_DELAY = 140;
+const CARD_W = 360;
+const OPEN_DELAY = 130;
 
 /**
  * Desktop hover card. Wraps a trigger and renders `content` in a body portal so
@@ -73,9 +73,7 @@ export function MarketHoverCard({
               className="fade-in pointer-events-none fixed z-50"
               style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: CARD_W }}
             >
-              <div className="overflow-hidden rounded-md border border-border-strong bg-surface shadow-pop">
-                {content}
-              </div>
+              <div className="glass overflow-hidden rounded-md shadow-pop">{content}</div>
             </div>,
             document.body,
           )

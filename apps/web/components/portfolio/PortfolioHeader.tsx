@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { shortAddress } from "@/lib/format";
 import { Button, cn } from "@/components/ui";
 
@@ -30,6 +30,7 @@ export function PortfolioHeader({
   refreshing,
   proxyInput,
   setProxyInput,
+  actions,
 }: {
   signerAddress: string;
   queryAddress?: string;
@@ -38,6 +39,7 @@ export function PortfolioHeader({
   refreshing?: boolean;
   proxyInput: string;
   setProxyInput: (v: string) => void;
+  actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
@@ -65,6 +67,7 @@ export function PortfolioHeader({
         </p>
       </div>
       <div className="flex items-center gap-2">
+        {actions}
         <Button variant="ghost" onClick={onRefresh} disabled={refreshing} className="text-xs">
           {refreshing ? "Refreshing…" : "↻ Refresh"}
         </Button>

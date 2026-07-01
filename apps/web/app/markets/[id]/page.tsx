@@ -5,24 +5,22 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMarket, useOrderbook } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import { parseJsonArray, pct, usdCompact } from "@/lib/format";
-import { Badge, Card, CardHeader, ErrorNote, Segmented, Spinner } from "@/components/ui";
+import { cents, parseJsonArray, pct, toNum, usdCompact } from "@/lib/format";
+import { yesProbability } from "@/lib/feeds";
+import type { OrderSide } from "@/lib/types";
+import { Badge, Card, CardHeader, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
+import { AnimatedNumber, FlashOnChange } from "@/components/motion";
 import { MarketPriceChart } from "@/components/charts/MarketPriceChart";
-import { OrderbookTable } from "@/components/OrderbookTable";
+import { OrderbookTable, type BookSelection } from "@/components/OrderbookTable";
+import { MarketMovesTape } from "@/components/trade/MarketMovesTape";
+import { QueueCard } from "@/components/trade/QueuePosition";
 import { OrderTicket } from "@/components/OrderTicket";
 import { RuleBuilder } from "@/components/RuleBuilder";
 import { RuleList } from "@/components/RuleList";
 import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
 
-function HeaderStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col">
-      <span className="text-[10px] uppercase tracking-wide text-muted">{label}</span>
-      <span className="tabular text-sm font-semibold text-fg">{value}</span>
-    </div>
-  );
-}
+type Prefill = { price?: string; size?: string; side?: OrderSide; nonce: number };
 
 export default function MarketCockpitPage() {
   const params = useParams<{ id: string }>();
@@ -30,7 +28,9 @@ export default function MarketCockpitPage() {
 
   const market = useMarket(id);
   const session = useSession();
+  const signedIn = Boolean(session.data);
   const [outcomeIdx, setOutcomeIdx] = useState(0);
+  const [prefill, setPrefill] = useState<Prefill | undefined>(undefined);
   const orderbook = useOrderbook(id, outcomeIdx);
 
   if (market.isLoading) return <Spinner label="Loading market…" />;
@@ -52,10 +52,22 @@ export default function MarketCockpitPage() {
     disabled: !tokenIds[i],
   }));
   const outcomeLabel = outcomes[outcomeIdx] ?? `Outcome ${outcomeIdx}`;
+  const outcomeProb = prices[outcomeIdx] != null ? toNum(prices[outcomeIdx]) : yesProbability(m);
 
   const ob = orderbook.data
     ? { bids: orderbook.data.bids, asks: orderbook.data.asks }
     : live?.orderbook;
+
+  // Click a book level → prefill the ticket. Lifting an ask means you BUY into it;
+  // a bid means you SELL into it. Suggested size = that level's depth.
+  const onBookSelect = (sel: BookSelection) => {
+    setPrefill({
+      price: String(Number(sel.price.toFixed(3))),
+      size: String(Math.max(1, Math.round(sel.size))),
+      side: sel.side === "ask" ? "BUY" : "SELL",
+      nonce: Date.now(),
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -64,7 +76,7 @@ export default function MarketCockpitPage() {
           ← Markets
         </Link>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h1 className="text-lg font-semibold leading-snug text-fg sm:text-xl">{m.question}</h1>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {m.active && !m.closed ? (
@@ -75,12 +87,31 @@ export default function MarketCockpitPage() {
                 <Badge tone="neutral">closed</Badge>
               )}
               {m.neg_risk ? <Badge tone="accent">neg-risk</Badge> : null}
+              <span className="tabular text-[11px] text-muted">
+                Vol {usdCompact(m.volume)} · Liq {usdCompact(m.liquidity)} · Spr {pct(m.spread)}
+              </span>
             </div>
           </div>
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <HeaderStat label="Volume" value={usdCompact(m.volume)} />
-            <HeaderStat label="Liquidity" value={usdCompact(m.liquidity)} />
-            <HeaderStat label="Spread" value={pct(m.spread)} />
+          <div className="shrink-0 text-right">
+            <div className="text-[10px] uppercase tracking-wide text-muted">{outcomeLabel}</div>
+            <FlashOnChange value={outcomeProb}>
+              <div
+                className={cn(
+                  "tabular text-3xl font-semibold leading-none",
+                  outcomeProb >= 0.5 ? "text-fg" : "text-neg",
+                )}
+              >
+                <AnimatedNumber value={outcomeProb * 100} format={(n) => `${n.toFixed(0)}%`} />
+              </div>
+            </FlashOnChange>
+            <div className="mt-1.5 flex items-center justify-end gap-1 text-[10px]">
+              <span className="tabular rounded-sm bg-pos/10 px-1 py-px font-medium text-pos">
+                Y {cents(outcomeProb)}
+              </span>
+              <span className="tabular rounded-sm bg-neg/10 px-1 py-px font-medium text-neg">
+                N {cents(1 - outcomeProb)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -90,7 +121,7 @@ export default function MarketCockpitPage() {
       <TriggerAlert />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Left: chart + orderbook */}
+        {/* Left: chart + orderbook + queue */}
         <div className="space-y-4 lg:col-span-2">
           <div className="flex items-center justify-end">
             <Segmented
@@ -103,13 +134,11 @@ export default function MarketCockpitPage() {
 
           <MarketPriceChart marketId={id} outcome={outcomeIdx} outcomeLabel={outcomeLabel} />
 
+          {ob ? <MarketMovesTape bids={ob.bids} asks={ob.asks} /> : null}
+
           <Card>
             <CardHeader
-              right={
-                <span className="tabular text-xs text-muted">
-                  {outcomeLabel} · {prices[outcomeIdx] ? pct(prices[outcomeIdx]) : "—"}
-                </span>
-              }
+              right={<span className="text-[11px] text-muted">click a level to trade</span>}
             >
               Order book
             </CardHeader>
@@ -117,7 +146,7 @@ export default function MarketCockpitPage() {
               {orderbook.isLoading && !ob ? (
                 <Spinner />
               ) : ob ? (
-                <OrderbookTable bids={ob.bids} asks={ob.asks} />
+                <OrderbookTable bids={ob.bids} asks={ob.asks} onSelect={onBookSelect} />
               ) : (
                 <div className="text-sm text-muted">Order book unavailable.</div>
               )}
@@ -126,6 +155,13 @@ export default function MarketCockpitPage() {
               </div>
             </div>
           </Card>
+
+          <QueueCard
+            signedIn={signedIn}
+            tokenId={tokenIds[outcomeIdx]}
+            bids={ob?.bids ?? []}
+            asks={ob?.asks ?? []}
+          />
         </div>
 
         {/* Right: order ticket + conditional rule builder */}
@@ -139,7 +175,9 @@ export default function MarketCockpitPage() {
                 outcomes={outcomes}
                 negRisk={m.neg_risk ?? false}
                 isStale={isStale}
-                signedIn={Boolean(session.data)}
+                signedIn={signedIn}
+                outcomeIdx={outcomeIdx}
+                prefill={prefill}
               />
             </div>
           </Card>
@@ -152,7 +190,7 @@ export default function MarketCockpitPage() {
                 conditionId={m.conditionId}
                 tokenIds={tokenIds}
                 outcomes={outcomes}
-                signedIn={Boolean(session.data)}
+                signedIn={signedIn}
               />
             </div>
           </Card>

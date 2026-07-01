@@ -1,6 +1,8 @@
 "use client";
 
 import { useId } from "react";
+import { cn } from "@/components/ui";
+import { useReducedMotion } from "@/components/motion";
 
 /**
  * Compact trend sparkline — no axes, no interaction. For table cells, hover
@@ -77,5 +79,61 @@ export function MiniSparkline({
       />
       <circle cx={last[0]} cy={last[1]} r={1.8} fill={color} />
     </svg>
+  );
+}
+
+/**
+ * Sparkline with a glowing, pulsing leading dot — for live feeds and the movers
+ * strip. The pulse is an HTML overlay (not an SVG node) so it stays circular even
+ * when the sparkline is stretched with preserveAspectRatio="none".
+ */
+export function LiveSparkline({
+  values,
+  height = 32,
+  stroke,
+  className,
+  ...rest
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  stroke?: string;
+  fill?: boolean;
+  strokeWidth?: number;
+  className?: string;
+}) {
+  const reduced = useReducedMotion();
+  const up = values.length >= 2 ? values[values.length - 1]! >= values[0]! : true;
+  const color = stroke ?? (up ? "var(--pos)" : "var(--neg)");
+
+  // Match MiniSparkline's vertical mapping (pad=2) so the dot lands on the line.
+  const pad = 2;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const lastV = values[values.length - 1] ?? min;
+  const topFrac = (pad + (height - pad * 2) * (1 - (lastV - min) / range)) / height;
+
+  return (
+    <div className={cn("relative", className)}>
+      <MiniSparkline
+        values={values}
+        height={height}
+        stroke={stroke}
+        className="h-full w-full"
+        {...rest}
+      />
+      {!reduced && values.length >= 2 ? (
+        <span
+          className="pulse-dot absolute h-1.5 w-1.5 -translate-y-1/2 rounded-full"
+          style={{
+            right: 1,
+            top: `${topFrac * 100}%`,
+            background: color,
+            boxShadow: `0 0 6px ${color}`,
+          }}
+        />
+      ) : null}
+    </div>
   );
 }

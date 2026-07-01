@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePricesHistory } from "@/lib/queries";
+import { POLL, usePricesHistory } from "@/lib/queries";
 import { cents, signedPct } from "@/lib/format";
 import { Card, cn, LiveDot, Segmented, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "./AreaChart";
@@ -27,7 +27,7 @@ export function MarketPriceChart({
   const history = usePricesHistory(marketId, {
     interval: range,
     outcome,
-    refetchInterval: 15_000,
+    refetchInterval: POLL.pricesHistory,
   });
 
   const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
@@ -67,7 +67,13 @@ export function MarketPriceChart({
             Failed to load price history.
           </div>
         ) : series.length >= 2 ? (
-          <AreaChart data={series} height={260} valueFormat={(v) => cents(v)} />
+          <AreaChart
+            data={series}
+            height={260}
+            valueFormat={(v) => cents(v)}
+            label={outcomeLabel}
+            baseline={0.5}
+          />
         ) : (
           <div className="flex h-[260px] items-center justify-center text-sm text-muted">
             No price history available for this range.

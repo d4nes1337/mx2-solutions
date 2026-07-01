@@ -26,6 +26,8 @@ import { PortfolioEquityChart, useEquityWindow } from "@/components/portfolio/Po
 import { PortfolioAllocation } from "@/components/portfolio/PortfolioAllocation";
 import { OpenOrdersTable } from "@/components/portfolio/OpenOrdersTable";
 import { WalletsSection } from "@/components/profile/WalletsSection";
+import { ShareButton } from "@/components/share/ShareButton";
+import { flexModelFromPortfolio } from "@/components/share/factories";
 
 export default function PortfolioPage() {
   const session = useSession();
@@ -95,8 +97,6 @@ export default function PortfolioPage() {
 
   return (
     <div className="space-y-4">
-      <WalletsSection signedIn={signedIn} />
-
       <PortfolioHeader
         signerAddress={session.data!.address}
         queryAddress={overview.data?.queryAddress}
@@ -105,6 +105,14 @@ export default function PortfolioPage() {
         refreshing={refreshing}
         proxyInput={proxyInput}
         setProxyInput={setProxyInput}
+        actions={
+          overview.data ? (
+            <ShareButton
+              makeModel={() => flexModelFromPortfolio(overview.data!.summary)}
+              label="Share PnL"
+            />
+          ) : undefined
+        }
       />
 
       {showDepositHint ? (
@@ -204,6 +212,8 @@ export default function PortfolioPage() {
           ) : null}
         </div>
       </Card>
+
+      <WalletsSection signedIn={signedIn} />
     </div>
   );
 }

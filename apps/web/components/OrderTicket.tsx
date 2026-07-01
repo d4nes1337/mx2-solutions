@@ -1,23 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAccount } from "wagmi";
-import { Check, KeyRound, Plus, RefreshCcw, Wallet, Zap } from "lucide-react";
+import { Wallet } from "lucide-react";
 import {
-  useActivateDepositWallet,
   useOrderPreview,
-  useSetupCredentials,
   useSetPrimaryTradingAccount,
   useSubmitOrder,
   useTradeStatus,
   useTradingAccounts,
-  useUpsertExternalTradingAccount,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { buildPreviewRequest } from "@/lib/orders";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
-import { signClobAuth } from "@/lib/clob-auth";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
 
@@ -26,6 +22,9 @@ import { Badge, Button, ErrorNote, cn } from "./ui";
 // the EOA (signatureType 2; maker = the derived deposit wallet), then POSTs the
 // signed struct. The backend still gates submission behind FEATURE_LIVE_TRADING +
 // kill switch + geoblock, so submit stays disabled until trading is enabled.
+//
+// Wallet *management* (add/activate/credentials) lives in the Profile page's
+// WalletsSection — this ticket only shows the active wallet + a quick-switch.
 export function OrderTicket({
   conditionId,
   tokenIds,
@@ -33,6 +32,8 @@ export function OrderTicket({
   negRisk,
   isStale,
   signedIn,
+  outcomeIdx,
+  prefill,
 }: {
   conditionId: string;
   tokenIds: string[];
@@ -40,41 +41,47 @@ export function OrderTicket({
   negRisk: boolean;
   isStale: boolean;
   signedIn: boolean;
+  /** Controlled by the page's outcome selector (chart + book + ticket stay in sync). */
+  outcomeIdx: number;
+  /** Click-to-trade from the order book; bump `nonce` to re-apply. */
+  prefill?: { price?: string; size?: string; side?: OrderSide; nonce: number };
 }) {
   const { address, connector } = useAccount();
   const tradeStatus = useTradeStatus();
   const tradingAccounts = useTradingAccounts(signedIn);
   const setPrimaryAccount = useSetPrimaryTradingAccount();
-  const addExternalAccount = useUpsertExternalTradingAccount();
-  const activateDepositWallet = useActivateDepositWallet();
   const preview = useOrderPreview();
   const submit = useSubmitOrder();
-  const setupCreds = useSetupCredentials();
 
-  const [outcomeIdx, setOutcomeIdx] = useState(0);
   const [side, setSide] = useState<OrderSide>("BUY");
   const [price, setPrice] = useState("0.50");
   const [size, setSize] = useState("10");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [signError, setSignError] = useState<string | null>(null);
-  const [addWalletOpen, setAddWalletOpen] = useState(false);
-  const [newWalletAddress, setNewWalletAddress] = useState("");
-  const [newWalletFunder, setNewWalletFunder] = useState("");
-  const [newWalletLabel, setNewWalletLabel] = useState("");
-  const [addWalletError, setAddWalletError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!prefill) return;
+    if (prefill.price != null) setPrice(prefill.price);
+    if (prefill.size != null) setSize(prefill.size);
+    if (prefill.side) setSide(prefill.side);
+    setValidationError(null);
+    preview.reset();
+    submit.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.nonce]);
 
   const tokenId = tokenIds[outcomeIdx];
   const accounts = tradingAccounts.data?.accounts ?? [];
   const activeAccount = tradingAccounts.data?.primaryAccount ?? null;
-  const connectedAccountAlreadyAdded = accounts.some(
-    (account) => address && account.signerAddress.toLowerCase() === address.toLowerCase(),
-  );
   const funder = activeAccount?.funderAddress ?? "";
   const connectedMatchesActive =
     Boolean(address && activeAccount) &&
     address!.toLowerCase() === activeAccount!.signerAddress.toLowerCase();
-  const browserWalletMismatch =
-    activeAccount?.signingMode === "browser" && (!address || !connectedMatchesActive);
+  const walletReady = activeAccount
+    ? activeAccount.signingMode === "browser"
+      ? activeAccount.credentialsReady && connectedMatchesActive
+      : activeAccount.status === "ready"
+    : false;
 
   const accountCanPreview =
     activeAccount?.signingMode === "browser" ||
@@ -198,55 +205,6 @@ export function OrderTicket({
     }
   };
 
-  const [setupError, setSetupError] = useState<string | null>(null);
-  const addWallet = () => {
-    setAddWalletError(null);
-    const signerAddress = newWalletAddress.trim() || address || "";
-    if (!signerAddress) {
-      setAddWalletError("Enter a wallet address or connect one.");
-      return;
-    }
-    addExternalAccount.mutate(
-      {
-        address: signerAddress,
-        funderAddress: newWalletFunder.trim() || undefined,
-        label: newWalletLabel.trim() || undefined,
-        makePrimary: true,
-      },
-      {
-        onSuccess: () => {
-          setNewWalletAddress("");
-          setNewWalletFunder("");
-          setNewWalletLabel("");
-          setAddWalletOpen(false);
-        },
-      },
-    );
-  };
-
-  const setupTradingCredentials = async () => {
-    setSetupError(null);
-    if (!activeAccount) {
-      setSetupError("Select a trading account first.");
-      return;
-    }
-    if (!address || !connector) {
-      setSetupError("Connect a wallet first.");
-      return;
-    }
-    if (address.toLowerCase() !== activeAccount.signerAddress.toLowerCase()) {
-      setSetupError("Switch your connected wallet to the selected trading account first.");
-      return;
-    }
-    try {
-      const provider = (await connector.getProvider()) as Eip1193Provider;
-      const auth = await signClobAuth(provider, activeAccount.signerAddress, 137);
-      setupCreds.mutate({ ...auth, tradingAccountId: activeAccount.id });
-    } catch (e) {
-      setSetupError(e instanceof Error ? e.message : "Signing failed.");
-    }
-  };
-
   const previewError =
     preview.error instanceof ApiError
       ? preview.error
@@ -263,270 +221,65 @@ export function OrderTicket({
 
   return (
     <div className="space-y-3">
+      {/* Wallet summary — full management lives in Profile → WalletsSection. */}
       {signedIn ? (
-        <div className="space-y-3 rounded-md border border-border bg-surface-2 p-3 text-xs">
+        <div className="space-y-2 rounded-md border border-border bg-surface-2 p-3 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-fg">
-              <Wallet size={14} />
-              Trading wallet
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <Wallet size={14} className="shrink-0" />
+              <span className="truncate font-medium text-fg">
+                {activeAccount?.label ?? "No trading wallet"}
+              </span>
+              {activeAccount ? (
+                <span className="tabular shrink-0 text-[11px] text-muted">
+                  {shortAddress(activeAccount.signerAddress)}
+                </span>
+              ) : null}
             </span>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Badge tone={tradingEnabled ? "pos" : "warn"} dot>
                 {tradingEnabled ? "live" : "live off"}
               </Badge>
               {activeAccount ? (
-                <Badge tone={activeAccount.signingMode === "browser" ? "warn" : "pos"}>
-                  {activeAccount.signingMode === "browser" ? "signature" : "no-popup"}
-                </Badge>
+                <Badge tone={walletReady ? "pos" : "warn"}>{walletReady ? "ready" : "setup"}</Badge>
               ) : null}
             </div>
           </div>
-          <select
-            value={activeAccount?.id ?? ""}
-            onChange={(e) => {
-              if (e.target.value) setPrimaryAccount.mutate(e.target.value);
-            }}
-            disabled={tradingAccounts.isLoading || setPrimaryAccount.isPending}
-            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
-          >
-            {tradingAccounts.data?.accounts.length ? null : (
-              <option value="">No trading accounts</option>
-            )}
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.label} · {shortAddress(account.signerAddress)}
-              </option>
-            ))}
-          </select>
 
-          {accounts.length ? (
-            <div className="space-y-1">
+          {accounts.length > 1 ? (
+            <select
+              value={activeAccount?.id ?? ""}
+              onChange={(e) => {
+                if (e.target.value) setPrimaryAccount.mutate(e.target.value);
+              }}
+              disabled={setPrimaryAccount.isPending}
+              aria-label="Switch trading wallet"
+              className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
+            >
               {accounts.map((account) => (
-                <button
-                  key={account.id}
-                  type="button"
-                  onClick={() => setPrimaryAccount.mutate(account.id)}
-                  disabled={setPrimaryAccount.isPending || account.isPrimary}
-                  className={cn(
-                    "w-full rounded-md border px-2.5 py-2 text-left transition-colors disabled:cursor-default",
-                    account.isPrimary
-                      ? "border-accent/40 bg-accent/10"
-                      : "border-border bg-surface hover:border-border-strong",
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-fg">{account.label}</div>
-                      <div className="tabular mt-0.5 text-[11px] text-muted">
-                        {shortAddress(account.signerAddress)}
-                        {account.funderAddress ? ` -> ${shortAddress(account.funderAddress)}` : ""}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {account.isPrimary ? (
-                        <Badge tone="accent" className="gap-1">
-                          <Check size={11} />
-                          primary
-                        </Badge>
-                      ) : null}
-                      <Badge tone={account.signingMode === "browser" ? "warn" : "pos"}>
-                        {account.signingMode === "browser" ? "sign" : "auto"}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="mt-1 text-[11px] text-muted">
-                    {statusLabel(account.status, account.nextAction)}
-                    {account.credentialsReady ? " · credentials ready" : ""}
-                  </div>
-                </button>
+                <option key={account.id} value={account.id}>
+                  {account.label} · {shortAddress(account.signerAddress)}
+                </option>
               ))}
-            </div>
+            </select>
           ) : null}
 
-          {activeAccount ? (
-            <div className="space-y-1">
-              <Row k="Signer" v={shortAddress(activeAccount.signerAddress)} />
-              <Row
-                k="Funder"
-                v={
-                  activeAccount.funderAddress
-                    ? shortAddress(activeAccount.funderAddress)
-                    : "activation needed"
-                }
-              />
-              <Row k="Status" v={statusLabel(activeAccount.status, activeAccount.nextAction)} />
-              {activeAccount.signingMode === "browser" ? (
-                <Row
-                  k="Connected"
-                  v={
-                    connectedMatchesActive
-                      ? "selected signer"
-                      : address
-                        ? shortAddress(address)
-                        : "not connected"
-                  }
-                />
-              ) : null}
-              {browserWalletMismatch ? (
-                <p className="text-warn">
-                  Connect {shortAddress(activeAccount.signerAddress)} before credential setup or
-                  order signing.
-                </p>
-              ) : null}
-              {activeAccount.kind === "internal_privy" && activeAccount.status !== "ready" ? (
-                <p className="text-warn">
-                  Internal no-signature trading needs Polymarket deposit-wallet activation before
-                  orders can use this account.
-                </p>
-              ) : null}
-            </div>
+          {!activeAccount || !walletReady ? (
+            <p className="text-[11px] text-muted">
+              {accounts.length === 0 ? "No trading wallet yet." : "This wallet needs setup."}{" "}
+              <Link href="/profile" className="font-medium text-accent underline">
+                Manage in Profile →
+              </Link>
+            </p>
           ) : (
-            <p className="text-muted">Initializing wallet choices…</p>
-          )}
-
-          <div className="grid gap-2 sm:grid-cols-2">
-            {address && connectedAccountAlreadyAdded === false ? (
-              <Button
-                variant="ghost"
-                className="w-full"
-                disabled={addExternalAccount.isPending}
-                onClick={() =>
-                  addExternalAccount.mutate({
-                    address,
-                    label: "External Polymarket wallet",
-                    makePrimary: true,
-                  })
-                }
-              >
-                <Wallet size={14} />
-                {addExternalAccount.isPending ? "Adding…" : "Use connected"}
-              </Button>
-            ) : null}
-            <Button variant="ghost" className="w-full" onClick={() => setAddWalletOpen((v) => !v)}>
-              <Plus size={14} />
-              Add wallet
-            </Button>
-          </div>
-
-          {addWalletOpen ? (
-            <div className="space-y-2 rounded-md border border-border bg-surface p-2">
-              <input
-                value={newWalletAddress}
-                onChange={(e) => setNewWalletAddress(e.target.value)}
-                placeholder={address ? `Signer, blank = ${shortAddress(address)}` : "Signer 0x..."}
-                className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
-              />
-              <input
-                value={newWalletFunder}
-                onChange={(e) => setNewWalletFunder(e.target.value)}
-                placeholder="Polymarket wallet/proxy 0x... (optional)"
-                className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
-              />
-              <input
-                value={newWalletLabel}
-                onChange={(e) => setNewWalletLabel(e.target.value)}
-                placeholder="Label (optional)"
-                className="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
-              />
-              <Button
-                className="w-full"
-                disabled={addExternalAccount.isPending}
-                onClick={addWallet}
-              >
-                <Plus size={14} />
-                {addExternalAccount.isPending ? "Saving…" : "Save and use wallet"}
-              </Button>
-              {addWalletError ? <ErrorNote message={addWalletError} /> : null}
+            <div className="flex justify-end">
+              <Link href="/profile" className="text-[11px] font-medium text-accent hover:text-fg">
+                Manage wallets →
+              </Link>
             </div>
-          ) : null}
-
-          {addExternalAccount.error ? (
-            <ErrorNote
-              message={
-                addExternalAccount.error instanceof Error
-                  ? addExternalAccount.error.message
-                  : "Could not add wallet."
-              }
-            />
-          ) : null}
-          {activeAccount?.kind === "internal_privy" &&
-          activeAccount.nextAction === "activate_deposit_wallet" ? (
-            <Button
-              variant="ghost"
-              className="w-full"
-              disabled={activateDepositWallet.isPending}
-              onClick={() => activateDepositWallet.mutate()}
-            >
-              <Zap size={14} />
-              {activateDepositWallet.isPending ? "Activating…" : "Activate deposit wallet"}
-            </Button>
-          ) : null}
-          {activeAccount?.signingMode === "browser" ? (
-            <Button
-              variant="ghost"
-              className="w-full"
-              onClick={() => void setupTradingCredentials()}
-              disabled={
-                setupCreds.isPending ||
-                setupCreds.isSuccess ||
-                activeAccount.credentialsReady ||
-                !connectedMatchesActive
-              }
-              title="Sign once to derive CLOB API credentials for the selected wallet"
-            >
-              {setupCreds.isPending ? (
-                <RefreshCcw size={14} className="animate-spin" />
-              ) : (
-                <KeyRound size={14} />
-              )}
-              {setupCreds.isPending
-                ? "Check wallet…"
-                : activeAccount.credentialsReady || setupCreds.isSuccess
-                  ? "Credentials ready"
-                  : "Set up trading credentials"}
-            </Button>
-          ) : null}
-          {setupError ? <ErrorNote message={setupError} /> : null}
-          {setupCreds.error ? (
-            <ErrorNote
-              message={`Credential setup failed: ${
-                setupCreds.error instanceof Error ? setupCreds.error.message : "unknown error"
-              }`}
-            />
-          ) : null}
-          {activateDepositWallet.error ? (
-            <ErrorNote
-              message={
-                activateDepositWallet.error instanceof Error
-                  ? activateDepositWallet.error.message
-                  : "Could not activate deposit wallet."
-              }
-            />
-          ) : null}
-          {activateDepositWallet.data?.relayer.deployed ? (
-            <p className="text-pos">Deposit wallet active. Add funds to unlock no-popup orders.</p>
-          ) : null}
+          )}
         </div>
       ) : null}
-
-      {/* Outcome selector */}
-      <div className="flex gap-2">
-        {(outcomes.length ? outcomes : ["YES", "NO"]).map((label, i) => (
-          <button
-            key={i}
-            onClick={() => setOutcomeIdx(i)}
-            disabled={!tokenIds[i]}
-            className={cn(
-              "flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors disabled:opacity-30",
-              outcomeIdx === i
-                ? "border-accent/50 bg-accent/15 text-accent"
-                : "border-border text-muted hover:text-fg",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
 
       {/* Side */}
       <div className="flex gap-2">
@@ -570,6 +323,15 @@ export function OrderTicket({
         </label>
       </div>
 
+      {Number(price) > 0 && Number(size) > 0 ? (
+        <div className="flex items-center justify-between rounded-md border border-border bg-surface-2/50 px-2.5 py-1.5 text-[11px]">
+          <span className="text-muted">Position value</span>
+          <span className="tabular font-semibold text-fg">
+            ${(Number(price) * Number(size)).toFixed(2)}
+          </span>
+        </div>
+      ) : null}
+
       <Button
         className="w-full"
         onClick={submitPreview}
@@ -586,8 +348,11 @@ export function OrderTicket({
         </p>
       ) : activeAccount && !accountCanPreview ? (
         <p className="text-xs text-warn">
-          Selected wallet is not ready for order preview. Use an external wallet or activate the
-          internal deposit wallet.
+          Selected wallet is not ready for order preview. Set it up in{" "}
+          <Link href="/profile" className="font-medium underline">
+            Profile
+          </Link>
+          .
         </p>
       ) : null}
 
@@ -604,9 +369,16 @@ export function OrderTicket({
       ) : null}
 
       {preview.data ? (
-        <div className="space-y-1 rounded-md border border-border bg-surface-2 p-3 text-xs">
+        <div
+          className={cn(
+            "space-y-1 rounded-md border bg-surface-2 p-3 text-xs transition-colors",
+            submit.data ? "celebrate border-pos/50" : "border-border",
+          )}
+        >
           <div className="mb-1 flex items-center justify-between">
-            <span className="font-semibold text-fg">Order preview</span>
+            <span className="font-semibold text-fg">
+              {submit.data ? "✓ Order submitted" : "Order preview"}
+            </span>
             {submit.data ? (
               <Badge tone="pos">{submit.data.status}</Badge>
             ) : (
@@ -634,7 +406,7 @@ export function OrderTicket({
       ) : null}
 
       {/* Server wallet setup hint */}
-      {activeAccount?.signingMode !== "browser" && (
+      {activeAccount?.signingMode !== "browser" && signedIn ? (
         <div className="rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-warn">
           {activeAccount?.status === "needs_deposit_wallet"
             ? "Activate your trading account first."
@@ -645,7 +417,7 @@ export function OrderTicket({
             Go to Profile →
           </Link>
         </div>
-      )}
+      ) : null}
 
       {signError ? <ErrorNote message={signError} /> : null}
       {submitError ? (
@@ -656,7 +428,7 @@ export function OrderTicket({
               : submitError.status === 403
                 ? "Geoblocked: order submission is not available from your region."
                 : submitError.message.includes("CLOB_CREDENTIALS_NOT_SET")
-                  ? "No trading credentials yet — click “Set up trading credentials” below first."
+                  ? "No trading credentials yet — set them up in Profile first."
                   : submitError.message
           }
         />
@@ -697,12 +469,4 @@ function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 
 function shortAddress(address: string) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
-}
-
-function statusLabel(status: string, nextAction?: string | null) {
-  if (status === "ready") return "ready";
-  if (nextAction === "setup_credentials") return "credentials needed";
-  if (nextAction === "activate_deposit_wallet") return "deposit wallet needed";
-  if (nextAction === "top_up") return "top up needed";
-  return status.replaceAll("_", " ");
 }

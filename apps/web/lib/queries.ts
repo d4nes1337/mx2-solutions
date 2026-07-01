@@ -39,6 +39,25 @@ import type {
   UpsertExternalTradingAccountRequest,
 } from "./types";
 
+/**
+ * Central poll cadences (ms). Tightened for a live-terminal feel. These are the
+ * first knob to turn if the API/DB sees load pressure — raise the hot ones
+ * (orderbook, portfolio) before touching architecture. See RISK_REGISTER
+ * (poll-load).
+ */
+export const POLL = {
+  homeFeed: 60_000,
+  orderbook: 2_000, // was 5_000
+  pricesHistory: 10_000, // live-chart default; was 15_000 at call sites
+  tradingWallet: 20_000,
+  portfolio: 10_000, // was 30_000
+  openOrders: 15_000,
+  rules: 4_000,
+  ruleEval: 3_000,
+  triggers: 4_000,
+  triggerDetail: 3_000,
+} as const;
+
 // ── Public read-only data ────────────────────────────────────────────────────
 
 const FEED_BASE = `/api/events?limit=${FEED_LIMIT}&active=true&closed=false`;
@@ -48,7 +67,7 @@ export function useHomeFeed() {
     queryKey: ["feed", "home"],
     queryFn: () => api.get<HomeFeedResponse>("/api/feed/home"),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: POLL.homeFeed,
   });
 }
 
@@ -119,7 +138,7 @@ export function useOrderbook(id: string, outcome: number) {
     queryKey: ["orderbook", id, outcome],
     queryFn: () => api.get<OrderbookResponse>(`/api/markets/${id}/orderbook?outcome=${outcome}`),
     enabled: Boolean(id),
-    refetchInterval: 5_000,
+    refetchInterval: POLL.orderbook,
   });
 }
 
@@ -226,14 +245,15 @@ export function useTradingWallet(enabled = true) {
     queryFn: () => api.get<TradingWalletStatusResponse>("/api/trading-wallet"),
     enabled,
     staleTime: 15_000,
-    refetchInterval: 20_000,
+    refetchInterval: POLL.tradingWallet,
   });
 }
 
 export function useBootstrapAllowances() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ ok: boolean; status: string }>("/api/trading-wallet/bootstrap-allowances"),
+    mutationFn: () =>
+      api.post<{ ok: boolean; status: string }>("/api/trading-wallet/bootstrap-allowances"),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
       void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
@@ -256,7 +276,7 @@ export function usePortfolioOverview(enabled: boolean, proxyWallet?: string) {
     queryFn: () =>
       api.get<PortfolioOverviewResponse>(`/api/profile/overview${proxyQuery(proxyWallet)}`),
     enabled,
-    refetchInterval: 30_000,
+    refetchInterval: POLL.portfolio,
   });
 }
 
@@ -277,7 +297,7 @@ export function useOpenOrders(enabled: boolean) {
     queryKey: ["open-orders"],
     queryFn: () => api.get<OpenOrdersResponse>("/api/profile/open-orders"),
     enabled,
-    refetchInterval: 15_000,
+    refetchInterval: POLL.openOrders,
   });
 }
 
@@ -362,7 +382,7 @@ export function useRules() {
   return useQuery({
     queryKey: ["rules"],
     queryFn: () => api.get<RulesResponse>("/api/rules"),
-    refetchInterval: 4_000,
+    refetchInterval: POLL.rules,
   });
 }
 
@@ -397,7 +417,7 @@ export function useRuleEvaluateNow(id: string, enabled: boolean) {
     queryKey: ["rule-eval", id],
     queryFn: () => api.get<EvaluateNowResponse>(`/api/rules/${id}/evaluate-now`),
     enabled,
-    refetchInterval: 3_000,
+    refetchInterval: POLL.ruleEval,
   });
 }
 
@@ -405,7 +425,7 @@ export function useTriggers() {
   return useQuery({
     queryKey: ["triggers"],
     queryFn: () => api.get<TriggersResponse>("/api/rules/triggers"),
-    refetchInterval: 4_000,
+    refetchInterval: POLL.triggers,
   });
 }
 
@@ -414,7 +434,7 @@ export function useTriggerDetail(id: string | null) {
     queryKey: ["trigger", id],
     queryFn: () => api.get<TriggerDetailResponse>(`/api/rules/triggers/${id}`),
     enabled: Boolean(id),
-    refetchInterval: 3_000,
+    refetchInterval: POLL.triggerDetail,
   });
 }
 

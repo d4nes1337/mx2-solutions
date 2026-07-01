@@ -2,22 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRuleControl, useRuleEvaluateNow, useRules } from "@/lib/queries";
-import { fmtDuration } from "@/lib/rules";
-import type { RulePredicateInput, RuleRow, RuleStatus } from "@/lib/types";
+import { fmtDuration, ruleStatusMeta } from "@/lib/rules";
+import type { RulePredicateInput, RuleRow } from "@/lib/types";
 import { Badge, Button, Empty, Spinner, cn } from "./ui";
-
-const STATUS_TONE: Record<RuleStatus, "neutral" | "pos" | "neg" | "warn" | "accent"> = {
-  DRAFT: "neutral",
-  ACTIVE_WAITING: "neutral",
-  ACTIVE_ACCUMULATING: "accent",
-  PAUSED: "warn",
-  TRIGGERED_AWAITING_USER: "warn",
-  EXECUTED_MANUALLY: "pos",
-  EXPIRED: "neutral",
-  CANCELLED: "neutral",
-  INVALIDATED: "neg",
-  ERROR: "neg",
-};
 
 const summarize = (p: RulePredicateInput): string => {
   if (p.kind === "price")
@@ -38,6 +25,7 @@ const useNow = (active: boolean): number => {
 
 function RuleCard({ rule }: { rule: RuleRow }) {
   const control = useRuleControl();
+  const meta = ruleStatusMeta(rule.status);
   const isActive = rule.status === "ACTIVE_WAITING" || rule.status === "ACTIVE_ACCUMULATING";
   const evalNow = useRuleEvaluateNow(rule.id, isActive);
   const now = useNow(rule.status === "ACTIVE_ACCUMULATING");
@@ -54,8 +42,8 @@ function RuleCard({ rule }: { rule: RuleRow }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <Badge tone={STATUS_TONE[rule.status]}>
-              {rule.status.replace(/_/g, " ").toLowerCase()}
+            <Badge tone={meta.tone} dot={meta.live}>
+              {meta.label}
             </Badge>
             <span className="text-xs text-muted">{rule.side}</span>
           </div>
@@ -135,7 +123,9 @@ export function RuleList({ conditionId }: { conditionId?: string }) {
 
   if (rules.isLoading) return <Spinner label="Loading rules…" />;
   const all = rules.data?.rules ?? [];
-  const list = conditionId ? all.filter((r) => r.conditionId === conditionId) : all;
+  const list = (conditionId ? all.filter((r) => r.conditionId === conditionId) : all)
+    .slice()
+    .sort((a, b) => ruleStatusMeta(a.status).order - ruleStatusMeta(b.status).order);
 
   if (list.length === 0) {
     return <Empty>No conditional rules yet. Create one from a market.</Empty>;

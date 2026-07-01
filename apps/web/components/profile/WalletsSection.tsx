@@ -71,11 +71,9 @@ export function WalletsSection({ signedIn }: { signedIn: boolean }) {
             }}
             className="rounded p-1 text-muted hover:text-fg"
             title="Refresh"
+            aria-label="Refresh trading wallets"
           >
-            <RefreshCcw
-              size={13}
-              className={tradingAccounts.isFetching ? "animate-spin" : ""}
-            />
+            <RefreshCcw size={13} className={tradingAccounts.isFetching ? "animate-spin" : ""} />
           </button>
         }
       >
@@ -135,7 +133,8 @@ export function WalletsSection({ signedIn }: { signedIn: boolean }) {
         {/* Relayer feature note */}
         {signedIn && walletStatus.data && !walletStatus.data.relayerEnabled && (
           <p className="text-[11px] text-muted">
-            Server-side signing (no-popup) is not yet active on this server. External wallet browser signing is available.
+            Server-side signing (no-popup) is not yet active on this server. External wallet browser
+            signing is available.
           </p>
         )}
       </div>
