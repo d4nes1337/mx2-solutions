@@ -21,16 +21,11 @@ compiles anything itself.** Building this monorepo's single shared image (see
 memory/CPU for the better part of an hour; GitHub's runners do the same build in
 under a minute.
 
-The GHCR package is **private**, so the box needs a pull credential once:
+The GHCR package (`ghcr.io/d4nes1337/mx2-solutions`) is **public** — no image contains
+secrets (those come from `.env.production` at runtime), so the box needs no registry
+credential; it just `docker pull`s.
 
-```bash
-# On github.com: Settings → Developer settings → Personal access tokens →
-# Fine-grained tokens → this repo only → Permissions → Packages: Read-only.
-ssh ubuntu@<static-ip>
-echo "<paste the token>" | docker login ghcr.io -u <your-github-username> --password-stdin
-```
-
-Then bootstrap + deploy:
+Bootstrap + deploy:
 
 ```bash
 ssh ubuntu@<static-ip>
