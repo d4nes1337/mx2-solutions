@@ -1,7 +1,19 @@
 # Production stack for a single Lightsail box: Postgres + one-shot migrate + api +
 # worker + Caddy (auto-TLS reverse proxy). Web (Next.js) is deployed separately.
-# Usage: cp .env.production.example .env.production && edit, then:
-#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Images are built on GitHub Actions (.github/workflows/build-and-push.yml) and
+# pushed to GHCR — the box only ever pulls, never builds. Building this monorepo's
+# single shared image (see ../Dockerfile) directly on a small box starves the live
+# containers of memory/CPU for the better part of an hour; GitHub's runners do it
+# in under a minute. Usage:
+#   cp .env.production.example .env.production && edit
+#   echo "$GHCR_PAT" | docker login ghcr.io -u <github-username> --password-stdin
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+x-app-image: &app-image
+  image: ghcr.io/d4nes1337/mx2-solutions:latest
+  pull_policy: always
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,7 +31,7 @@ services:
       retries: 12
 
   migrate:
-    build: { context: ., dockerfile: Dockerfile }
+    <<: *app-image
     env_file: [.env.production]
     command: ["node", "packages/db/dist/migrate.js"]
     depends_on:
@@ -27,7 +39,7 @@ services:
     restart: "no"
 
   api:
-    build: { context: ., dockerfile: Dockerfile }
+    <<: *app-image
     env_file: [.env.production]
     command: ["node", "apps/api/dist/server.js"]
     depends_on:
@@ -37,7 +49,7 @@ services:
     expose: ["3001"]
 
   worker:
-    build: { context: ., dockerfile: Dockerfile }
+    <<: *app-image
     env_file: [.env.production]
     command: ["node", "apps/worker/dist/main.js"]
     depends_on:
@@ -46,7 +58,7 @@ services:
     restart: unless-stopped
 
   web:
-    build: { context: ., dockerfile: Dockerfile }
+    <<: *app-image
     env_file: [.env.production]
     # Run Next directly (no pnpm at runtime). Root so next can write .next/cache.
     working_dir: /app/apps/web
