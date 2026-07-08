@@ -19,7 +19,7 @@ import type {
 import { SignedClobOrderSchema } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeGeoblockCheck } from "../middleware/geoblock.js";
-import { encryptCredentials, decryptCredentials } from "../auth/crypto.js";
+import { encryptCredentials, decryptCredentials, fingerprintSecret } from "../auth/crypto.js";
 
 export interface TradeRoutesDeps {
   config: AppConfig;
@@ -264,7 +264,10 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       actor: user.walletAddress,
       action: "trade.credentials.setup" as const,
       subject: `trading_account:${account.id}`,
-      metadata: { apiKey: result.value.apiKey, signerAddress: account.signerAddress },
+      metadata: {
+        apiKeyFingerprint: fingerprintSecret(result.value.apiKey),
+        signerAddress: account.signerAddress,
+      },
     });
 
     return { ok: true, apiKey: result.value.apiKey, tradingAccountId: account.id };

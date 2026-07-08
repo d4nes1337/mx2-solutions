@@ -74,12 +74,18 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         definition: o.definition,
         definitionHash: o.definitionHash,
         status: "ACTIVE_WAITING",
-        version: 1,
+        version: o.version ?? 1,
         trueSince: null,
         expiresAt: o.expiresAt,
         pausedAt: null,
         lastEvaluatedAt: null,
         errorMessage: null,
+        name: o.name ?? null,
+        templateId: o.templateId ?? null,
+        tokenIds: [...(o.tokenIds ?? [o.tokenId])],
+        triggerCount: 0,
+        cooldownUntil: null,
+        totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -151,6 +157,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       }
       return null;
     },
+    addExecutedNotional: async () => {},
   };
 };
 
@@ -308,6 +315,7 @@ const buildRulesApp = (opts: {
     listByWallet: async () => [],
     updateStatus: async () => {},
     countRecentByWallet: async () => 0,
+    sumRuleAutoNotional: async () => 0,
   };
   const noopFlags: RuntimeFlagStore = {
     get: async () => null,
@@ -320,6 +328,7 @@ const buildRulesApp = (opts: {
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
+    searchMarkets: async () => ok([]),
   };
   const clob: ClobClient = {
     getOrderbook: async () => err(upstreamErr),

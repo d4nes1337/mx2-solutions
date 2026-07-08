@@ -16,7 +16,7 @@ import type {
   OrderIntentRow,
 } from "@mx2/db";
 import type { AuthenticatedClobClient } from "@mx2/polymarket-client";
-import type { RuleDefinition, TriggerEvidence } from "@mx2/rules";
+import { normalizeDefinition, type RuleDefinition, type TriggerEvidence } from "@mx2/rules";
 import { createAutoExecutor, type AutoExecRule } from "./auto-executor.js";
 
 const KEY = "a".repeat(64);
@@ -50,7 +50,15 @@ const def: RuleDefinition = {
   negRisk: false,
 };
 
-const rule: AutoExecRule = { id: "rule-1", walletAddress: WALLET, tokenId: "123456789", def };
+// Auto strategies must carry limits (W5); the base fixture is fully armed so
+// tests traverse the whole guard chain unless they override something.
+const LIMITS = { maxNotionalPerOrder: 10, maxDailyNotional: 20, maxTotalNotional: 50 };
+const rule: AutoExecRule = {
+  id: "rule-1",
+  walletAddress: WALLET,
+  tokenId: "123456789",
+  def: { ...normalizeDefinition(def), limits: LIMITS },
+};
 const evidence = { triggeredAtMs: 1000 } as unknown as TriggerEvidence;
 
 const walletRow: PrivyWalletRow = {
@@ -97,17 +105,24 @@ interface Harness {
 const makeHarness = (
   over: {
     paused?: boolean;
+    autoDisabled?: boolean;
     delegationActive?: boolean;
+    delegationExpiresInMs?: number;
     allowances?: boolean;
     recentCount?: number;
+    dailyExecuted?: number;
+    lifetimeExecuted?: number;
+    balanceUsd?: number | null;
     casLoses?: boolean;
     existingIntent?: boolean;
     submitOk?: boolean;
   } = {},
 ): Harness => {
   const audits: string[] = [];
+  const auditMeta: Record<string, unknown>[] = [];
   let ruleStatus = "TRIGGERED_AWAITING_USER";
   let submitted = false;
+  void auditMeta;
 
   const auditStore: AuditStore = {
     emit: async (e) => {
@@ -126,6 +141,9 @@ const makeHarness = (
   };
 
   const ruleStore = {
+    findById: async () =>
+      ({ id: "rule-1", totalNotionalExecuted: String(over.lifetimeExecuted ?? 0) }) as never,
+    addExecutedNotional: async () => {},
     markExecuting: async () => {
       if (over.casLoses) return null; // CAS lost → executor aborts
       ruleStatus = "EXECUTING";
@@ -149,18 +167,29 @@ const makeHarness = (
   } as unknown as PrivyWalletStore;
 
   const delegations = {
-    findActive: async () => (over.delegationActive === false ? null : ({ id: "d" } as never)),
+    findActive: async () =>
+      over.delegationActive === false
+        ? null
+        : ({
+            id: "d",
+            // Anchored to the executor's test clock (run() passes nowMs=1000).
+            expiresAt: new Date(1000 + (over.delegationExpiresInMs ?? 7 * 86_400_000)),
+          } as never),
   } as unknown as DelegationStore;
 
   const runtimeFlags = {
-    get: async () =>
-      over.paused
-        ? { key: "trading_paused", value: "true", updatedBy: "a", updatedAt: new Date() }
-        : null,
+    get: async (key: string) => {
+      if (key === "trading_paused" && over.paused)
+        return { key, value: "true", updatedBy: "a", updatedAt: new Date() };
+      if (key === `rule_auto_disabled:${rule.id}` && over.autoDisabled)
+        return { key, value: "true", updatedBy: WALLET, updatedAt: new Date() };
+      return null;
+    },
   } as unknown as RuntimeFlagStore;
 
   const orderIntents = {
     countRecentByWallet: async () => over.recentCount ?? 0,
+    sumRuleAutoNotional: async () => over.dailyExecuted ?? 0,
     findByIdempotencyKey: async () => (over.existingIntent ? intentRow : null),
     create: async () => intentRow,
     updateStatus: async () => {},
@@ -203,6 +232,7 @@ const makeHarness = (
       ruleStore,
       triggerStore,
       auditStore,
+      balanceOfUsdc: over.balanceUsd === null ? null : async () => over.balanceUsd ?? 1_000,
     },
     audits,
     ruleStatus: () => ruleStatus,
@@ -274,5 +304,80 @@ describe("auto-executor", () => {
     expect(h.submitted()).toBe(false);
     expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
     expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  // ── W5–W8 guard chain ──────────────────────────────────────────────────────
+
+  it("skips when the strategy has no spending limits (auto requires limits)", async () => {
+    const h = makeHarness();
+    const exec = createAutoExecutor(h.deps);
+    await exec.execute({
+      rule: { ...rule, def: { ...rule.def, limits: null } },
+      triggerId: "trig-1",
+      evidence,
+      nowMs: 1000,
+    });
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips when the order exceeds the per-order cap", async () => {
+    const h = makeHarness();
+    const exec = createAutoExecutor(h.deps);
+    await exec.execute({
+      rule: {
+        ...rule,
+        def: {
+          ...rule.def,
+          limits: { maxNotionalPerOrder: 1, maxDailyNotional: 20, maxTotalNotional: 50 },
+        },
+      },
+      triggerId: "trig-1",
+      evidence,
+      nowMs: 1000,
+    });
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips when today's executed notional would exceed the daily cap", async () => {
+    // Order = 0.5 × 10 = $5; daily cap $20 with $16 already executed today.
+    const h = makeHarness({ dailyExecuted: 16 });
+    await run(h);
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips when the lifetime total cap is exhausted (survives restarts)", async () => {
+    const h = makeHarness({ lifetimeExecuted: 48 });
+    await run(h);
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips when the strategy has been disarmed (per-rule kill)", async () => {
+    const h = makeHarness({ autoDisabled: true });
+    await run(h);
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips when the funding wallet balance cannot cover the order", async () => {
+    const h = makeHarness({ balanceUsd: 2 }); // order costs $5
+    await run(h);
+    expect(h.submitted()).toBe(false);
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("emits a delegation.expiring warning inside the 48h window", async () => {
+    const h = makeHarness({ delegationExpiresInMs: 24 * 3_600_000 });
+    await run(h);
+    expect(h.audits).toContain("delegation.expiring");
+  });
+
+  it("does not warn about delegation expiry when plenty of time remains", async () => {
+    const h = makeHarness({ delegationExpiresInMs: 7 * 86_400_000 });
+    await run(h);
+    expect(h.audits).not.toContain("delegation.expiring");
   });
 });

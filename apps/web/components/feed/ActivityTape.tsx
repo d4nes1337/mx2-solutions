@@ -58,7 +58,7 @@ export function ActivityTape({ events }: { events?: GammaEvent[] }) {
           <Link
             key={i}
             href={`/markets/${it.id}`}
-            className="mx-3 inline-flex items-center gap-1.5 align-middle text-[11px] hover:text-white"
+            className="mx-3 inline-flex items-center gap-1.5 align-middle text-[11px] hover:text-fg"
           >
             <span
               className={cn(

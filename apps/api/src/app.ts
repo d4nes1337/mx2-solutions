@@ -41,6 +41,7 @@ import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
+import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
 import type {} from "./auth/types.js";
 
 /** Minimal surface the app needs from the database (keeps tests light). */
@@ -224,6 +225,16 @@ export const buildApp = (deps: AppDeps) => {
     ruleStore: deps.ruleStore,
     triggerStore: deps.triggerStore,
     marketSnapshots: deps.marketSnapshots,
+  });
+  registerSmartOrdersRoutes(fastifyApp, {
+    config: deps.config,
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    ruleStore: deps.ruleStore,
+    runtimeFlags: deps.runtimeFlags,
+    marketSnapshots: deps.marketSnapshots,
+    gammaClient: deps.gammaClient,
+    clobClient: deps.clobClient,
   });
 
   return app;

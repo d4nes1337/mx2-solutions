@@ -53,6 +53,13 @@ const ERC20_ABI = [
     ],
     outputs: [{ type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
 ] as const;
 
 const ERC1155_ABI = [
@@ -82,6 +89,8 @@ const ERC1155_ABI = [
 export interface AllowanceReader {
   erc20Allowance(token: string, owner: string, spender: string): Promise<bigint>;
   isApprovedForAll(token: string, owner: string, operator: string): Promise<boolean>;
+  /** Raw token units (USDC.e = 6 decimals). Used by the wallet top-up UX. */
+  erc20Balance(token: string, owner: string): Promise<bigint>;
 }
 
 /** Real reader backed by a viem public client over the configured Polygon RPC. */
@@ -102,6 +111,14 @@ export const createViemAllowanceReader = (rpcUrl: string): AllowanceReader => {
         abi: ERC1155_ABI,
         functionName: "isApprovedForAll",
         args: [getAddress(owner), getAddress(operator)],
+      });
+    },
+    async erc20Balance(token, owner) {
+      return client.readContract({
+        address: getAddress(token),
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [getAddress(owner)],
       });
     },
   };

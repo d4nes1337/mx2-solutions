@@ -126,6 +126,8 @@ export type RuleStatus =
   | "EXECUTED_MANUALLY"
   | "EXECUTED_AUTO"
   | "EXECUTION_FAILED"
+  /** v2 only: a strategy finished its recurrence (e.g. final alert delivered). */
+  | "COMPLETED"
   | "EXPIRED"
   | "CANCELLED"
   | "INVALIDATED"
@@ -151,7 +153,15 @@ export type ReasonCode =
   | "PAUSED"
   | "RESUMED"
   | "CANCELLED"
-  | "TOKEN_AMBIGUOUS";
+  | "TOKEN_AMBIGUOUS"
+  // v2 (Smart Order DSL) additions:
+  | "SPREAD_OK"
+  | "SPREAD_FAIL"
+  | "TIME_WINDOW_OK"
+  | "TIME_WINDOW_FAIL"
+  | "COOLDOWN_ACTIVE"
+  | "REPEAT_LIMIT_REACHED"
+  | "STRATEGY_COMPLETED";
 
 /**
  * Mutable per-rule runtime carried between events. Persisted by the worker as

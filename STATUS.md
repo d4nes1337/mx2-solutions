@@ -1,8 +1,42 @@
 # Project Status
 
-_Last updated: 2026-06-30_
+_Last updated: 2026-07-09_
 
 ## Recent
+
+- **Product pivot → "Smart Orders" visual builder (built; UX track U1–U7 + engine track E3–E4).**
+  Owner-approved pivot (2026-07-07) from terminal-first UX to an accessible visual
+  algo-trading builder. Shipped: light-first design system relight (dark palette parked under
+  `.dark`); new IA (Home / Markets / Smart Orders / Wallet + account menu) with a hero homepage,
+  template gallery and market search; `/wallet` two-mode page (sign-each-trade vs Arima trading
+  wallet) with a Create→Top up→Activate→Trade readiness stepper; **Smart Order DSL v2**
+  (ADR-0010: AND/OR/NOT expression trees, cross-market @market conditions, spread/time-window
+  blocks, repeat+cooldown recurrence, per-strategy spend limits; migration `0009`, additive) with
+  an 8-scenario v1-parity proof and ONE worker evaluation path via a pure compat reader;
+  `/api/smart-orders` (CRUD/controls/multi-market evaluate-now) + **public** rate-limited
+  `evaluate-draft` and `/api/markets/search` (Gamma `/public-search` verified live 2026-07-08);
+  the **visual builder** (`@xyflow/react` canvas + zustand doc store, clickable plain-English
+  sentence, inspector, @market search with previews, live "Would trigger now?", validation
+  checklist, public playground with sign-in-gated save, edit = new version + cancel old);
+  Smart Orders monitor with user-language status groups and per-card live state; market cockpit
+  simplified (Overview/Advanced tabs, "Automate this market" template deep links);
+  `/rules → /smart-orders` redirect. Also fixed in passing: audit metadata no longer stores the
+  raw L2 apiKey (fingerprint only; R-019 closed). Quality gates: `format:check` ✓, `lint` ✓,
+  root `typecheck` ✓, backend test **231 pass / 3 skipped**, web test **54 pass**, web `build` ✓;
+  builder verified in-browser against live Polymarket data (search → bind → live per-condition
+  actuals → correct verdict). Auto-mode safety track also landed (W1, W5–W8): delegation TTL
+  14 d default / 30 d cap with a refresh-within-grant endpoint and a `delegation.expiring`
+  audit seam; the auto-executor now enforces the full fail-closed guard chain (per-strategy
+  kill via `rule_auto_disabled:<id>` + user disarm/rearm routes, per-order / daily / lifetime
+  notional caps with restart-surviving accounting, repeat limits, funding-wallet balance
+  pre-check) — 16 executor tests cover every guard; `GET /api/trading-wallet/balance` reads
+  on-chain USDC.e for the top-up stepper. U8 shipped the reward-aware maker template
+  estimator-first (live `rewardsMinSize`/`rewardsMaxSpread` from Gamma, honest "no dollar
+  reward promised" posture, prepare-only quotes). **Remaining before live auto-mode:** W2–W4
+  (relayer allowances + server-side ClobAuth + deposit-wallet order submission — needs the
+  owner's builder/relayer credentials and a signatureType live-docs check) and W9 (low-value
+  staging verification + explicit Gate 6 owner sign-off). Final totals: backend test
+  **243 pass / 3 skipped**, web test **58 pass**, build/typecheck/lint/format ✓.
 
 - **Deposit-wallet relayer activation slice (built, behind `FEATURE_RELAYER`).** Added the official
   builder-relayer integration seam and API wiring for internal Privy wallets: backend-only relayer

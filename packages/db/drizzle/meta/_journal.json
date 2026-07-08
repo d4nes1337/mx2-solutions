@@ -64,6 +64,13 @@
       "when": 1782861496000,
       "tag": "0008_trading_accounts_archived_at",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783497128357,
+      "tag": "0009_smart_orders_v2",
+      "breakpoints": true
     }
   ]
 }

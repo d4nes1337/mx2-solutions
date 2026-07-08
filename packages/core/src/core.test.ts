@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ok, err, isOk, isErr } from "./result.js";
 import { toWalletAddress } from "./ids.js";
+import { fingerprintSecret } from "./crypto.js";
 
 describe("Result", () => {
   it("narrows ok/err", () => {
@@ -23,5 +24,15 @@ describe("toWalletAddress", () => {
   it("rejects invalid addresses", () => {
     expect(() => toWalletAddress("not-an-address")).toThrow();
     expect(() => toWalletAddress("0x123")).toThrow();
+  });
+});
+
+describe("fingerprintSecret", () => {
+  it("is deterministic, 12 hex chars, and never echoes the input", () => {
+    const fp = fingerprintSecret("ak-123");
+    expect(fp).toMatch(/^[0-9a-f]{12}$/);
+    expect(fp).toBe(fingerprintSecret("ak-123"));
+    expect(fp).not.toContain("ak-123");
+    expect(fingerprintSecret("ak-124")).not.toBe(fp);
   });
 });

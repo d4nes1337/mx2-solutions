@@ -54,6 +54,10 @@ export const GammaMarketSchema = z
     neg_risk: z.boolean().default(false).optional(),
     maker_base_fee: z.number().default(0).optional(),
     taker_base_fee: z.number().default(0).optional(),
+    // Maker-rewards program parameters (verified live 2026-07-09, A-050):
+    // minimum resting size and max distance from mid (in cents) to qualify.
+    rewardsMinSize: z.number().nullish(),
+    rewardsMaxSpread: z.number().nullish(),
   })
   .passthrough();
 
@@ -83,6 +87,14 @@ export const GammaEventSchema = z
     tags: z.array(GammaTagSchema).default([]),
     markets: z.array(GammaMarketSchema).default([]),
   })
+  .passthrough();
+
+/**
+ * Gamma /public-search response (verified live 2026-07-08): { events, tags }.
+ * Only `events` is consumed; unknown keys pass through.
+ */
+export const PublicSearchSchema = z
+  .object({ events: z.array(GammaEventSchema).default([]) })
   .passthrough();
 
 // Each point is {t: Unix seconds, p: probability 0–1}

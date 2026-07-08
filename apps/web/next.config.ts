@@ -19,6 +19,12 @@ const nextConfig: NextConfig = {
       { source: "/readyz", destination: `${API_TARGET}/readyz` },
     ];
   },
+  async redirects() {
+    return [
+      // Legacy IA (pre Smart Orders pivot). Remove after beta users migrate.
+      { source: "/rules", destination: "/smart-orders", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

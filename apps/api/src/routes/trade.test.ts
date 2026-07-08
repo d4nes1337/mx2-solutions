@@ -118,6 +118,7 @@ const mockGammaClient: GammaClient = {
   getMarket: async () => err(upstreamErr),
   getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
+  searchMarkets: async () => ok([]),
 };
 
 const mockClobClient: ClobClient = {
@@ -203,6 +204,7 @@ const mockOrderIntents: OrderIntentStore = {
   listByWallet: async () => [],
   updateStatus: async () => {},
   countRecentByWallet: async () => 0,
+  sumRuleAutoNotional: async () => 0,
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {
@@ -226,6 +228,7 @@ const mockRuleStore: RuleStore = {
   markExecuting: async () => null,
   markAutoExecuted: async () => null,
   markExecutionFailed: async () => null,
+  addExecutedNotional: async () => {},
 };
 
 const mockTriggerStore: TriggerStore = {
@@ -399,13 +402,14 @@ const buildTestApp = (
     privyWallets?: PrivyWalletStore;
     delegations?: DelegationStore;
     allowanceReader?: AllowanceReader | null;
+    auditStore?: AuditStore;
   } = {},
 ) => {
   const deps: Parameters<typeof buildApp>[0] = {
     config: overrides.cfg ?? config,
     logger,
     db: mockDb,
-    auditStore: mockAuditStore,
+    auditStore: overrides.auditStore ?? mockAuditStore,
     gammaClient: mockGammaClient,
     clobClient: mockClobClient,
     dataClient: mockDataClient,
@@ -572,6 +576,42 @@ describe("POST /api/trade/credentials/setup", () => {
     expect(body.apiKey).toBe("ak-123");
     expect(stored).not.toBeNull();
     expect((stored as Record<string, unknown>).ciphertext).toBeTruthy();
+    await app.close();
+  });
+
+  it("never writes raw L2 credentials into audit metadata", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const captureAudit: AuditStore = {
+      ...mockAuditStore,
+      emit: async (e) => {
+        emitted.push(e.metadata);
+        return mockAuditStore.emit(e);
+      },
+    };
+    const successClient: AuthenticatedClobClient = {
+      ...mockTradingClobClient,
+      deriveApiKey: async () => ok({ apiKey: "ak-123", secret: "c2VjcmV0", passphrase: "pass" }),
+    };
+    const app = buildTestApp({
+      sessions: mockSessionsAuthed,
+      tradingClobClient: successClient,
+      auditStore: captureAudit,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/credentials/setup",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify({ l1Signature: "0xsig", timestamp: "123", nonce: "abc" }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(emitted.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(emitted);
+    expect(serialized).not.toContain("ak-123");
+    expect(serialized).not.toContain("c2VjcmV0");
+    expect(serialized).not.toContain("pass");
+    const setupMeta = emitted.find((m) => "apiKeyFingerprint" in m);
+    expect(setupMeta).toBeTruthy();
+    expect(setupMeta!.apiKeyFingerprint).toMatch(/^[0-9a-f]{12}$/);
     await app.close();
   });
 });
@@ -1056,6 +1096,7 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
     const reader: AllowanceReader = {
       erc20Allowance: async () => 0n,
       isApprovedForAll: async () => false,
+      erc20Balance: async () => 0n,
     };
     let marked = false;
     const wallets: PrivyWalletStore = {
@@ -1355,6 +1396,45 @@ describe("Trading wallet onboarding", () => {
     expect(body.provisioned).toBe(true);
     expect(body.delegationActive).toBe(true);
     expect(body.allowancesBootstrapped).toBe(true);
+    await app.close();
+  });
+
+  it("POST /delegate/refresh extends an ACTIVE delegation (refresh-within-grant)", async () => {
+    let created: { expiresAt: Date; sessionSignerId: string | null } | null = null;
+    const delegations: DelegationStore = {
+      ...mockDelegations,
+      findActive: async () => makeActiveDelegationRow(),
+      create: async (opts) => {
+        created = { expiresAt: opts.expiresAt, sessionSignerId: opts.sessionSignerId ?? null };
+        return makeActiveDelegationRow();
+      },
+    };
+    const app = buildTestApp({ cfg: configPrivy, sessions: mockSessionsAuthed, delegations });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/delegate/refresh",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(created).not.toBeNull();
+    // 14-day default TTL (D-019) — well beyond the old 24h window.
+    expect(created!.expiresAt.getTime()).toBeGreaterThan(Date.now() + 13 * 86_400_000);
+    await app.close();
+  });
+
+  it("POST /delegate/refresh refuses when no delegation is active (must re-consent)", async () => {
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      delegations: { ...mockDelegations, findActive: async () => null },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/delegate/refresh",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as Record<string, unknown>).error).toBe("DELEGATION_NOT_ACTIVE");
     await app.close();
   });
 

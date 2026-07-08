@@ -1,5 +1,12 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import type { ReasonCode, RuleDefinition, RuleStatus, TriggerEvidence } from "@mx2/rules";
+import type {
+  ReasonCode,
+  RuleDefinition,
+  RuleStatus,
+  StrategyDefinition,
+  TriggerEvidence,
+  TriggerEvidenceV2,
+} from "@mx2/rules";
 import type { Database } from "./client.js";
 import {
   conditionalRules,
@@ -11,7 +18,13 @@ import {
 /** Statuses the worker may transition. PAUSED and all terminals are excluded. */
 const EVALUABLE: readonly RuleStatus[] = ["ACTIVE_WAITING", "ACTIVE_ACCUMULATING"];
 
-export type TriggerStatus = "awaiting_user" | "confirmed" | "dismissed" | "expired";
+export type TriggerStatus =
+  | "awaiting_user"
+  | "confirmed"
+  | "dismissed"
+  | "expired"
+  /** v2 alert-only triggers: delivered as a notification, nothing to confirm. */
+  | "notified";
 
 // ── Conditional rule store ────────────────────────────────────────────────────
 
@@ -20,9 +33,15 @@ export interface CreateRuleOpts {
   conditionId: string;
   tokenId: string;
   side: "BUY" | "SELL";
-  definition: RuleDefinition;
+  definition: RuleDefinition | StrategyDefinition;
   definitionHash: string;
   expiresAt: Date | null;
+  // v2 (Smart Order DSL) fields — omitted for legacy v1 creation:
+  version?: number;
+  name?: string | null;
+  templateId?: string | null;
+  /** Every tokenId the strategy reads — the worker's subscription set. */
+  tokenIds?: readonly string[];
 }
 
 export interface RuleEvaluationUpdate {
@@ -30,6 +49,9 @@ export interface RuleEvaluationUpdate {
   trueSinceMs: number | null;
   lastEvaluatedAt: Date;
   errorMessage?: string | null;
+  /** v2 repeat bookkeeping; omitted by the legacy v1 evaluator path. */
+  triggerCount?: number;
+  cooldownUntilMs?: number | null;
 }
 
 export interface RuleStore {
@@ -60,6 +82,8 @@ export interface RuleStore {
   markExecuting(id: string): Promise<ConditionalRuleRow | null>;
   markAutoExecuted(id: string): Promise<ConditionalRuleRow | null>;
   markExecutionFailed(id: string, errorMessage: string): Promise<ConditionalRuleRow | null>;
+  /** Accumulate lifetime auto-executed notional (checked against maxTotalNotional). */
+  addExecutedNotional(id: string, amountUsd: number): Promise<void>;
 }
 
 const tsOrNull = (ms: number | null): Date | null => (ms === null ? null : new Date(ms));
@@ -77,6 +101,10 @@ export const createRuleStore = (db: Database): RuleStore => ({
         definitionHash: opts.definitionHash,
         status: "ACTIVE_WAITING",
         expiresAt: opts.expiresAt,
+        version: opts.version ?? 1,
+        name: opts.name ?? null,
+        templateId: opts.templateId ?? null,
+        tokenIds: [...(opts.tokenIds ?? [opts.tokenId])],
       })
       .returning();
     if (!row) throw new Error("Failed to create conditional rule");
@@ -125,6 +153,10 @@ export const createRuleStore = (db: Database): RuleStore => ({
         trueSince: tsOrNull(update.trueSinceMs),
         lastEvaluatedAt: update.lastEvaluatedAt,
         errorMessage: update.errorMessage ?? null,
+        ...(update.triggerCount !== undefined ? { triggerCount: update.triggerCount } : {}),
+        ...(update.cooldownUntilMs !== undefined
+          ? { cooldownUntil: tsOrNull(update.cooldownUntilMs) }
+          : {}),
         updatedAt: sql`now()`,
       })
       .where(
@@ -225,6 +257,16 @@ export const createRuleStore = (db: Database): RuleStore => ({
       .returning();
     return row ?? null;
   },
+
+  async addExecutedNotional(id, amountUsd) {
+    await db
+      .update(conditionalRules)
+      .set({
+        totalNotionalExecuted: sql`${conditionalRules.totalNotionalExecuted} + ${amountUsd}`,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(conditionalRules.id, id));
+  },
 });
 
 // ── Rule trigger store ────────────────────────────────────────────────────────
@@ -232,8 +274,10 @@ export const createRuleStore = (db: Database): RuleStore => ({
 export interface CreateTriggerOpts {
   ruleId: string;
   walletAddress: string;
-  evidence: TriggerEvidence;
+  evidence: TriggerEvidence | TriggerEvidenceV2;
   reasonCodes: readonly ReasonCode[];
+  /** Defaults to "awaiting_user" (order actions); alerts pass "notified". */
+  status?: TriggerStatus;
 }
 
 export interface TriggerStore {
@@ -256,6 +300,7 @@ export const createTriggerStore = (db: Database): TriggerStore => ({
         walletAddress: opts.walletAddress,
         evidence: opts.evidence,
         reasonCodes: [...opts.reasonCodes],
+        ...(opts.status !== undefined ? { status: opts.status } : {}),
       })
       .returning();
     if (!row) throw new Error("Failed to create rule trigger");

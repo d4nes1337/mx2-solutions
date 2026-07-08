@@ -4,6 +4,7 @@ import {
   GammaEventSchema,
   GammaMarketSchema,
   PublicProfileSchema,
+  PublicSearchSchema,
   type GammaEvent,
   type GammaMarket,
   type PublicProfile,
@@ -46,6 +47,12 @@ export interface GammaClient {
   getPublicProfile(address: string): Promise<Result<PublicProfile | null, PolymarketError>>;
   /** Best-effort lookup by condition id or CLOB token id (Gamma /markets filters). */
   findMarket(params: FindMarketParams): Promise<Result<GammaMarket | null, PolymarketError>>;
+  /**
+   * Full-text event search (Gamma /public-search, verified live 2026-07-08:
+   * returns { events, tags }). Falls back to a title-filtered listEvents scan
+   * if the search endpoint errors or changes shape.
+   */
+  searchMarkets(query: string, limit?: number): Promise<Result<GammaEvent[], PolymarketError>>;
 }
 
 export interface GammaClientOptions {
@@ -174,6 +181,45 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
         return ok(null);
       }
       return result;
+    },
+
+    searchMarkets: async (query, limit = 10) => {
+      const bySearch = await fetchJson(
+        buildUrl(baseUrl, "/public-search", {
+          q: query,
+          limit_per_type: limit,
+          events_status: "active",
+        }),
+        PublicSearchSchema,
+        timeoutMs,
+      );
+      if (bySearch.ok) return ok(bySearch.value.events.slice(0, limit));
+
+      // Fallback: scan the most active events and filter by title/question.
+      const events = await fetchJson(
+        buildUrl(
+          baseUrl,
+          "/events",
+          buildParams({
+            limit: 100,
+            offset: 0,
+            active: true,
+            closed: false,
+            order: "volume24hr",
+            ascending: false,
+          }),
+        ),
+        GammaEventSchema.array(),
+        timeoutMs,
+      );
+      if (!events.ok) return events;
+      const needle = query.toLowerCase();
+      const matches = events.value.filter(
+        (e) =>
+          e.title?.toLowerCase().includes(needle) ||
+          e.markets.some((m) => m.question?.toLowerCase().includes(needle)),
+      );
+      return ok(matches.slice(0, limit));
     },
 
     findMarket: async (params) => {

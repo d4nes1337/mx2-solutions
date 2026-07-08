@@ -66,7 +66,7 @@ export function MarketFeedRow({ event, compact }: { event: GammaEvent; compact?:
           )}
 
           <div className="min-w-0 flex-1">
-            <div className="line-clamp-2 text-[13px] font-medium leading-snug text-fg group-hover:text-white">
+            <div className="line-clamp-2 text-[13px] font-medium leading-snug text-fg group-hover:text-brand-strong">
               {title}
             </div>
             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-faint">

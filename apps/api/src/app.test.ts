@@ -48,6 +48,7 @@ const mockGammaClient: GammaClient = {
   getMarket: async () => err(upstreamErr),
   getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
+  searchMarkets: async () => ok([]),
 };
 
 const mockClobClient: ClobClient = {
@@ -152,6 +153,7 @@ const mockOrderIntents: OrderIntentStore = {
   listByWallet: async () => [],
   updateStatus: async () => {},
   countRecentByWallet: async () => 0,
+  sumRuleAutoNotional: async () => 0,
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {
@@ -175,6 +177,7 @@ const mockRuleStore: RuleStore = {
   markExecuting: async () => null,
   markAutoExecuted: async () => null,
   markExecutionFailed: async () => null,
+  addExecutedNotional: async () => {},
 };
 
 const mockTriggerStore: TriggerStore = {

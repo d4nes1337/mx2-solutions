@@ -9,9 +9,10 @@ import { ApiError } from "@/lib/api";
 import { Badge, Button, cn } from "./ui";
 
 const NAV = [
-  { href: "/", label: "Markets" },
-  { href: "/rules", label: "Rules" },
-  { href: "/profile", label: "Portfolio" },
+  { href: "/", label: "Home" },
+  { href: "/markets", label: "Markets" },
+  { href: "/smart-orders", label: "Smart Orders" },
+  { href: "/wallet", label: "Wallet" },
 ];
 
 function isActive(pathname: string, href: string) {
@@ -41,7 +42,7 @@ function NavLink({ href, label, mobile }: { href: string; label: string; mobile?
 function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2">
-      <span className="grid h-7 w-7 place-items-center rounded-md bg-brand shadow-[0_0_18px_-4px_rgba(42,54,255,0.8)]">
+      <span className="grid h-7 w-7 place-items-center rounded-md bg-brand shadow-[0_0_18px_-4px_rgba(42,54,255,0.35)]">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
           <path
             d="M2 11.5 L6 7 L9 9.5 L14 3.5"
@@ -68,19 +69,35 @@ function SessionControls() {
 
   if (session.data) {
     return (
-      <div className="flex items-center gap-2">
-        <Badge tone={session.data.allowlisted ? "pos" : "warn"} dot>
-          {session.data.allowlisted ? "allowlisted" : "not allowlisted"}
-        </Badge>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => signOut.mutate()}
-          disabled={signOut.isPending}
-        >
-          Sign out
-        </Button>
-      </div>
+      <details className="group relative">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:border-border-strong [&::-webkit-details-marker]:hidden">
+          Account
+          <span className="text-[10px] text-faint transition-transform group-open:rotate-180">
+            ▾
+          </span>
+        </summary>
+        <div className="absolute right-0 top-full z-40 mt-1.5 w-52 space-y-1 rounded-lg border border-border bg-surface p-2 shadow-pop">
+          <div className="px-2 py-1">
+            <Badge tone={session.data.allowlisted ? "pos" : "warn"} dot>
+              {session.data.allowlisted ? "beta access" : "no beta access yet"}
+            </Badge>
+          </div>
+          <Link
+            href="/portfolio"
+            className="block rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-2"
+          >
+            Portfolio
+          </Link>
+          <button
+            type="button"
+            onClick={() => signOut.mutate()}
+            disabled={signOut.isPending}
+            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-fg"
+          >
+            Sign out
+          </button>
+        </div>
+      </details>
     );
   }
 

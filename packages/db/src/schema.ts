@@ -3,6 +3,7 @@ import {
   boolean,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -300,6 +301,16 @@ export const conditionalRules = pgTable(
     pausedAt: timestamp("paused_at", { withTimezone: true }),
     lastEvaluatedAt: timestamp("last_evaluated_at", { withTimezone: true }),
     errorMessage: text("error_message"),
+    // Smart Order DSL v2 (migration 0009; ADR-0010). v1 rows keep defaults.
+    name: text("name"),
+    templateId: text("template_id"),
+    /** Every tokenId the strategy reads — the worker's subscription set. */
+    tokenIds: jsonb("token_ids")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    triggerCount: integer("trigger_count").notNull().default(0),
+    cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
+    totalNotionalExecuted: numeric("total_notional_executed").notNull().default("0"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

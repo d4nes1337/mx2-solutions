@@ -44,6 +44,7 @@ export const AUDIT_ACTIONS = [
   "allowance.approve.confirmed",
   "allowance.failed",
   "delegation.expired",
+  "delegation.expiring",
   "system.startup",
 ] as const;
 

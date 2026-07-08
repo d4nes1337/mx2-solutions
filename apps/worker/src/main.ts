@@ -12,7 +12,7 @@ import {
   createOrderIntentStore,
   createClobCredentialStore,
 } from "@mx2/db";
-import { createAuthenticatedClobClient } from "@mx2/polymarket-client";
+import { createAuthenticatedClobClient, createUsdcBalanceReader } from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
@@ -90,6 +90,13 @@ const main = async (): Promise<void> => {
         ruleStore,
         triggerStore,
         auditStore,
+        // Balance pre-check (W6): raw USDC.e units → USD (6 decimals).
+        balanceOfUsdc: config.polygonRpcUrl
+          ? (() => {
+              const readBalance = createUsdcBalanceReader(config.polygonRpcUrl);
+              return async (owner: string) => Number(await readBalance(owner)) / 1e6;
+            })()
+          : null,
       });
       logger.warn(
         "FEATURE_CONDITIONAL_LIVE_EXECUTION is ON — auto rules will submit real orders unattended",

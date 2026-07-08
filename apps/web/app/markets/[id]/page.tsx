@@ -19,6 +19,7 @@ import { RuleBuilder } from "@/components/RuleBuilder";
 import { RuleList } from "@/components/RuleList";
 import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
+import { AutomateCard } from "@/components/market/AutomateCard";
 
 type Prefill = { price?: string; size?: string; side?: OrderSide; nonce: number };
 
@@ -30,6 +31,7 @@ export default function MarketCockpitPage() {
   const session = useSession();
   const signedIn = Boolean(session.data);
   const [outcomeIdx, setOutcomeIdx] = useState(0);
+  const [view, setView] = useState<"overview" | "advanced">("overview");
   const [prefill, setPrefill] = useState<Prefill | undefined>(undefined);
   const orderbook = useOrderbook(id, outcomeIdx);
 
@@ -72,7 +74,7 @@ export default function MarketCockpitPage() {
   return (
     <div className="space-y-4">
       <div>
-        <Link href="/" className="text-xs text-muted transition-colors hover:text-accent">
+        <Link href="/markets" className="text-xs text-muted transition-colors hover:text-accent">
           ← Markets
         </Link>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
@@ -121,9 +123,18 @@ export default function MarketCockpitPage() {
       <TriggerAlert />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Left: chart + orderbook + queue */}
+        {/* Left: chart (overview) or book/tape/queue (advanced) */}
         <div className="space-y-4 lg:col-span-2">
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-between gap-2">
+            <Segmented
+              options={[
+                { value: "overview", label: "Overview" },
+                { value: "advanced", label: "Advanced" },
+              ]}
+              value={view}
+              onChange={(v) => setView(v)}
+              size="md"
+            />
             <Segmented
               options={outcomeOptions}
               value={String(outcomeIdx)}
@@ -134,40 +145,44 @@ export default function MarketCockpitPage() {
 
           <MarketPriceChart marketId={id} outcome={outcomeIdx} outcomeLabel={outcomeLabel} />
 
-          {ob ? <MarketMovesTape bids={ob.bids} asks={ob.asks} /> : null}
+          {view === "advanced" ? (
+            <>
+              {ob ? <MarketMovesTape bids={ob.bids} asks={ob.asks} /> : null}
 
-          <Card>
-            <CardHeader
-              right={<span className="text-[11px] text-muted">click a level to trade</span>}
-            >
-              Order book
-            </CardHeader>
-            <div className="p-4">
-              {orderbook.isLoading && !ob ? (
-                <Spinner />
-              ) : ob ? (
-                <OrderbookTable bids={ob.bids} asks={ob.asks} onSelect={onBookSelect} />
-              ) : (
-                <div className="text-sm text-muted">Order book unavailable.</div>
-              )}
-              <div className="mt-3 flex justify-end text-[11px] text-faint">
-                source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}
-              </div>
-            </div>
-          </Card>
+              <Card>
+                <CardHeader
+                  right={<span className="text-[11px] text-muted">click a level to trade</span>}
+                >
+                  Order book
+                </CardHeader>
+                <div className="p-4">
+                  {orderbook.isLoading && !ob ? (
+                    <Spinner />
+                  ) : ob ? (
+                    <OrderbookTable bids={ob.bids} asks={ob.asks} onSelect={onBookSelect} />
+                  ) : (
+                    <div className="text-sm text-muted">Order book unavailable.</div>
+                  )}
+                  <div className="mt-3 flex justify-end text-[11px] text-faint">
+                    source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}
+                  </div>
+                </div>
+              </Card>
 
-          <QueueCard
-            signedIn={signedIn}
-            tokenId={tokenIds[outcomeIdx]}
-            bids={ob?.bids ?? []}
-            asks={ob?.asks ?? []}
-          />
+              <QueueCard
+                signedIn={signedIn}
+                tokenId={tokenIds[outcomeIdx]}
+                bids={ob?.bids ?? []}
+                asks={ob?.asks ?? []}
+              />
+            </>
+          ) : null}
         </div>
 
-        {/* Right: order ticket + conditional rule builder */}
+        {/* Right: trade + Smart Order entry (advanced keeps the raw rule form) */}
         <div className="space-y-4">
           <Card glow className="h-fit">
-            <CardHeader>Order ticket</CardHeader>
+            <CardHeader>Trade</CardHeader>
             <div className="p-4">
               <OrderTicket
                 conditionId={m.conditionId}
@@ -182,26 +197,37 @@ export default function MarketCockpitPage() {
             </div>
           </Card>
 
-          <Card className="h-fit">
-            <CardHeader>Conditional rule</CardHeader>
-            <div className="p-4">
-              <RuleBuilder
-                marketId={id}
-                conditionId={m.conditionId}
-                tokenIds={tokenIds}
-                outcomes={outcomes}
-                signedIn={signedIn}
-              />
-            </div>
-          </Card>
+          <AutomateCard
+            conditionId={m.conditionId}
+            tokenId={tokenIds[outcomeIdx]}
+            outcome={outcomes[outcomeIdx] ?? "YES"}
+            title={m.question}
+          />
 
-          {session.data ? (
-            <Card className="h-fit">
-              <CardHeader>Rules on this market</CardHeader>
-              <div className="p-4">
-                <RuleList conditionId={m.conditionId} />
-              </div>
-            </Card>
+          {view === "advanced" ? (
+            <>
+              <Card className="h-fit">
+                <CardHeader>Quick rule (classic form)</CardHeader>
+                <div className="p-4">
+                  <RuleBuilder
+                    marketId={id}
+                    conditionId={m.conditionId}
+                    tokenIds={tokenIds}
+                    outcomes={outcomes}
+                    signedIn={signedIn}
+                  />
+                </div>
+              </Card>
+
+              {session.data ? (
+                <Card className="h-fit">
+                  <CardHeader>Rules on this market</CardHeader>
+                  <div className="p-4">
+                    <RuleList conditionId={m.conditionId} />
+                  </div>
+                </Card>
+              ) : null}
+            </>
           ) : null}
         </div>
       </div>

@@ -120,7 +120,7 @@ export function WalletsSection({ signedIn }: { signedIn: boolean }) {
               ) : (
                 <Plus size={12} />
               )}
-              Create Privy wallet
+              Create Arima trading wallet
             </Button>
             {provisionWallet.error && (
               <p className="mt-1 text-[12px] text-neg">
@@ -133,8 +133,8 @@ export function WalletsSection({ signedIn }: { signedIn: boolean }) {
         {/* Relayer feature note */}
         {signedIn && walletStatus.data && !walletStatus.data.relayerEnabled && (
           <p className="text-[11px] text-muted">
-            Server-side signing (no-popup) is not yet active on this server. External wallet browser
-            signing is available.
+            No-popup trading isn&apos;t active on this server yet. You can still trade by signing
+            each order in your connected wallet.
           </p>
         )}
       </div>

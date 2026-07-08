@@ -3,36 +3,56 @@
 @tailwind utilities;
 
 :root {
-  /* ── Surfaces (sharp dark terminal) ─────────────────────────────────── */
+  /* ── Surfaces (calm light cards) ────────────────────────────────────── */
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-2: #f2f4f9;
+  --surface-3: #e9ecf4;
+  --border: #e3e6ef;
+  --border-strong: #cfd4e3;
+
+  /* ── Text ───────────────────────────────────────────────────────────── */
+  --fg: #0e1220;
+  --muted: #5b6478;
+  --faint: #8b93a8;
+
+  /* ── Brand (arima) ──────────────────────────────────────────────────── */
+  --brand: #2a36ff;
+  --brand-strong: #1d28e0; /* darker = stronger on light surfaces */
+  --brand-soft: #e8eaff;
+  --accent: #2230d9; /* darkened brand — readable as text/icons on light */
+
+  /* ── Semantic (AA on white) ─────────────────────────────────────────── */
+  --pos: #0f9d63;
+  --neg: #d92d3f;
+  --warn: #b97b0e;
+
+  --radius: 8px;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+}
+
+/* Dark terminal palette parked for a future theme toggle (darkMode: "class"). */
+.dark {
   --bg: #06070d;
   --surface: #0b0d15;
   --surface-2: #11131e;
   --surface-3: #171a28;
   --border: #1d2130;
   --border-strong: #2b3046;
-
-  /* ── Text ───────────────────────────────────────────────────────────── */
   --fg: #e9ecf5;
   --muted: #8a93ab;
   --faint: #59617a;
-
-  /* ── Brand (arima) ──────────────────────────────────────────────────── */
-  --brand: #2a36ff;
   --brand-strong: #4b56ff;
   --brand-soft: #1a1f4d;
-  --accent: #7c84ff; /* lightened brand — readable as text/icons on dark */
-
-  /* ── Semantic ───────────────────────────────────────────────────────── */
+  --accent: #7c84ff;
   --pos: #2bd98c;
   --neg: #ff4d5e;
   --warn: #f5a524;
-
-  --radius: 4px;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+  color-scheme: dark;
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
@@ -58,8 +78,8 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(900px 480px at 12% -8%, rgba(42, 54, 255, 0.12), transparent 60%),
-    radial-gradient(800px 520px at 92% 0%, rgba(42, 54, 255, 0.06), transparent 55%);
+    radial-gradient(900px 480px at 12% -8%, rgba(42, 54, 255, 0.05), transparent 60%),
+    radial-gradient(800px 520px at 92% 0%, rgba(42, 54, 255, 0.03), transparent 55%);
 }
 
 /* Numeric/tabular data reads better monospaced in a trading UI. */
@@ -85,7 +105,7 @@ body::before {
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #3a4060;
+  background: #b6bdd1;
   background-clip: padding-box;
 }
 .no-scrollbar::-webkit-scrollbar {
@@ -102,8 +122,7 @@ body::before {
 }
 
 ::selection {
-  background: rgba(42, 54, 255, 0.35);
-  color: #fff;
+  background: rgba(42, 54, 255, 0.16);
 }
 
 /* ── Effects ──────────────────────────────────────────────────────────── */
@@ -118,8 +137,8 @@ body::before {
 
 .glow-brand {
   box-shadow:
-    0 0 0 1px rgba(42, 54, 255, 0.35),
-    0 0 24px -6px rgba(42, 54, 255, 0.55);
+    0 0 0 1px rgba(42, 54, 255, 0.22),
+    0 0 24px -6px rgba(42, 54, 255, 0.3);
 }
 
 /* ── Animations ───────────────────────────────────────────────────────── */
@@ -153,7 +172,7 @@ body::before {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.045), transparent);
+  background: linear-gradient(90deg, transparent, rgba(14, 18, 32, 0.05), transparent);
   animation: shimmer 1.4s infinite;
 }
 
@@ -174,10 +193,10 @@ body::before {
 /* ── Glass & elevation ────────────────────────────────────────────────────── */
 /* Frosted panel for floating surfaces (hover cards, tooltips, sheets, hero). */
 .glass {
-  background: rgba(17, 19, 30, 0.72); /* surface-2 @ ~72% */
+  background: rgba(255, 255, 255, 0.68);
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid rgba(43, 48, 70, 0.7); /* ~border-strong */
+  border: 1px solid rgba(207, 212, 227, 0.8); /* ~border-strong */
 }
 
 /* ── Live motion (all disabled under prefers-reduced-motion, see below) ────── */
@@ -185,7 +204,7 @@ body::before {
 /* One-shot value tick: a brief green/red wash behind a number that changed. */
 @keyframes flash-pos {
   0% {
-    background-color: rgba(43, 217, 140, 0.24);
+    background-color: rgba(15, 157, 99, 0.16);
   }
   100% {
     background-color: transparent;
@@ -193,7 +212,7 @@ body::before {
 }
 @keyframes flash-neg {
   0% {
-    background-color: rgba(255, 77, 94, 0.24);
+    background-color: rgba(217, 45, 63, 0.14);
   }
   100% {
     background-color: transparent;
@@ -243,10 +262,10 @@ body::before {
 /* Reward hit — a glow burst when an order fills or a rule triggers. */
 @keyframes celebrate {
   0% {
-    box-shadow: 0 0 0 0 rgba(43, 217, 140, 0.5);
+    box-shadow: 0 0 0 0 rgba(15, 157, 99, 0.4);
   }
   100% {
-    box-shadow: 0 0 0 22px rgba(43, 217, 140, 0);
+    box-shadow: 0 0 0 22px rgba(15, 157, 99, 0);
   }
 }
 .celebrate {
@@ -263,7 +282,7 @@ body::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 45%;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.35), transparent);
   transform: translateX(-130%);
   animation: sheen 3.6s ease-in-out infinite;
   pointer-events: none;

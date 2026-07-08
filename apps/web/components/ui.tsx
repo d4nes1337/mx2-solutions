@@ -101,7 +101,7 @@ export function Button({
 }) {
   const variants: Record<string, string> = {
     primary:
-      "border-brand bg-brand text-white hover:bg-brand-strong hover:border-brand-strong shadow-[0_0_18px_-6px_rgba(42,54,255,0.7)]",
+      "border-brand bg-brand text-white hover:bg-brand-strong hover:border-brand-strong shadow-[0_0_18px_-6px_rgba(42,54,255,0.35)]",
     outline: "border-brand/50 bg-brand/10 text-accent hover:bg-brand/20",
     ghost: "border-border bg-surface-2 text-fg hover:bg-surface-3 hover:border-border-strong",
     danger: "border-neg/50 bg-neg/15 text-neg hover:bg-neg/25",
@@ -189,7 +189,7 @@ export function Segmented<T extends string>({
             "rounded-[3px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-30",
             size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
             value === o.value
-              ? "bg-brand text-white shadow-[0_0_14px_-6px_rgba(42,54,255,0.9)]"
+              ? "bg-brand text-white shadow-[0_0_14px_-6px_rgba(42,54,255,0.45)]"
               : "text-muted hover:text-fg",
           )}
         >

@@ -12,12 +12,16 @@ import type {
 import {
   bestAsk,
   bestBid,
+  evaluateExpression,
   evaluatePredicates,
   hashDefinition,
+  normalizeDefinition,
+  referencedTokenIds,
   spread,
   type BookLevel,
   type MarketDataView,
   type RuleDefinition,
+  type StrategyDefinition,
 } from "@mx2/rules";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 
@@ -129,12 +133,17 @@ const evaluateAgainstSnapshot = (
   };
 };
 
-/** Order parameters the user is asked to confirm + sign (mirrors trade preview). */
-const buildOrderPreview = (def: RuleDefinition, config: AppConfig) => {
-  const { side, price, size, orderType } = def.action;
+/**
+ * Order parameters the user is asked to confirm + sign (mirrors trade preview).
+ * Works on the normalized v2 shape so v1 and v2 triggers share one confirm flow;
+ * returns null for actions with nothing to sign (alert / stop_strategy).
+ */
+const buildOrderPreview = (def: StrategyDefinition, config: AppConfig) => {
+  if (def.action.kind !== "order") return null;
+  const { market, side, price, size, orderType, execution } = def.action;
   return {
-    tokenId: def.tokenId,
-    conditionId: def.conditionId,
+    tokenId: market.tokenId,
+    conditionId: market.conditionId,
     side,
     price: String(price),
     size: String(size),
@@ -142,7 +151,7 @@ const buildOrderPreview = (def: RuleDefinition, config: AppConfig) => {
     maxSpend: (price * size).toFixed(6),
     builderCode: config.polymarket.builderCode ?? null,
     signatureType: config.features.privySigning ? 0 : 2,
-    executionMode: def.executionMode ?? "manual",
+    executionMode: execution === "auto" ? "auto" : "manual",
     timestamp: Math.floor(Date.now() / 1000).toString(),
   };
 };
@@ -218,10 +227,11 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   });
 
   // ── GET /api/rules ──────────────────────────────────────────────────────────
+  // Legacy surface lists v1 rules only; v2 strategies live at /api/smart-orders.
   app.get("/api/rules", guard, async (req) => {
     const user = req.user!;
     const rules = await deps.ruleStore.listByWallet(user.walletAddress);
-    return { rules };
+    return { rules: rules.filter((r) => r.version === 1) };
   });
 
   // ── GET /api/rules/:id ──────────────────────────────────────────────────────
@@ -245,6 +255,13 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
     if (!rule) {
       reply.code(404);
       return { error: "NOT_FOUND", message: "Rule not found" };
+    }
+    if (rule.version !== 1) {
+      reply.code(409);
+      return {
+        error: "USE_SMART_ORDERS",
+        message: "This strategy uses the v2 engine — evaluate it via /api/smart-orders.",
+      };
     }
     const def = rule.definition as RuleDefinition;
     const snapshot = await deps.marketSnapshots.findByTokenId(rule.tokenId);
@@ -326,14 +343,27 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       reply.code(404);
       return { error: "NOT_FOUND", message: "Originating rule not found" };
     }
-    const def = rule.definition as RuleDefinition;
-    const snapshot = await deps.marketSnapshots.findByTokenId(def.tokenId);
-    const fresh = evaluateAgainstSnapshot(def, snapshot, Date.now());
+    // Normalize so v1 and v2 triggers share one confirm flow. Freshness reads
+    // worker snapshots for every referenced market; a missing/stale snapshot
+    // yields conditionStillHolds=false (fail-closed), matching the evaluator.
+    const def = normalizeDefinition(rule.definition as RuleDefinition | StrategyDefinition);
+    const nowMs = Date.now();
+    const views: Record<string, MarketDataView> = {};
+    for (const tokenId of referencedTokenIds(def)) {
+      const snapshot = await deps.marketSnapshots.findByTokenId(tokenId);
+      if (snapshot) views[tokenId] = snapshotToView(snapshot);
+    }
+    const evaluation = evaluateExpression(def, views, nowMs);
     return {
       trigger,
       evidence: trigger.evidence,
-      conditionStillHolds: fresh.satisfied,
-      fresh,
+      conditionStillHolds: evaluation.satisfied,
+      fresh: {
+        satisfied: evaluation.satisfied,
+        isStale: evaluation.staleTokenIds.length > 0,
+        root: evaluation.root,
+        staleTokenIds: evaluation.staleTokenIds,
+      },
       preview: buildOrderPreview(def, deps.config),
       warning: deps.config.features.liveTrading
         ? "Live trading is ENABLED. Submitting this order will use real funds."

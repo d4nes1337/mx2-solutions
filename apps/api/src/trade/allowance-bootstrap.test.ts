@@ -24,10 +24,12 @@ const walletRow = (bootstrapped: boolean): PrivyWalletRow => ({
 const noAllowances: AllowanceReader = {
   erc20Allowance: async () => 0n,
   isApprovedForAll: async () => false,
+  erc20Balance: async () => 0n,
 };
 const fullAllowances: AllowanceReader = {
   erc20Allowance: async () => MAX,
   isApprovedForAll: async () => true,
+  erc20Balance: async () => 0n,
 };
 
 const makeDeps = (over: { reader: AllowanceReader; signer?: TradingSigner }) => {

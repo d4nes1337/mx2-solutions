@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 /**
  * AES-256-GCM encryption for small secrets stored in the DB (per-user L2 CLOB
@@ -46,6 +46,14 @@ export const encryptCredentials = (data: unknown, keyHex: string): EncryptedCred
     keyVersion: CURRENT_KEY_VERSION,
   };
 };
+
+/**
+ * One-way fingerprint for correlating a secret in audit/log metadata without
+ * persisting the secret itself. 12 hex chars of SHA-256 — enough to match two
+ * events to the same credential, useless for recovering it.
+ */
+export const fingerprintSecret = (value: string): string =>
+  createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);
 
 export const decryptCredentials = <T>(encrypted: EncryptedCreds, keyHex: string): T => {
   const key = parseKey(keyHex);

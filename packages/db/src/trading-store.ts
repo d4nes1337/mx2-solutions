@@ -429,6 +429,12 @@ export interface OrderIntentStore {
   listByWallet(walletAddress: string, limit?: number): Promise<OrderIntentRow[]>;
   /** Count intents created at/after `since` for a wallet — the shared rate-limit gate. */
   countRecentByWallet(walletAddress: string, since: Date): Promise<number>;
+  /**
+   * Σ(price×size) USD of a rule's AUTO order intents created at/after `since`.
+   * Conservative: everything except failed/cancelled counts toward the cap
+   * (an in-flight or unknown-status order still committed funds).
+   */
+  sumRuleAutoNotional(ruleId: string, since: Date): Promise<number>;
   updateStatus(
     id: string,
     status: OrderIntentStatus,
@@ -491,6 +497,23 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
         and(eq(orderIntents.walletAddress, walletAddress), gte(orderIntents.createdAt, since)),
       );
     return row?.count ?? 0;
+  },
+
+  async sumRuleAutoNotional(ruleId, since) {
+    // Auto intents carry the deterministic key "auto:<ruleId>:<triggerId>".
+    const [row] = await db
+      .select({
+        total: sql<string>`coalesce(sum((${orderIntents.price})::numeric * (${orderIntents.size})::numeric), 0)::text`,
+      })
+      .from(orderIntents)
+      .where(
+        and(
+          sql`${orderIntents.idempotencyKey} like ${`auto:${ruleId}:%`}`,
+          gte(orderIntents.createdAt, since),
+          sql`${orderIntents.status} not in ('failed', 'cancelled')`,
+        ),
+      );
+    return Number(row?.total ?? 0);
   },
 
   async updateStatus(id, status, extra) {

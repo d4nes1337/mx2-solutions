@@ -208,7 +208,7 @@ export function RuleBuilder({
       {createError ? <ErrorNote message={createError} /> : null}
       {create.isSuccess ? (
         <p className="text-xs text-pos">
-          Rule created — it’s now watching the market. See the Rules tab.
+          Rule created — it’s now watching the market. See the Smart Orders tab.
         </p>
       ) : null}
 

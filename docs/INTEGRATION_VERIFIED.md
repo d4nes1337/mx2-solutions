@@ -230,3 +230,11 @@ public profiles.
   returns `pnl`, `vol`, rank, username, and profile image for the trader. Use this as the current
   account-level total PnL anchor when available; derive realized top-line PnL as total minus open
   unrealized.
+
+## 14. Gamma full-text search (verified live 2026-07-08; ADR-0010 / Smart Orders)
+
+- `GET https://gamma-api.polymarket.com/public-search?q=<query>&limit_per_type=<n>&events_status=active`
+  returns `{ events: GammaEvent[], tags: [...] }`; event objects match the `/events` shape
+  (id, title, slug, markets[] with conditionId/clobTokenIds/outcomePrices, volume, liquidity,
+  endDate, image). Consumed by `GammaClient.searchMarkets` with a title-filtered `/events`
+  scan as the fallback if the endpoint errors or changes shape.

@@ -19,6 +19,7 @@ import type {
   TriggerEvidence,
   VisibleLevelsCondition,
 } from "./types.js";
+import type { StrategyDefinition } from "./types-v2.js";
 
 export const EVALUATOR_VERSION = "rules-engine/0.1.0";
 
@@ -37,7 +38,7 @@ const canonical = (value: unknown): unknown => {
 };
 
 /** FNV-1a 32-bit hash rendered as 8 hex chars. Deterministic, dependency-free. */
-export const hashDefinition = (def: RuleDefinition): string => {
+export const hashDefinition = (def: RuleDefinition | StrategyDefinition): string => {
   const json = JSON.stringify(canonical(def));
   let h = 0x811c9dc5;
   for (let i = 0; i < json.length; i++) {

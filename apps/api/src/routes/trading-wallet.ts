@@ -10,7 +10,7 @@ import type {
 import { isDepositWalletConfirmed, type DepositWalletRelayer } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
-import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { USDC_ADDRESS, type AllowanceReader } from "../trade/allowance-bootstrap.js";
 import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
 
 export interface TradingWalletRoutesDeps {
@@ -255,6 +255,49 @@ export const registerTradingWalletRoutes = (
     return { ok: true, expiresAt: expiresAt.toISOString() };
   });
 
+  // ── POST /api/trading-wallet/delegate/refresh ─────────────────────────────
+  // Extends the app-side signing-authority ledger for an armed wallet WITHOUT
+  // re-granting anything: refresh requires a currently ACTIVE delegation (the
+  // refresh-within-grant rule, D-019). Once a delegation has lapsed the user
+  // must consent again via POST /delegate. Note: if the Privy-side session
+  // grant has its own shorter horizon, signing simply fails closed regardless
+  // of our ledger (A-049 — verify on staging).
+  app.post(
+    "/api/trading-wallet/delegate/refresh",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      if (!ensureEnabled(reply)) return;
+      const user = req.user!;
+      const current = await deps.delegations.findActive(user.walletAddress);
+      if (!current) {
+        reply.code(409);
+        return {
+          error: "DELEGATION_NOT_ACTIVE",
+          message:
+            "No active signing authority to refresh — grant it again from your wallet settings.",
+        };
+      }
+      const ttlMs = deps.config.limits.sessionSignerTtlSeconds * 1000;
+      const expiresAt = new Date(Date.now() + ttlMs);
+      await deps.delegations.create({
+        walletAddress: user.walletAddress,
+        sessionSignerId: current.sessionSignerId,
+        expiresAt,
+      });
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "trading_wallet.delegated",
+        subject: `wallet:${user.walletAddress}`,
+        metadata: {
+          refreshed: true,
+          expiresAt: expiresAt.toISOString(),
+          hasSessionSigner: current.sessionSignerId !== null,
+        },
+      });
+      return { ok: true, expiresAt: expiresAt.toISOString() };
+    },
+  );
+
   // ── GET /api/trading-wallet ───────────────────────────────────────────────
   app.get("/api/trading-wallet", { preHandler: requireAuth }, async (req) => {
     const user = req.user!;
@@ -278,6 +321,49 @@ export const registerTradingWalletRoutes = (
       allowancesBootstrapped: wallet?.allowancesBootstrappedAt != null,
       delegationActive: delegation !== null,
       delegationExpiresAt: delegation?.expiresAt.toISOString() ?? null,
+    };
+  });
+
+  // ── GET /api/trading-wallet/balance ───────────────────────────────────────
+  // On-chain USDC.e balances for the top-up stepper: the deposit wallet (live
+  // CLOB funds) and the embedded signer EOA. Requires a Polygon RPC; without
+  // one the endpoint reports unavailable rather than guessing.
+  app.get("/api/trading-wallet/balance", { preHandler: requireAuth }, async (req, reply) => {
+    const user = req.user!;
+    if (!deps.allowanceReader) {
+      reply.code(503);
+      return {
+        error: "BALANCE_UNAVAILABLE",
+        message: "Balance lookups are not configured on this server.",
+      };
+    }
+    const wallet = await deps.privyWallets.find(user.walletAddress);
+    if (!wallet) {
+      reply.code(400);
+      return {
+        error: "TRADING_WALLET_NOT_PROVISIONED",
+        message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
+      };
+    }
+    const internalAccount = (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
+      (account) =>
+        account.kind === "internal_privy" &&
+        account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase(),
+    );
+    const depositWallet = internalAccount?.depositWalletAddress ?? null;
+    const toUsd = (raw: bigint) => Number(raw) / 1e6; // USDC.e has 6 decimals
+    const [embeddedRaw, depositRaw] = await Promise.all([
+      deps.allowanceReader.erc20Balance(USDC_ADDRESS, wallet.embeddedAddress),
+      depositWallet
+        ? deps.allowanceReader.erc20Balance(USDC_ADDRESS, depositWallet)
+        : Promise.resolve<bigint | null>(null),
+    ]);
+    return {
+      depositWalletAddress: depositWallet,
+      depositWalletUsdc: depositRaw === null ? null : toUsd(depositRaw),
+      embeddedAddress: wallet.embeddedAddress,
+      embeddedUsdc: toUsd(embeddedRaw),
+      asOf: new Date().toISOString(),
     };
   });
 

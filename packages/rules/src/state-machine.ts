@@ -32,6 +32,8 @@ const TERMINAL: ReadonlySet<RuleStatus> = new Set<RuleStatus>([
   "EXECUTING",
   "EXECUTED_AUTO",
   "EXECUTION_FAILED",
+  // v2: a strategy that finished its recurrence is done.
+  "COMPLETED",
   "EXPIRED",
   "CANCELLED",
   "INVALIDATED",

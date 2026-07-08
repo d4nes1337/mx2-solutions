@@ -90,12 +90,19 @@ const EnvSchema = z.object({
     .optional(),
 
   // Trading-session limits (owner-selected guardrails).
-  SESSION_SIGNER_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
+  // Delegation TTL: 14 days default, 30 days hard cap (D-019: armed auto
+  // strategies must survive multi-day windows; kill switch + per-strategy
+  // limits + disarm compensate for the longer authority).
+  SESSION_SIGNER_TTL_SECONDS: z.coerce.number().int().positive().max(2_592_000).default(1_209_600),
   ORDER_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(10),
 
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
   FEATURE_CONDITIONAL_RULES: boolFromEnv(true),
+  // Smart Order DSL v2 API surface (builder, draft evaluation, market search).
+  // Not a spend-risk feature by itself — execution risk stays behind the flags
+  // below — so it defaults ON like FEATURE_CONDITIONAL_RULES.
+  FEATURE_SMART_ORDERS_V2: boolFromEnv(true),
   FEATURE_CONDITIONAL_LIVE_EXECUTION: boolFromEnv(false),
   FEATURE_RELAYER: boolFromEnv(false),
   // Server-side signing (manual no-popup orders). Independent of live trading.
@@ -147,6 +154,7 @@ export type AppConfig = {
   features: {
     liveTrading: boolean;
     conditionalRules: boolean;
+    smartOrdersV2: boolean;
     conditionalLiveExecution: boolean;
     relayer: boolean;
     privySigning: boolean;
@@ -256,6 +264,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
       conditionalRules: e.FEATURE_CONDITIONAL_RULES,
+      smartOrdersV2: e.FEATURE_SMART_ORDERS_V2,
       conditionalLiveExecution: e.FEATURE_CONDITIONAL_LIVE_EXECUTION,
       relayer: e.FEATURE_RELAYER,
       privySigning: e.FEATURE_PRIVY_SIGNING,
