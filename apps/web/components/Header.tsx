@@ -6,6 +6,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount } from "wagmi";
 import { useSession, useSignIn, useSignOut } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+import { LogoMark } from "@/components/brand/LogoMark";
 import { Badge, Button, cn } from "./ui";
 
 const NAV = [
@@ -42,18 +43,7 @@ function NavLink({ href, label, mobile }: { href: string; label: string; mobile?
 function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2">
-      <span className="grid h-7 w-7 place-items-center rounded-md bg-brand shadow-[0_0_18px_-4px_rgba(42,54,255,0.35)]">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-          <path
-            d="M2 11.5 L6 7 L9 9.5 L14 3.5"
-            stroke="white"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <circle cx="14" cy="3.5" r="1.4" fill="white" />
-        </svg>
-      </span>
+      <LogoMark className="h-7 w-auto text-brand drop-shadow-[0_2px_8px_rgba(42,54,255,0.3)]" />
       <span className="text-[17px] font-bold lowercase tracking-tight text-fg">arima</span>
     </Link>
   );

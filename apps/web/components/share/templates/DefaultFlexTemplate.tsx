@@ -7,6 +7,7 @@
 // keep the PNG faithful. Keep external <image> refs as data-URLs, or omit them.
 
 import type { FlexCardModel } from "../types";
+import { LOGO_MARK_PATHS } from "@/lib/brand/logo-mark";
 
 const C = {
   bg: "#06070d",
@@ -92,6 +93,11 @@ export function DefaultFlexTemplate({ model }: { model: FlexCardModel }) {
       {/* Brand row */}
       <g transform="translate(64, 74)">
         <rect x={0} y={-22} width={30} height={30} rx={7} fill={C.brand} />
+        <g transform="translate(5, -16) scale(0.044)" fill="#ffffff">
+          {LOGO_MARK_PATHS.map((d) => (
+            <path key={d} d={d} />
+          ))}
+        </g>
         <text
           x={42}
           y={2}

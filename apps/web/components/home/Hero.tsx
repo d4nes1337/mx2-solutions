@@ -104,7 +104,16 @@ export function Hero() {
         </div>
         <MarketSearch />
       </div>
-      <SmartOrderPreview />
+      <div className="relative">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/logo-mark-gradient.webp"
+          alt=""
+          aria-hidden
+          className="pointer-events-none absolute -right-10 -top-10 -z-10 hidden w-56 select-none lg:block"
+        />
+        <SmartOrderPreview />
+      </div>
     </section>
   );
 }
