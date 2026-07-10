@@ -4,9 +4,12 @@ import { z } from "zod";
  * Tool contract for the NL→Smart Order generator.
  *
  * Design notes (ADR-0011):
- *  - `strict: true` on every tool: the API guarantees inputs validate against
- *    the schema exactly. Strict schemas forbid recursion, so the expression
- *    tree is a BOUNDED unrolling — root children are conditions or ONE level
+ *  - `strict: true` on the small tools (search/clarify): the API guarantees
+ *    inputs validate exactly. create_strategy CANNOT be strict — its 19
+ *    union-typed parameters exceed Anthropic's strict-compilation cap of 16
+ *    (verified live 2026-07-10) — so its safety net is the zod mirror parse,
+ *    one repair round, and validateStrategyDefinition. The expression tree is
+ *    still a BOUNDED unrolling — root children are conditions or ONE level
  *    of sub-groups whose children are conditions. That matches
  *    EXPR_LIMITS.maxDepth = 3 (root → group → condition) exactly.
  *  - The model never sees conditionIds/tokenIds. It references markets by
@@ -153,11 +156,15 @@ export const SEARCH_MARKETS_TOOL = {
   },
 } as const;
 
+// NOT strict: the flattened nullable condition shape carries 19 union-typed
+// parameters and Anthropic's strict-mode grammar compilation caps at 16
+// (verified live 2026-07-10: 400 invalid_request_error). Shape safety comes
+// from the zod mirror parse + one repair round + validateStrategyDefinition
+// instead; the few-shot examples in the system prompt anchor the exact JSON.
 export const CREATE_STRATEGY_TOOL = {
   name: "create_strategy",
   description:
-    "Your FINAL answer: emit the complete Smart Order. Reference markets only by search_markets index (source=search) or by a tokenId already present in the user's current definition (source=current). Call exactly once, after any needed searches.",
-  strict: true,
+    "Your FINAL answer: emit the complete Smart Order. Reference markets only by search_markets index (source=search) or by a tokenId already present in the user's current definition (source=current). Call exactly once, after any needed searches. Follow the input schema EXACTLY — include every field, using null where a field does not apply.",
   input_schema: {
     type: "object" as const,
     additionalProperties: false,
