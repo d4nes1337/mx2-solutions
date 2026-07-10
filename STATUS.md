@@ -1,8 +1,32 @@
 # Project Status
 
-_Last updated: 2026-07-09_
+_Last updated: 2026-07-10_
 
 ## Recent
+
+- **AI "vibe-trading" onboarding + open beta (built; D-021, ADR-0011).** Growth slice per the
+  owner's brief: the landing hero becomes a prompt box ("Type a thought. Watch it become a
+  strategy.") that deep-links into the builder where a new `AiPanel` auto-fires
+  `POST /api/ai/generate-strategy` — a PUBLIC, per-IP rate-limited (5/min + 15/day) Anthropic
+  tool-use loop (`claude-sonnet-5` via `AI_MODEL`, fail-closed `FEATURE_AI_CHAT` requiring
+  `ANTHROPIC_API_KEY`) that searches live markets server-side, binds real `MarketRef`s by
+  candidate index (the model never sees conditionId/tokenIds), validates with the shared
+  `validateStrategyDefinition` (+1 repair round), and hard-forces `execution:"prepare"`. The
+  canvas assembles with a staged node reveal; follow-up messages refine the doc in place
+  (stateless server, client-held ≤6-turn history). New **instant PnL projection** right-rail
+  card (`ProjectionCard`): deterministic payoff math (shares semantics; hypothetical $100 for
+  alert-only), exit-price PnL curve, and a "would have triggered N× → ±$X" backtest over real
+  30-day CLOB history (new public token-keyed `GET /api/markets/prices-history`, 60/min) with
+  estimates-only disclaimers, plus a fund-your-wallet CTA. **Open beta**: `FEATURE_OPEN_BETA`
+  auto-allowlists any wallet completing a valid EIP-712 sign-in (`allowlist.auto_added` audit,
+  revocable). Found+fixed in browser verification: auto-fired mutations lost their settle
+  notification under React StrictMode (deferred-timer fix, regression-tested). Both flags
+  default OFF; risks R-022..24 registered. Quality gates: format/lint/typecheck ✓, backend
+  **265 pass / 3 skipped** (16 new: AI route 11, auth open-beta 4, config), web **84 pass**
+  (23 new: projection 8, backtest 11, AiPanel 4 incl. StrictMode regression, Hero 3); full
+  wow-flow verified in-browser against live Polymarket data (hero → prompt → builder →
+  projection with correct mark-to-market; AI error path graceful with template fallback —
+  live generation smoke happens at prod deploy once the owner sets the real key).
 
 - **Product pivot → "Smart Orders" visual builder (built; UX track U1–U7 + engine track E3–E4).**
   Owner-approved pivot (2026-07-07) from terminal-first UX to an accessible visual

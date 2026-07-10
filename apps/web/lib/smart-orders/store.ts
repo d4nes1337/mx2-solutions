@@ -24,8 +24,11 @@ export interface BuilderState {
   doc: StrategyDoc;
   /** Bumped on every semantic change — drives draft re-evaluation. */
   revision: number;
+  /** Bumped when the AI panel replaces the doc — drives the staged node reveal. */
+  revealTick: number;
 
   reset: (doc?: StrategyDoc) => void;
+  revealAll: () => void;
   setName: (name: string) => void;
   setRootOp: (op: "and" | "or") => void;
   addCondition: (condition: ConditionV2) => string;
@@ -51,8 +54,12 @@ const bump = (doc: StrategyDoc, state: BuilderState): Pick<BuilderState, "doc" |
 export const useBuilderStore = create<BuilderState>((set, get) => ({
   doc: emptyDoc(),
   revision: 0,
+  revealTick: 0,
 
   reset: (doc) => set({ doc: doc ?? emptyDoc(), revision: get().revision + 1 }),
+
+  // Editor-only (no revision bump — never retriggers evaluation).
+  revealAll: () => set((s) => ({ revealTick: s.revealTick + 1 })),
 
   setName: (name) => set((s) => bump({ ...s.doc, name }, s)),
 

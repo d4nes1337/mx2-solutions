@@ -114,7 +114,7 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
     );
 
     // Emit allowlist audit event regardless of outcome.
-    const allowed = await deps.allowlist.isAllowed(address);
+    let allowed = await deps.allowlist.isAllowed(address);
     await deps.auditStore.emit({
       actor: address,
       action: "allowlist.checked",
@@ -175,6 +175,20 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
           clientTypedData: signedTypedData ?? null,
         },
       };
+    }
+
+    // Open beta: after a VALID signature, auto-allowlist unknown wallets. The
+    // allowlist table stays the source of truth (revoking a wallet still works;
+    // AllowlistStore.add upserts and re-activates). Behind FEATURE_OPEN_BETA.
+    if (!allowed && deps.config.features.openBeta) {
+      await deps.allowlist.add(address, "system:open-beta", "auto-allowlisted (open beta)");
+      await deps.auditStore.emit({
+        actor: address,
+        action: "allowlist.auto_added",
+        subject: `wallet:${address}`,
+        metadata: { flag: "FEATURE_OPEN_BETA" },
+      });
+      allowed = true;
     }
 
     if (!allowed) {

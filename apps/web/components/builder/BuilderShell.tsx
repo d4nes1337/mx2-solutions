@@ -14,7 +14,8 @@ import type { ConditionV2 } from "@mx2/rules";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { UNBOUND, conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
+import { useFeatureFlags } from "@/lib/queries";
+import { UNBOUND, conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
 import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
@@ -25,8 +26,10 @@ import {
   useStrategyControl,
 } from "@/lib/smart-orders/queries";
 import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
+import { AiPanel } from "./AiPanel";
 import { Inspector } from "./Inspector";
 import { MakerEstimator } from "./MakerEstimator";
+import { ProjectionCard } from "./ProjectionCard";
 import { SentenceBar } from "./SentenceBar";
 
 const BuilderCanvas = dynamic(() => import("./BuilderCanvas"), {
@@ -132,9 +135,13 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
-  // Entry modes: edit an existing strategy, or template-first creation.
-  // A ?conditionId=&tokenId=&outcome=&title= set pre-binds the template to a
-  // market (the cockpit's "Automate this market" deep link).
+  const flags = useFeatureFlags();
+  const aiPrompt = params.get("prompt");
+
+  // Entry modes: edit an existing strategy, AI prompt deep link (landing hero,
+  // ?prompt=…), or template-first creation. A ?conditionId=&tokenId=&outcome=
+  // &title= set pre-binds the template to a market (the cockpit's "Automate
+  // this market" deep link).
   useEffect(() => {
     if (initialized) return;
     if (editOf) {
@@ -142,6 +149,16 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       reset(layoutDoc(docFromDefinition(editing.data.definitionV2)));
       setInitialized(true);
       return;
+    }
+    if (aiPrompt) {
+      if (flags.isLoading) return; // wait to know whether the AI panel exists
+      if (flags.data?.aiChat) {
+        // Start blank — the AiPanel auto-fires the prompt and fills the canvas.
+        reset(emptyDoc());
+        setInitialized(true);
+        return;
+      }
+      // Flag off → fall through to the template path (graceful degradation).
     }
     const t = params.get("template");
     const template = (t ? templateById(t) : null) ?? TEMPLATES[0]!;
@@ -159,7 +176,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     const meta = params.get("title") ? { title: params.get("title")! } : undefined;
     reset(template.build(market, meta));
     setInitialized(true);
-  }, [initialized, params, reset, editOf, editing.data]);
+  }, [initialized, params, reset, editOf, editing.data, aiPrompt, flags.isLoading, flags.data]);
 
   const issues = useMemo(() => validateDoc(doc), [doc]);
   const hasConditions = conditionLeavesOf(doc.expr).length > 0;
@@ -287,8 +304,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         </div>
 
         <div className="space-y-3">
+          {flags.data?.aiChat ? <AiPanel initialPrompt={aiPrompt} /> : null}
           <Inspector />
           <MakerEstimator evaluation={evaluation.data} />
+          <ProjectionCard evaluation={evaluation.data} />
 
           {/* Save / arm */}
           <div className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel">

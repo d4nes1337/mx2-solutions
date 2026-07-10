@@ -1,12 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import type { GammaClient, ClobClient, GetPricesHistoryParams } from "@mx2/polymarket-client";
 import type { MarketSnapshotStore } from "@mx2/db";
+import { makeRateLimit } from "../middleware/rate-limit.js";
 
 export interface MarketsRoutesDeps {
   gammaClient: GammaClient;
   clobClient: ClobClient;
   marketSnapshots: MarketSnapshotStore;
 }
+
+// CLOB token ids are uint256 rendered as decimal strings.
+const TOKEN_ID_RE = /^\d{1,100}$/;
 
 const parseTokenIds = (raw: string): string[] => {
   try {
@@ -19,6 +23,31 @@ const parseTokenIds = (raw: string): string[] => {
 };
 
 export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesDeps): void => {
+  // PUBLIC, rate-limited: price history keyed DIRECTLY by CLOB token id. The
+  // builder's projection panel only knows tokenIds (no Gamma market id), so the
+  // /:id variant below can't serve it. Registered before /:id (static wins).
+  app.get(
+    "/api/markets/prices-history",
+    { preHandler: [makeRateLimit({ scope: "prices-history-token", limit: 60, windowMs: 60_000 })] },
+    async (req, reply) => {
+      const q = req.query as Record<string, string>;
+      const tokenId = q["tokenId"];
+      if (!tokenId || !TOKEN_ID_RE.test(tokenId)) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "valid tokenId required (?tokenId=...)" };
+      }
+
+      const histParams: GetPricesHistoryParams = { tokenId, interval: q["interval"] ?? "1m" };
+      if (q["fidelity"] !== undefined) histParams.fidelity = Number(q["fidelity"]);
+      const histResult = await deps.clobClient.getPricesHistory(histParams);
+      if (!histResult.ok) {
+        reply.code(502);
+        return { error: histResult.error.code, message: histResult.error.message };
+      }
+      return { tokenId, history: histResult.value };
+    },
+  );
+
   // Resolve Gamma market metadata by conditionId or CLOB token id (must register before /:id).
   app.get("/api/markets/resolve", async (req, reply) => {
     const q = req.query as Record<string, string>;

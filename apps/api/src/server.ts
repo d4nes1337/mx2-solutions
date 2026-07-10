@@ -28,6 +28,7 @@ import {
 import { buildApp } from "./app.js";
 import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
 import { createDepositWalletRelayerFromConfig } from "./trade/deposit-wallet-relayer-factory.js";
+import { createAnthropicAiClient } from "./ai/client.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
 const main = async (): Promise<void> => {
@@ -65,6 +66,13 @@ const main = async (): Promise<void> => {
   });
   const geoblockClient = createGeoblockClient({ baseUrl: config.polymarket.geoblockUrl });
 
+  // Only constructed when the flag AND key are present (loadConfig enforces
+  // the pairing); otherwise the AI route serves 503 AI_DISABLED.
+  const aiClient =
+    config.features.aiChat && config.ai.anthropicApiKey
+      ? createAnthropicAiClient({ apiKey: config.ai.anthropicApiKey })
+      : null;
+
   const app = buildApp({
     config,
     logger,
@@ -91,6 +99,7 @@ const main = async (): Promise<void> => {
     tradingSigner,
     depositWalletRelayer,
     geoblockClient,
+    aiClient,
   });
 
   const shutdown = async (signal: string): Promise<void> => {

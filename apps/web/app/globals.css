@@ -225,6 +225,22 @@ body::before {
   animation: flash-neg 0.6s ease-out;
 }
 
+/* Builder nodes cascading in after the AI assembles a strategy (staggered via
+   inline animation-delay on each React Flow node wrapper). */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.node-reveal {
+  animation: node-in 0.35s ease-out both;
+}
+
 /* Activity-tape items sliding in from the leading edge. */
 @keyframes slide-in {
   from {
@@ -305,6 +321,7 @@ body::before {
   .flash-pos,
   .flash-neg,
   .slide-in,
+  .node-reveal,
   .ticker-track,
   .celebrate,
   .sheen::after {

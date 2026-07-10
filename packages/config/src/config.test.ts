@@ -73,4 +73,29 @@ describe("loadConfig", () => {
   it("rejects an invalid log level", () => {
     expect(() => loadConfig({ ...base, APP_LOG_LEVEL: "loud" })).toThrow(ConfigError);
   });
+
+  it("defaults AI chat and open beta off with the default model", () => {
+    const cfg = loadConfig(base);
+    expect(cfg.features.aiChat).toBe(false);
+    expect(cfg.features.openBeta).toBe(false);
+    expect(cfg.ai.model).toBe("claude-sonnet-5");
+    expect(cfg.ai.anthropicApiKey).toBeUndefined();
+  });
+
+  it("fails closed if AI chat is enabled without an Anthropic key", () => {
+    expect(() => loadConfig({ ...base, FEATURE_AI_CHAT: "true" })).toThrow(ConfigError);
+  });
+
+  it("accepts AI chat when the key is present and honours AI_MODEL", () => {
+    const cfg = loadConfig({
+      ...base,
+      FEATURE_AI_CHAT: "true",
+      ANTHROPIC_API_KEY: "sk-ant-test",
+      AI_MODEL: "claude-opus-4-8",
+      FEATURE_OPEN_BETA: "true",
+    });
+    expect(cfg.features.aiChat).toBe(true);
+    expect(cfg.features.openBeta).toBe(true);
+    expect(cfg.ai.model).toBe("claude-opus-4-8");
+  });
 });

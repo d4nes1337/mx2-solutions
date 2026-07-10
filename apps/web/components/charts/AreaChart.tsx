@@ -25,6 +25,7 @@ export function AreaChart({
   fill = true,
   label,
   baseline,
+  markers,
   className,
 }: {
   data: ChartPoint[];
@@ -40,6 +41,8 @@ export function AreaChart({
   label?: string;
   /** Optional horizontal reference line, e.g. 0.5 for a probability chart. */
   baseline?: number;
+  /** Optional point markers (e.g. backtest triggers), snapped to the nearest sample. */
+  markers?: { t: number; label?: string }[];
   className?: string;
 }) {
   const uid = useId().replace(/:/g, "");
@@ -92,6 +95,26 @@ export function AreaChart({
 
     return { min, max, span, x, y, pts, line, area };
   }, [data, w, H, padB, padR]);
+
+  // Snap each marker to the nearest sample by timestamp (s/ms tolerated on
+  // both sides). Capped so a dense backtest can't clutter the chart.
+  const markerPts = useMemo(() => {
+    if (!geom || !markers || markers.length === 0 || data.length === 0) return [];
+    const norm = (t: number) => (t < 1e12 ? t * 1000 : t);
+    return markers.slice(0, 60).map((m) => {
+      const target = norm(m.t);
+      let best = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < data.length; i++) {
+        const dist = Math.abs(norm(data[i]!.t) - target);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+      return { pt: geom.pts[best]!, label: m.label };
+    });
+  }, [geom, markers, data]);
 
   if (!geom) {
     return (
@@ -179,6 +202,20 @@ export function AreaChart({
           strokeLinejoin="round"
           strokeLinecap="round"
         />
+
+        {markerPts.map((m, i) => (
+          <circle
+            key={i}
+            cx={m.pt[0]}
+            cy={m.pt[1]}
+            r={4}
+            fill="var(--brand, #2a36ff)"
+            stroke="var(--bg)"
+            strokeWidth={1.5}
+          >
+            {m.label ? <title>{m.label}</title> : null}
+          </circle>
+        ))}
 
         {/* last point + live pulse (SMIL gated for reduced-motion) */}
         <circle cx={lastPt[0]} cy={lastPt[1]} r={3} fill={stroke} />

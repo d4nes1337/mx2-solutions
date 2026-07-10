@@ -22,6 +22,7 @@ import type {
   PnlResponse,
   PositionsResponse,
   PricesHistoryResponse,
+  TokenPricesHistoryResponse,
   RuleRow,
   RulesResponse,
   SetupCredentialsRequest,
@@ -157,6 +158,19 @@ export function usePricesHistory(
     enabled: Boolean(id) && (opts?.enabled ?? true),
     staleTime: 30_000,
     refetchInterval: opts?.refetchInterval,
+  });
+}
+
+/** 30-day history keyed directly by CLOB token id (builder projection panel). */
+export function useTokenPricesHistory(tokenId: string | null, interval = "1m") {
+  return useQuery({
+    queryKey: ["token-prices-history", tokenId, interval],
+    queryFn: () =>
+      api.get<TokenPricesHistoryResponse>(
+        `/api/markets/prices-history?tokenId=${encodeURIComponent(tokenId!)}&interval=${encodeURIComponent(interval)}`,
+      ),
+    enabled: Boolean(tokenId),
+    staleTime: 60_000,
   });
 }
 

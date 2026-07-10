@@ -42,6 +42,8 @@ import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
+import { registerAiRoutes } from "./routes/ai.js";
+import type { AiClient } from "./ai/client.js";
 import type {} from "./auth/types.js";
 
 /** Minimal surface the app needs from the database (keeps tests light). */
@@ -77,6 +79,8 @@ export interface AppDeps {
   geoblockClient: GeoblockClient;
   /** Optional: injected in tests; otherwise built from POLYGON_RPC_URL. */
   allowanceReader?: AllowanceReader | null;
+  /** Null/omitted when FEATURE_AI_CHAT is off — the AI route then 503s. */
+  aiClient?: AiClient | null;
 }
 
 /**
@@ -235,6 +239,12 @@ export const buildApp = (deps: AppDeps) => {
     marketSnapshots: deps.marketSnapshots,
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
+  });
+  registerAiRoutes(fastifyApp, {
+    config: deps.config,
+    auditStore: deps.auditStore,
+    gammaClient: deps.gammaClient,
+    aiClient: deps.aiClient ?? null,
   });
 
   return app;

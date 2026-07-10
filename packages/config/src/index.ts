@@ -96,6 +96,12 @@ const EnvSchema = z.object({
   SESSION_SIGNER_TTL_SECONDS: z.coerce.number().int().positive().max(2_592_000).default(1_209_600),
   ORDER_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(10),
 
+  // ── AI strategy generation (Anthropic) ─────────────────────────────────────
+  // Secret API key for the NL→Smart Order endpoint. Required when
+  // FEATURE_AI_CHAT=true (validated below). Never exposed to the browser.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  AI_MODEL: z.string().default("claude-sonnet-5"),
+
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
   FEATURE_CONDITIONAL_RULES: boolFromEnv(true),
@@ -107,6 +113,13 @@ const EnvSchema = z.object({
   FEATURE_RELAYER: boolFromEnv(false),
   // Server-side signing (manual no-popup orders). Independent of live trading.
   FEATURE_PRIVY_SIGNING: boolFromEnv(false),
+  // Public NL→Smart Order generation (Anthropic). Not a spend-risk feature —
+  // generated orders are always execution:"prepare" — but it calls a paid
+  // upstream API, so it fails closed without a key (validated below).
+  FEATURE_AI_CHAT: boolFromEnv(false),
+  // Open beta: auto-allowlist every wallet that completes EIP-712 sign-in.
+  // Allowlist table stays the source of truth (per-wallet revocation intact).
+  FEATURE_OPEN_BETA: boolFromEnv(false),
 });
 
 export type AppConfig = {
@@ -147,6 +160,10 @@ export type AppConfig = {
   };
   polygonRpcUrl: string | undefined;
   mockSignerPrivateKey: string | undefined;
+  ai: {
+    model: string;
+    anthropicApiKey: string | undefined;
+  };
   limits: {
     sessionSignerTtlSeconds: number;
     orderRateLimitPerMin: number;
@@ -158,6 +175,8 @@ export type AppConfig = {
     conditionalLiveExecution: boolean;
     relayer: boolean;
     privySigning: boolean;
+    aiChat: boolean;
+    openBeta: boolean;
   };
 };
 
@@ -218,6 +237,12 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     }
   }
 
+  // Fail-closed: the AI endpoint calls a paid upstream — refuse to start
+  // half-configured rather than 500 at request time.
+  if (e.FEATURE_AI_CHAT && !e.ANTHROPIC_API_KEY) {
+    throw new ConfigError("FEATURE_AI_CHAT=true requires ANTHROPIC_API_KEY.");
+  }
+
   return {
     env: e.APP_ENV,
     baseUrl: e.APP_BASE_URL,
@@ -257,6 +282,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     },
     polygonRpcUrl: e.POLYGON_RPC_URL,
     mockSignerPrivateKey: e.MOCK_SIGNER_PRIVATE_KEY,
+    ai: {
+      model: e.AI_MODEL,
+      anthropicApiKey: e.ANTHROPIC_API_KEY,
+    },
     limits: {
       sessionSignerTtlSeconds: e.SESSION_SIGNER_TTL_SECONDS,
       orderRateLimitPerMin: e.ORDER_RATE_LIMIT_PER_MIN,
@@ -268,6 +297,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       conditionalLiveExecution: e.FEATURE_CONDITIONAL_LIVE_EXECUTION,
       relayer: e.FEATURE_RELAYER,
       privySigning: e.FEATURE_PRIVY_SIGNING,
+      aiChat: e.FEATURE_AI_CHAT,
+      openBeta: e.FEATURE_OPEN_BETA,
     },
   };
 };

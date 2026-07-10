@@ -137,12 +137,21 @@ export interface PricesHistoryResponse {
   history: PricePoint[];
 }
 
+/** Token-keyed history (builder projection panel — no Gamma market id needed). */
+export interface TokenPricesHistoryResponse {
+  tokenId: string;
+  history: PricePoint[];
+}
+
 export interface FeatureFlags {
   liveTrading: boolean;
   conditionalRules: boolean;
+  smartOrdersV2: boolean;
   conditionalLiveExecution: boolean;
   relayer: boolean;
   privySigning: boolean;
+  aiChat: boolean;
+  openBeta: boolean;
 }
 
 export interface TradeStatus {

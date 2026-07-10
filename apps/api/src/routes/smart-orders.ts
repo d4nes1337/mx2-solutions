@@ -29,6 +29,7 @@ import {
 } from "@mx2/rules";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
+import { searchMarketHits } from "../lib/market-search.js";
 
 export interface SmartOrdersRoutesDeps {
   config: AppConfig;
@@ -130,6 +131,24 @@ const LimitsSchema = z.object({
   maxNotionalPerOrder: z.number().positive(),
   maxTotalNotional: z.number().positive(),
   maxDailyNotional: z.number().positive(),
+});
+
+/**
+ * A full (already-compiled) definition as sent back by clients — e.g. the AI
+ * route's `currentDefinition`. `version` is optional because compileDoc's
+ * output omits it; consumers re-stamp version: 2.
+ */
+export const StrategyDefinitionSchema = z.object({
+  version: z.literal(2).optional(),
+  name: z.string().max(200),
+  templateId: z.string().max(64).nullable(),
+  expr: ExprNodeSchema,
+  holdsForMs: z.number().int().min(0).max(86_400_000),
+  maxDataAgeMs: z.number().int().positive().max(60_000),
+  action: ActionSchema,
+  recurrence: RecurrenceSchema,
+  limits: LimitsSchema.nullable(),
+  expiresAtMs: z.number().int().nullable(),
 });
 
 const CreateSmartOrderSchema = z.object({
@@ -542,43 +561,11 @@ export const registerSmartOrdersRoutes = (
       reply.code(400);
       return { error: "INVALID_REQUEST", message: "q must be 2–80 characters." };
     }
-    const result = await deps.gammaClient.searchMarkets(q, 8);
+    const result = await searchMarketHits(deps.gammaClient, q, 8);
     if (!result.ok) {
       reply.code(502);
       return { error: result.error.code, message: result.error.message };
     }
-    const parseJsonArray = (raw: string): string[] => {
-      try {
-        const arr: unknown = JSON.parse(raw);
-        return Array.isArray(arr) ? arr.map(String) : [];
-      } catch {
-        return [];
-      }
-    };
-    return {
-      results: result.value.flatMap((event) => {
-        const market = event.markets.find((m) => m.active && !m.closed) ?? event.markets[0];
-        if (!market) return [];
-        return [
-          {
-            eventId: event.id,
-            marketId: market.id,
-            title: event.markets.length > 1 ? market.question : event.title,
-            eventTitle: event.title,
-            image: market.image || event.image,
-            conditionId: market.conditionId,
-            tokenIds: parseJsonArray(market.clobTokenIds),
-            outcomes: parseJsonArray(market.outcomes),
-            outcomePrices: parseJsonArray(market.outcomePrices),
-            volume: market.volume,
-            liquidity: market.liquidity,
-            endDate: market.endDate ?? event.endDate ?? null,
-            negRisk: market.neg_risk ?? false,
-            rewardsMinSize: market.rewardsMinSize ?? null,
-            rewardsMaxSpread: market.rewardsMaxSpread ?? null,
-          },
-        ];
-      }),
-    };
+    return { results: result.value };
   });
 };

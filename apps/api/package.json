@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=../../.env dist/server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.2",
     "@mx2/config": "workspace:*",

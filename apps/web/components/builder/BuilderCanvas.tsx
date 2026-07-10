@@ -6,7 +6,7 @@
  * expression tree — while positions and selection flow back into the store.
  * Loaded via next/dynamic so React Flow never enters other routes' bundles.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   Background,
   Controls,
@@ -97,6 +97,14 @@ export default function BuilderCanvas({
   const doc = useBuilderStore((s) => s.doc);
   const select = useBuilderStore((s) => s.select);
   const setPosition = useBuilderStore((s) => s.setPosition);
+  const revealTick = useBuilderStore((s) => s.revealTick);
+
+  // Staged reveal: for ~2.5s after the AI replaces the doc, nodes mount with a
+  // cascading entrance (CSS animation, reduced-motion-gated in globals.css).
+  const revealRef = useRef({ tick: 0, at: 0 });
+  if (revealTick !== revealRef.current.tick) {
+    revealRef.current = { tick: revealTick, at: Date.now() };
+  }
 
   const { nodes, edges } = useMemo(() => {
     const results = new Map<string, ExprResultNode>();
@@ -234,8 +242,15 @@ export default function BuilderCanvas({
       style: { strokeWidth: 2 },
     });
 
+    if (revealTick > 0 && Date.now() - revealRef.current.at < 2_500) {
+      nodes.forEach((n, i) => {
+        n.className = "node-reveal";
+        n.style = { ...n.style, animationDelay: `${i * 70}ms` };
+      });
+    }
+
     return { nodes, edges };
-  }, [doc, evaluation, issues]);
+  }, [doc, evaluation, issues, revealTick]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
