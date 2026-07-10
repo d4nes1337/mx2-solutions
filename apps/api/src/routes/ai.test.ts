@@ -126,7 +126,12 @@ const createInput = (over: Record<string, unknown> = {}) => ({
 
 // ── Harness (clone of the smart-orders test app with an aiClient) ───────────
 
-const buildAiApp = (opts: { aiChat?: boolean; responses?: Anthropic.Message[] }) => {
+const buildAiApp = (opts: {
+  aiChat?: boolean;
+  responses?: Anthropic.Message[];
+  model?: string;
+  findMarket?: GammaClient["findMarket"];
+}) => {
   const audits: { action: string; metadata: Record<string, unknown> }[] = [];
   const responses = [...(opts.responses ?? [])];
   const aiCalls: Anthropic.MessageCreateParamsNonStreaming[] = [];
@@ -135,6 +140,7 @@ const buildAiApp = (opts: { aiChat?: boolean; responses?: Anthropic.Message[] })
   const config = loadConfig({
     DATABASE_URL: "postgresql://u:p@localhost:5432/db",
     ...(aiEnabled ? { FEATURE_AI_CHAT: "true", ANTHROPIC_API_KEY: "sk-ant-test" } : {}),
+    ...(opts.model ? { AI_MODEL: opts.model } : {}),
   });
 
   const aiClient: AiClient | null = aiEnabled
@@ -170,7 +176,7 @@ const buildAiApp = (opts: { aiChat?: boolean; responses?: Anthropic.Message[] })
     listMarkets: async () => ok([]),
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
-    findMarket: async () => ok(null),
+    findMarket: opts.findMarket ?? (async () => ok(null)),
     searchMarkets: async () => ok([searchEvent()]),
   };
   const clob: ClobClient = {
@@ -499,5 +505,62 @@ describe("POST /api/ai/generate-strategy", () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ error: "AI_UPSTREAM" });
     await app.close();
+  });
+
+  it("pinned markets: generates with NO search turn, ids still withheld from the model", async () => {
+    const { app, aiCalls } = buildAiApp({
+      findMarket: async () => ok(gammaMarket()),
+      responses: [modelTurn([toolUse("create_strategy", createInput(), "t1")])],
+    });
+    const res = await post(app, {
+      prompt: "buy the dip on the pinned market",
+      pinnedConditionIds: ["cond-btc-000000"],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    // Bound from the pinned candidate — one model call, zero search turns.
+    expect(body.definition.action.market.tokenId).toBe(TOKEN_YES);
+    expect(aiCalls).toHaveLength(1);
+    const firstMessages = JSON.stringify(aiCalls[0]!.messages);
+    expect(firstMessages).toContain("Pinned markets");
+    expect(firstMessages).not.toContain(TOKEN_YES);
+    expect(firstMessages).not.toContain("cond-btc");
+    await app.close();
+  });
+
+  it("drops unresolvable pinned ids and falls back to search", async () => {
+    const { app, aiCalls } = buildAiApp({
+      findMarket: async () => ok(null),
+      responses: [
+        modelTurn([toolUse("search_markets", { query: "btc" }, "t1")]),
+        modelTurn([toolUse("create_strategy", createInput(), "t2")]),
+      ],
+    });
+    const res = await post(app, {
+      prompt: "buy the dip on btc please",
+      pinnedConditionIds: ["cond-does-not-exist"],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
+    expect(JSON.stringify(aiCalls[0]!.messages)).not.toContain("Pinned markets");
+    await app.close();
+  });
+
+  // Haiku-tier models reject `effort` with a 400 — the loop must gate it.
+  it("sends output_config.effort on the sonnet default but omits it for haiku", async () => {
+    const clarifyTurn = () => modelTurn([toolUse("clarify", { question: "Which market?" }, "t")]);
+
+    const sonnet = buildAiApp({ responses: [clarifyTurn()] });
+    await post(sonnet.app, { prompt: "buy the dip on btc" });
+    expect(sonnet.aiCalls[0]!.output_config).toEqual({ effort: "medium" });
+    await sonnet.app.close();
+    resetRateLimits();
+
+    const haiku = buildAiApp({ responses: [clarifyTurn()], model: "claude-haiku-4-5" });
+    await post(haiku.app, { prompt: "buy the dip on btc" });
+    expect(haiku.aiCalls[0]!.model).toBe("claude-haiku-4-5");
+    expect(haiku.aiCalls[0]!.output_config).toBeUndefined();
+    await haiku.app.close();
   });
 });

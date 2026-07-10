@@ -7,7 +7,7 @@
  * "make it $200" refine the canvas in place.
  */
 import { useEffect, useRef, useState } from "react";
-import { Send, Sparkles } from "lucide-react";
+import { Send, Sparkles, X } from "lucide-react";
 import { Badge, Spinner } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 import {
@@ -19,7 +19,9 @@ import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
 import { compileDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
+import { useMarketSearch, type MarketSearchResult } from "@/lib/smart-orders/queries";
 import { TEMPLATES } from "@/lib/smart-orders/templates";
+import { cents, usdCompact, toNum } from "@/lib/format";
 
 /** Progress theater: honest-ish stage copy while the model works. */
 const STAGES = [
@@ -29,6 +31,23 @@ const STAGES = [
   "Double-checking the logic…",
 ];
 const STAGE_AT_MS = [0, 1_800, 5_000, 11_000];
+
+interface PinnedMarket {
+  conditionId: string;
+  title: string;
+  image: string;
+}
+
+/**
+ * Claude-Code-style @-mention: the token under the caret (`@fra…`) drives a
+ * live market search. No spaces inside the query — a space ends the token.
+ */
+const detectMention = (value: string, caret: number): { query: string; start: number } | null => {
+  const head = value.slice(0, caret);
+  const m = /(?:^|\s)@([^\s@]{1,40})$/.exec(head);
+  if (!m) return null;
+  return { query: m[1]!, start: caret - m[1]!.length - 1 };
+};
 
 export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
   const doc = useBuilderStore((s) => s.doc);
@@ -42,6 +61,32 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [stage, setStage] = useState(0);
   const autoFired = useRef(false);
+
+  const [pinned, setPinned] = useState<PinnedMarket[]>([]);
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionSearch = useMarketSearch(mention?.query ?? "");
+  const mentionResults =
+    mention && mention.query.length >= 2 ? (mentionSearch.data?.results ?? []).slice(0, 5) : [];
+
+  const syncMention = (value: string) => {
+    const caret = textareaRef.current?.selectionStart ?? value.length;
+    setMention(detectMention(value, caret));
+  };
+
+  const pickMention = (r: MarketSearchResult) => {
+    if (!mention) return;
+    const caret = textareaRef.current?.selectionStart ?? input.length;
+    const inserted = `@"${r.title}" `;
+    setInput(`${input.slice(0, mention.start)}${inserted}${input.slice(caret)}`.slice(0, 500));
+    setPinned((p) =>
+      p.length >= 4 || p.some((x) => x.conditionId === r.conditionId)
+        ? p
+        : [...p, { conditionId: r.conditionId, title: r.title, image: r.image }],
+    );
+    setMention(null);
+    textareaRef.current?.focus();
+  };
 
   const applyResult = (prompt: string, res: AiGenerateResponse) => {
     if (res.status === "clarify") {
@@ -80,12 +125,14 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     const prompt = raw.trim().slice(0, 500);
     if (prompt.length < 3 || generate.isPending) return;
     setInput("");
+    setMention(null);
     const hasConditions = conditionLeavesOf(doc.expr).length > 0;
     generate.mutate(
       {
         prompt,
         history,
         currentDefinition: hasConditions ? compileDoc(doc) : null,
+        ...(pinned.length > 0 ? { pinnedConditionIds: pinned.map((p) => p.conditionId) } : {}),
       },
       { onSuccess: (res) => applyResult(prompt, res) },
     );
@@ -182,19 +229,63 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
         </div>
       ) : null}
 
+      {pinned.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {pinned.map((p) => (
+            <span
+              key={p.conditionId}
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-brand/40 bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-accent"
+            >
+              {p.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={p.image} alt="" className="h-3.5 w-3.5 rounded-sm object-cover" />
+              ) : null}
+              <span className="truncate">
+                {p.title.length > 36 ? `${p.title.slice(0, 33)}…` : p.title}
+              </span>
+              <button
+                type="button"
+                aria-label={`Unpin ${p.title}`}
+                onClick={() =>
+                  setPinned((cur) => cur.filter((x) => x.conditionId !== p.conditionId))
+                }
+                className="text-accent/70 transition-colors hover:text-accent"
+              >
+                <X size={11} aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
           submit(input);
         }}
-        className="flex items-end gap-1.5"
+        className="relative flex items-end gap-1.5"
       >
         <textarea
+          ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            syncMention(e.target.value);
+          }}
+          onSelect={() => syncMention(input)}
           onKeyDown={(e) => {
+            if (e.key === "Escape" && mention) {
+              e.preventDefault();
+              setMention(null);
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
+              // Enter while the @-dropdown is open picks the top match.
+              if (mentionResults.length > 0) {
+                pickMention(mentionResults[0]!);
+                return;
+              }
               submit(input);
             }
           }}
@@ -203,7 +294,7 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
           placeholder={
             assistantSays
               ? "Tweak it: “make it $200”, “add a liquidity check”…"
-              : "e.g. buy YES on the Fed cutting rates if it dips below 40¢"
+              : "e.g. buy YES if @market dips below 40¢ — type @ to pin a market"
           }
           aria-label="Describe your strategy"
           className="min-h-[52px] w-full resize-none rounded-lg border border-border bg-surface-2 px-2.5 py-2 text-[13px] text-fg outline-none transition-colors placeholder:text-faint focus:border-brand"
@@ -216,11 +307,39 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
         >
           <Send size={15} aria-hidden />
         </button>
+
+        {mentionResults.length > 0 ? (
+          <div className="absolute left-0 right-10 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-pop">
+            {mentionResults.map((r) => (
+              <button
+                key={r.conditionId}
+                type="button"
+                onClick={() => pickMention(r)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+              >
+                {r.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={r.image} alt="" className="h-6 w-6 shrink-0 rounded-md object-cover" />
+                ) : (
+                  <div className="h-6 w-6 shrink-0 rounded-md bg-surface-3" />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="line-clamp-1 text-[12px] font-medium text-fg">{r.title}</span>
+                  <span className="tabular text-[10px] text-faint">
+                    {r.outcomes[0] ?? "Yes"} {cents(Number(r.outcomePrices[0] ?? 0))} ·{" "}
+                    {usdCompact(toNum(r.volume))} Vol
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </form>
 
       <p className="text-[10px] leading-snug text-faint">
-        AI drafts a strategy from live market data — always check it before saving. Orders are
-        prepared for your signature; nothing trades by itself.
+        Type <span className="font-semibold">@</span> to pin a market. AI drafts a strategy from
+        live market data — always check it before saving. Orders are prepared for your signature;
+        nothing trades by itself.
       </p>
     </aside>
   );

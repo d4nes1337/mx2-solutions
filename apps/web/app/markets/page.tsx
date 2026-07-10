@@ -1,15 +1,27 @@
 "use client";
 
-import { Suspense } from "react";
+/**
+ * Calm, card-based market feed (replaced the 3-column terminal + activity
+ * tape + movers strip). One glance per market, one click to trade or
+ * automate; real backtest teasers where the showcase engine has one.
+ */
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Search } from "lucide-react";
 import { TradingStatusBanner } from "@/components/Banners";
-import { FavoritesFeedColumn } from "@/components/FavoritesFeedColumn";
-import { MarketFeedColumn } from "@/components/MarketFeedColumn";
-import { ActivityTape } from "@/components/feed/ActivityTape";
-import { MoversStrip } from "@/components/feed/MoversStrip";
-import { LiveDot } from "@/components/ui";
-import { useHomeFeed } from "@/lib/queries";
+import { MarketCard } from "@/components/MarketCard";
+import { Empty, ErrorNote, LiveDot, Segmented, Skeleton } from "@/components/ui";
+import { useHomeFeed, useShowcases } from "@/lib/queries";
+import { primaryMarket } from "@/lib/feeds";
 import type { GammaEvent } from "@/lib/types";
+
+type FeedTab = "now" | "top" | "suggestedFavorites";
+
+const TABS: { value: FeedTab; label: string }[] = [
+  { value: "now", label: "Trending" },
+  { value: "top", label: "Top" },
+  { value: "suggestedFavorites", label: "Favorites" },
+];
 
 function matchesQuery(event: GammaEvent, q: string): boolean {
   const needle = q.toLowerCase();
@@ -19,55 +31,68 @@ function matchesQuery(event: GammaEvent, q: string): boolean {
 
 function MarketsFeed() {
   const params = useSearchParams();
-  const q = (params.get("q") ?? "").trim();
+  const paramQ = (params.get("q") ?? "").trim();
+  const [q, setQ] = useState(paramQ);
+  const [tab, setTab] = useState<FeedTab>("now");
+
+  // Keep the filter in sync with ?q= navigations (e.g. hero search) that
+  // happen while this page is already mounted.
+  useEffect(() => setQ(paramQ), [paramQ]);
   const home = useHomeFeed();
+  const sc = useShowcases();
   const err = home.error as Error | null;
 
-  const filter = (events?: GammaEvent[]) =>
-    q && events ? events.filter((e) => matchesQuery(e, q)) : events;
+  const events = home.data?.feeds[tab]?.events ?? [];
+  const filtered = q.trim() ? events.filter((e) => matchesQuery(e, q.trim())) : events;
+  const visible = filtered.slice(0, 18);
 
-  const now = filter(home.data?.feeds.now.events);
-  const top = filter(home.data?.feeds.top.events);
-  const tapeEvents = [...(now ?? []), ...(top ?? [])];
+  const teaserFor = (event: GammaEvent) =>
+    sc.data?.showcases.find((s) => s.market.conditionId === primaryMarket(event)?.conditionId) ??
+    null;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2.5">
-        <h1 className="text-xl font-semibold tracking-tight text-fg">Markets</h1>
-        <LiveDot />
-        {q ? (
-          <span className="text-sm text-muted">
-            matching “{q}”{" "}
-            <a href="/markets" className="text-accent hover:underline">
-              clear
-            </a>
-          </span>
-        ) : null}
-      </div>
-
-      <ActivityTape events={tapeEvents} />
-
-      <div>
-        <div className="mb-2 flex items-center gap-2">
-          <span className="h-3.5 w-0.5 rounded-full bg-brand-strong" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            Movers
-          </span>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <h1 className="text-xl font-semibold tracking-tight text-fg">Markets</h1>
+          <LiveDot />
         </div>
-        <MoversStrip events={now} isLoading={home.isLoading} />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Segmented options={TABS} value={tab} onChange={setTab} />
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 focus-within:border-brand">
+            <Search size={13} className="shrink-0 text-faint" aria-hidden />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter markets…"
+              aria-label="Filter markets"
+              className="w-36 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint sm:w-48"
+            />
+          </label>
+        </div>
       </div>
 
       <TradingStatusBanner />
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <MarketFeedColumn title="Now" events={now} isLoading={home.isLoading} error={err} />
-        <MarketFeedColumn title="Top" events={top} isLoading={home.isLoading} error={err} />
-        <FavoritesFeedColumn
-          events={filter(home.data?.feeds.suggestedFavorites.events)}
-          isLoading={home.isLoading}
-          error={err}
-        />
-      </div>
+      {home.isLoading ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Skeleton key={i} className="h-36 w-full rounded-xl" />
+          ))}
+        </div>
+      ) : err ? (
+        <ErrorNote message={err.message} />
+      ) : visible.length > 0 ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {visible.map((e) => (
+            <MarketCard key={e.id} event={e} teaser={teaserFor(e)} />
+          ))}
+        </div>
+      ) : (
+        <Empty>
+          {q ? `No markets match “${q}” — try a shorter search.` : "No markets right now."}
+        </Empty>
+      )}
     </div>
   );
 }

@@ -1,8 +1,13 @@
 "use client";
 
+/**
+ * Calm, Polymarket-style market card (replaces the dense terminal rows).
+ * One glance: what's the market, what are the odds, one click to trade or
+ * automate — plus a real backtest teaser when the showcase engine has one.
+ */
 import Link from "next/link";
-import type { GammaEvent, GammaMarket } from "@/lib/types";
-import { cents, parseJsonArray, signedPct, toNum, usdCompact } from "@/lib/format";
+import type { GammaEvent, GammaMarket, Showcase } from "@/lib/types";
+import { cents, parseJsonArray, signedPct, signedUsd, toNum, usdCompact } from "@/lib/format";
 import {
   formatResolveIn,
   marketEndMs,
@@ -16,76 +21,55 @@ import { MarketHoverCard } from "./MarketHoverCard";
 import { AnimatedNumber, FlashOnChange } from "./motion";
 import { cn } from "./ui";
 
-/** Thin, purely-visual probability bar (the precise value is shown as the %). */
-function ProbBar({ prob }: { prob: number }) {
-  const p = Math.max(0, Math.min(1, prob));
-  return (
-    <div className="relative h-1 w-full overflow-hidden rounded-full bg-surface-3">
-      <div
-        className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-snap"
-        style={{
-          width: `${p * 100}%`,
-          background: p >= 0.5 ? "var(--brand-strong)" : "var(--neg)",
-        }}
-      />
-    </div>
-  );
-}
+const automateHref = (event: GammaEvent, market: GammaMarket, title: string): string => {
+  const tokenId = parseJsonArray(market.clobTokenIds)[0];
+  const outcome = parseJsonArray(market.outcomes)[0] ?? "YES";
+  const params = new URLSearchParams({ template: "re-entry" });
+  if (tokenId) {
+    params.set("conditionId", market.conditionId);
+    params.set("tokenId", tokenId);
+    params.set("outcome", outcome);
+    params.set("title", title.slice(0, 120));
+  }
+  return `/smart-orders/new?${params.toString()}`;
+};
 
-export function MarketFeedRow({ event, compact }: { event: GammaEvent; compact?: boolean }) {
+export function MarketCard({ event, teaser }: { event: GammaEvent; teaser?: Showcase | null }) {
   const market = primaryMarket(event);
   if (!market) return null;
 
   const prob = yesProbability(market);
-  const yesC = prob;
-  const noC = Math.max(0, 1 - prob);
   const resolveIn = formatResolveIn(marketEndMs(market, event));
   const title = event.markets.length > 1 ? market.question : event.title;
-  const signal = topReason(event);
 
   return (
     <MarketHoverCard
-      className="border-b border-border/70 last:border-0"
       content={
         <MarketPreviewBody event={event} market={market} prob={prob} resolveIn={resolveIn} />
       }
     >
-      <Link
-        href={`/markets/${market.id}`}
-        className={cn(
-          "group block px-3 py-2.5 transition-colors hover:bg-surface-2/60",
-          compact && "py-2",
-        )}
-      >
-        <div className="flex items-center gap-3">
-          {event.icon ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={event.icon} alt="" className="h-8 w-8 shrink-0 rounded-md object-cover" />
-          ) : (
-            <div className="h-8 w-8 shrink-0 rounded-md bg-surface-3" />
-          )}
-
-          <div className="min-w-0 flex-1">
-            <div className="line-clamp-2 text-[13px] font-medium leading-snug text-fg group-hover:text-brand-strong">
-              {title}
+      <div className="flex h-full flex-col rounded-xl border border-border bg-surface p-3.5 shadow-panel transition-shadow hover:shadow-elev">
+        <Link href={`/markets/${market.id}`} className="group flex-1">
+          <div className="flex items-start gap-3">
+            {event.icon || market.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={event.icon || market.image}
+                alt=""
+                className="h-10 w-10 shrink-0 rounded-lg object-cover"
+              />
+            ) : (
+              <div className="h-10 w-10 shrink-0 rounded-lg bg-surface-3" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="line-clamp-2 text-[13px] font-medium leading-snug text-fg group-hover:text-brand-strong">
+                {title}
+              </div>
             </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-faint">
-              <span className="tabular">{usdCompact(eventVolume(event))} Vol</span>
-              <span aria-hidden>·</span>
-              <span className="tabular">{resolveIn}</span>
-              {signal ? (
-                <span className="rounded-sm border border-border bg-surface-2 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted">
-                  {signal}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 flex-col items-end gap-1">
             <FlashOnChange value={prob}>
               <span
                 className={cn(
-                  "tabular text-lg font-semibold leading-none",
+                  "tabular shrink-0 text-lg font-semibold leading-none",
                   prob >= 0.5 ? "text-fg" : "text-neg",
                 )}
               >
@@ -96,28 +80,46 @@ export function MarketFeedRow({ event, compact }: { event: GammaEvent; compact?:
                 />
               </span>
             </FlashOnChange>
-            <div className="flex items-center gap-1 text-[10px]">
-              <span className="tabular rounded-sm bg-pos/10 px-1 py-px font-medium text-pos">
-                Y {cents(yesC)}
-              </span>
-              <span className="tabular rounded-sm bg-neg/10 px-1 py-px font-medium text-neg">
-                N {cents(noC)}
-              </span>
-            </div>
           </div>
-        </div>
 
-        <div className="mt-2">
-          <ProbBar prob={prob} />
+          <div className="mt-3 flex items-center gap-1.5">
+            <span className="tabular rounded-md bg-pos/10 px-2 py-1 text-[11px] font-semibold text-pos">
+              Yes {cents(prob)}
+            </span>
+            <span className="tabular rounded-md bg-neg/10 px-2 py-1 text-[11px] font-semibold text-neg">
+              No {cents(Math.max(0, 1 - prob))}
+            </span>
+            <span className="tabular ml-auto text-[10px] text-faint">
+              {usdCompact(toNum(event.volume1wk ?? event.volume))} Vol · {resolveIn}
+            </span>
+          </div>
+        </Link>
+
+        <div className="mt-3 flex items-center justify-between border-t border-border/70 pt-2.5">
+          <Link
+            href={automateHref(event, market, title)}
+            className="text-[12px] font-semibold text-accent transition-colors hover:text-brand-strong"
+          >
+            Automate →
+          </Link>
+          {teaser ? (
+            <Link
+              href={`/smart-orders/new?showcase=${encodeURIComponent(teaser.id)}`}
+              className="tabular rounded-full bg-pos/10 px-2 py-0.5 text-[10px] font-semibold text-pos transition-colors hover:bg-pos/20"
+              title="Hypothetical 30-day backtest — past prices don't predict future prices"
+            >
+              dip-buy {signedUsd(teaser.stats.hypotheticalPnlUsd)}/30d
+            </Link>
+          ) : null}
         </div>
-      </Link>
+      </div>
     </MarketHoverCard>
   );
 }
 
 /**
- * Hover "expand": the deeper look you don't get in the dense row — a live trend
- * chart and top-of-book depth. Deliberately does NOT repeat the row's Vol/Resolves.
+ * Hover "expand": live trend chart + top-of-book depth (moved from the old
+ * MarketFeedRow when the dense rows were replaced by cards).
  */
 function MarketPreviewBody({
   event,
@@ -211,30 +213,4 @@ function DepthChip({ label, value, tone }: { label: string; value: string; tone:
       </div>
     </div>
   );
-}
-
-function eventVolume(event: GammaEvent): number {
-  return toNum(event.volume1wk ?? event.volume);
-}
-
-/** At most one signal label per row (was up to three badges). */
-function topReason(event: GammaEvent): string | null {
-  const meta = event["_feed"] as { reasons?: unknown } | undefined;
-  const reasons = Array.isArray(meta?.reasons)
-    ? meta.reasons.filter((r): r is string => typeof r === "string")
-    : [];
-  const first = reasons[0];
-  if (!first) return null;
-  const labels: Record<string, string> = {
-    active: "Active",
-    balanced: "Live odds",
-    competitive: "Hot",
-    featured: "Featured",
-    fresh: "Fresh",
-    liquid: "Liquid",
-    soon: "Soon",
-    tight: "Tight",
-    volume: "Volume",
-  };
-  return labels[first] ?? first;
 }

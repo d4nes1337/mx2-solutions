@@ -13,7 +13,7 @@ import { AnimatedNumber } from "@/components/motion";
 import { AreaChart } from "@/components/charts/AreaChart";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
-import { backtestTokenId, simulateTriggers } from "@/lib/smart-orders/backtest";
+import { backtestTokenId, simulateTriggers } from "@mx2/rules";
 import { marketLabel } from "@/lib/smart-orders/doc";
 import { cents, signedUsd, usd } from "@/lib/format";
 import { useTokenPricesHistory } from "@/lib/queries";

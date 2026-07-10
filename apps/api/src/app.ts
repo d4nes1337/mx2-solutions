@@ -42,6 +42,7 @@ import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
+import { registerShowcasesRoutes } from "./routes/showcases.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import type { AiClient } from "./ai/client.js";
 import type {} from "./auth/types.js";
@@ -237,6 +238,10 @@ export const buildApp = (deps: AppDeps) => {
     ruleStore: deps.ruleStore,
     runtimeFlags: deps.runtimeFlags,
     marketSnapshots: deps.marketSnapshots,
+    gammaClient: deps.gammaClient,
+    clobClient: deps.clobClient,
+  });
+  registerShowcasesRoutes(fastifyApp, {
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
   });

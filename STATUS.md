@@ -4,6 +4,29 @@ _Last updated: 2026-07-10_
 
 ## Recent
 
+- **Round-2 growth: real examples everywhere + calm feed + @-mentions + Haiku (built; D-022,
+  ADR-0012).** Owner's round-2 brief executed: the pure trigger simulator moved to
+  `packages/rules/simulate.ts` (shared web+api); new **showcase engine**
+  (`GET /api/showcases`, public 30/min, 15-min cached) backtests a dip-buy grid over 30 days
+  of real prices on trending liquid markets and serves only winners — labeled "hypothetical,
+  past ≠ future" on every surface (R-023/R-025) — powering the home **ShowcaseGallery**
+  (replaces the template gallery, which stays as fallback), a **live hero showcase** (replaces
+  the hardcoded mock), showcase-derived prompt examples, per-card **backtest teasers**, and
+  `?showcase=` deep links that open the exact validator-checked once/prepare definition in the
+  builder. `/markets` rebuilt as a calm Polymarket-style **card grid** (Trending/Top/Favorites
+  tabs + filter; activity tape, movers strip and the 3-column terminal removed; per-card
+  "Automate →"; drag-and-drop evaluated and rejected for v1). Cockpit: payoff-if-fills line in
+  the trade ticket + **BacktestTeaser** under Automate. Builder: **"Projected: +$X if Yes
+  wins"** chip beside the live verdict; ProjectionCard moved to the top of the rail.
+  **@-mention market pinning** in the AI panel (live search dropdown, chips, ≤4 pins) — the
+  server re-resolves pinned conditionIds via `findMarket` and seeds pre-verified candidates,
+  so the model skips search rounds and still never sees market ids. Beta AI model switched to
+  **claude-haiku-4-5** via env; the generate loop now gates `output_config.effort` off for
+  haiku tiers (they 400 on it — caught in planning review before it could break prod).
+  Quality gates: format/lint/typecheck ✓, backend **272 pass / 3 skipped** (showcases 5, AI
+  pinned+effort 3 new), web **76 pass** (@-mention, Hero live-showcase/fallback new); combined
+  rounds 1+2 deploy + live smoke pending.
+
 - **AI "vibe-trading" onboarding + open beta (built; D-021, ADR-0011).** Growth slice per the
   owner's brief: the landing hero becomes a prompt box ("Type a thought. Watch it become a
   strategy.") that deep-links into the builder where a new `AiPanel` auto-fires

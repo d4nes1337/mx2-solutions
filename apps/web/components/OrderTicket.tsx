@@ -12,8 +12,10 @@ import {
   useTradingAccounts,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
+import { signedUsd } from "@/lib/format";
 import { buildPreviewRequest } from "@/lib/orders";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
+import { computePayoff } from "@/lib/smart-orders/projection";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
 
@@ -34,6 +36,7 @@ export function OrderTicket({
   signedIn,
   outcomeIdx,
   prefill,
+  currentPrice,
 }: {
   conditionId: string;
   tokenIds: string[];
@@ -45,6 +48,8 @@ export function OrderTicket({
   outcomeIdx: number;
   /** Click-to-trade from the order book; bump `nonce` to re-apply. */
   prefill?: { price?: string; size?: string; side?: OrderSide; nonce: number };
+  /** Live mid/probability for the selected outcome (payoff mark-to-market). */
+  currentPrice?: number | null;
 }) {
   const { address, connector } = useAccount();
   const tradeStatus = useTradeStatus();
@@ -324,11 +329,43 @@ export function OrderTicket({
       </div>
 
       {Number(price) > 0 && Number(size) > 0 ? (
-        <div className="flex items-center justify-between rounded-md border border-border bg-surface-2/50 px-2.5 py-1.5 text-[11px]">
-          <span className="text-muted">Position value</span>
-          <span className="tabular font-semibold text-fg">
-            ${(Number(price) * Number(size)).toFixed(2)}
-          </span>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between rounded-md border border-border bg-surface-2/50 px-2.5 py-1.5 text-[11px]">
+            <span className="text-muted">Position value</span>
+            <span className="tabular font-semibold text-fg">
+              ${(Number(price) * Number(size)).toFixed(2)}
+            </span>
+          </div>
+          {(() => {
+            const p = Number(price);
+            const s = Number(size);
+            if (!(p > 0 && p < 1) || !(s > 0)) return null;
+            const payoff = computePayoff({
+              side,
+              price: p,
+              size: s,
+              tokenId: tokenIds[outcomeIdx] ?? "",
+              outcome: outcomes[outcomeIdx] ?? "YES",
+              currentPrice: currentPrice ?? null,
+              hypothetical: false,
+            });
+            const outcome = outcomes[outcomeIdx] ?? "YES";
+            return (
+              <div className="flex items-center justify-between rounded-md border border-border bg-surface-2/50 px-2.5 py-1.5 text-[11px]">
+                <span className="text-muted">If it fills (estimate)</span>
+                <span className="tabular font-semibold">
+                  <span className={payoff.payoffIfWinUsd >= 0 ? "text-pos" : "text-neg"}>
+                    {signedUsd(payoff.payoffIfWinUsd)}
+                  </span>{" "}
+                  <span className="text-faint">if {outcome} wins ·</span>{" "}
+                  <span className={payoff.payoffIfLoseUsd >= 0 ? "text-pos" : "text-neg"}>
+                    {signedUsd(payoff.payoffIfLoseUsd)}
+                  </span>{" "}
+                  <span className="text-faint">if not</span>
+                </span>
+              </div>
+            );
+          })()}
         </div>
       ) : null}
 

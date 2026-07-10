@@ -4,6 +4,8 @@
 //   - packages/polymarket-client/src/gamma/schema.ts  (GammaEvent, GammaMarket)
 //   - packages/polymarket-client/src/data/schema.ts   (Position, Activity)
 //   - apps/api/src/routes/*.ts                          (response envelopes)
+// Exception: @mx2/rules is pure/browser-safe, so DSL types import directly.
+import type { StrategyDefinition } from "@mx2/rules";
 
 export interface GammaMarket {
   id: string;
@@ -141,6 +143,37 @@ export interface PricesHistoryResponse {
 export interface TokenPricesHistoryResponse {
   tokenId: string;
   history: PricePoint[];
+}
+
+// ── Backtested showcases (mirror apps/api/src/lib/showcases.ts) ─────────────
+
+export interface ShowcaseMarket {
+  title: string;
+  image: string;
+  conditionId: string;
+  tokenId: string;
+  outcome: string;
+  currentPriceCents: number;
+}
+
+export interface Showcase {
+  id: string;
+  market: ShowcaseMarket;
+  sentence: string;
+  definition: StrategyDefinition;
+  stats: {
+    stakeUsd: number;
+    hypotheticalPnlUsd: number;
+    triggerCount: number;
+    windowDays: number;
+  };
+  series: PricePoint[];
+  triggers: { t: number; price: number }[];
+}
+
+export interface ShowcasesResponse {
+  generatedAt: string;
+  showcases: Showcase[];
 }
 
 export interface FeatureFlags {

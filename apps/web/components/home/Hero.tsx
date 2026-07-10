@@ -6,8 +6,11 @@ import { useEffect, useState } from "react";
 import { Search, Sparkles } from "lucide-react";
 import { LiveDot } from "@/components/ui";
 import { useReducedMotion } from "@/components/motion";
-import { useFeatureFlags } from "@/lib/queries";
+import { AreaChart } from "@/components/charts/AreaChart";
+import { useFeatureFlags, useShowcases } from "@/lib/queries";
+import { signedUsd } from "@/lib/format";
 import { TEMPLATES } from "@/lib/smart-orders/templates";
+import type { Showcase } from "@/lib/types";
 
 /** A chip in the static hero preview of a Smart Order sentence. */
 function Chip({ children, tone = "neutral" }: { children: React.ReactNode; tone?: string }) {
@@ -77,18 +80,25 @@ function MarketSearch() {
   );
 }
 
-/** Rotating example thoughts — the templates' NL strings plus a few bespoke. */
-const PROMPT_EXAMPLES = [
+/** Fallback example thoughts — the templates' NL strings plus a few bespoke. */
+const FALLBACK_EXAMPLES = [
   ...TEMPLATES.map((t) => t.example),
   "Buy YES on the Fed cutting rates if it dips below 40¢.",
   "Every time the Bitcoin $150k market drops 5¢, alert me.",
 ];
 
+/** Concrete prompts derived from live showcases — real markets beat abstractions. */
+const examplesFrom = (showcases: Showcase[] | undefined): string[] => {
+  if (!showcases || showcases.length === 0) return FALLBACK_EXAMPLES;
+  const dynamic = showcases.slice(0, 3).map((s) => `Buy the dip on ${s.market.title.slice(0, 60)}`);
+  return [...dynamic, ...FALLBACK_EXAMPLES.slice(0, 2)];
+};
+
 /**
  * The vibe-trading entry: type a thought → land in the builder with the AI
  * assembling the canvas. Only rendered when the aiChat flag is on.
  */
-function AiPromptCard() {
+function AiPromptCard({ examples }: { examples: string[] }) {
   const router = useRouter();
   const reduced = useReducedMotion();
   const [q, setQ] = useState("");
@@ -96,9 +106,9 @@ function AiPromptCard() {
 
   useEffect(() => {
     if (reduced) return;
-    const t = setInterval(() => setPhIdx((i) => (i + 1) % PROMPT_EXAMPLES.length), 3_500);
+    const t = setInterval(() => setPhIdx((i) => (i + 1) % examples.length), 3_500);
     return () => clearInterval(t);
-  }, [reduced]);
+  }, [reduced, examples.length]);
 
   const go = (raw: string) => {
     const v = raw.trim().slice(0, 500);
@@ -126,7 +136,7 @@ function AiPromptCard() {
           }}
           rows={3}
           maxLength={500}
-          placeholder={PROMPT_EXAMPLES[phIdx]}
+          placeholder={examples[phIdx % examples.length]}
           aria-label="Describe your trading idea"
           className="w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed text-fg outline-none placeholder:text-faint"
         />
@@ -145,7 +155,7 @@ function AiPromptCard() {
         </div>
       </form>
       <div className="flex flex-wrap gap-1.5">
-        {PROMPT_EXAMPLES.slice(0, 3).map((ex) => (
+        {examples.slice(0, 3).map((ex) => (
           <button
             key={ex}
             type="button"
@@ -160,9 +170,71 @@ function AiPromptCard() {
   );
 }
 
+/**
+ * A REAL trending market with its REAL 30-day backtest, replacing the old
+ * hardcoded marketing mock. Everything on it is live data; the disclaimer
+ * keeps the selection-bias honesty bar (R-023).
+ */
+function LiveShowcasePreview({ showcase }: { showcase: Showcase }) {
+  const action = showcase.definition.action;
+  const entryCents =
+    action.kind === "order" ? Math.round(action.price * 100) : showcase.market.currentPriceCents;
+
+  return (
+    <div className="glass rounded-xl p-5 shadow-elev">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Live showcase · Dip-buy
+        </span>
+        <LiveDot label="BACKTESTED" />
+      </div>
+      <div className="mt-3 line-clamp-2 text-[14px] font-semibold leading-snug text-fg">
+        {showcase.market.title}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 leading-relaxed">
+        <Chip>If</Chip>
+        <Chip tone="brand">{showcase.market.outcome} price</Chip>
+        <Chip>dips below {entryCents}¢</Chip>
+        <Chip>for 15 minutes</Chip>
+        <span className="mx-1 text-muted">→</span>
+        <Chip tone="pos">Buy $100 at {entryCents}¢</Chip>
+      </div>
+      <AreaChart
+        data={showcase.series.map((pt) => ({ t: pt.t, v: pt.p }))}
+        height={96}
+        showAxis={false}
+        markers={showcase.triggers.map((tr) => ({
+          t: tr.t,
+          label: `trigger @ ${Math.round(tr.price * 100)}¢`,
+        }))}
+        valueFormat={(v) => `${Math.round(v * 100)}¢`}
+        className="mt-3"
+      />
+      <div className="mt-3 flex items-center justify-between rounded-md border border-border bg-surface px-3 py-2">
+        <span className="tabular text-[12px] font-semibold text-pos">
+          {signedUsd(showcase.stats.hypotheticalPnlUsd)} across {showcase.stats.triggerCount} × $
+          {showcase.stats.stakeUsd} dip-buy{showcase.stats.triggerCount > 1 ? "s" : ""} · last{" "}
+          {showcase.stats.windowDays}d
+        </span>
+        <Link
+          href={`/smart-orders/new?showcase=${encodeURIComponent(showcase.id)}`}
+          className="text-[12px] font-semibold text-accent hover:text-brand-strong"
+        >
+          Open this strategy →
+        </Link>
+      </div>
+      <p className="mt-2 text-[10px] leading-snug text-faint">
+        Hypothetical backtest on real prices — past performance doesn&apos;t predict the future.
+      </p>
+    </div>
+  );
+}
+
 export function Hero() {
   const flags = useFeatureFlags();
   const aiOn = flags.data?.aiChat === true;
+  const sc = useShowcases();
+  const topShowcase = sc.data?.showcases[0] ?? null;
 
   return (
     <section className="grid grid-cols-1 items-center gap-8 py-6 lg:grid-cols-2 lg:py-10">
@@ -188,7 +260,7 @@ export function Hero() {
             : "No code. No spreadsheets. Just logic — templates, conditions across markets, and an optional no-popup trading wallet."}
         </p>
         {aiOn ? (
-          <AiPromptCard />
+          <AiPromptCard examples={examplesFrom(sc.data?.showcases)} />
         ) : (
           <div className="flex flex-wrap items-center gap-3">
             <Link
@@ -234,7 +306,7 @@ export function Hero() {
           aria-hidden
           className="pointer-events-none absolute -right-10 -top-10 -z-10 hidden w-56 select-none lg:block"
         />
-        <SmartOrderPreview />
+        {topShowcase ? <LiveShowcasePreview showcase={topShowcase} /> : <SmartOrderPreview />}
       </div>
     </section>
   );

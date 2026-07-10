@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { StrategyDefinition } from "@mx2/rules";
 import { AiPanel } from "./AiPanel";
 import { useBuilderStore } from "@/lib/smart-orders/store";
@@ -59,17 +59,45 @@ const okResponse = {
   },
 };
 
+const searchResults = {
+  results: [
+    {
+      eventId: "ev-1",
+      marketId: "m-1",
+      title: "Will France win the World Cup?",
+      eventTitle: "World Cup winner",
+      image: "",
+      conditionId: "cond-france",
+      tokenIds: ["tok-fr-yes", "tok-fr-no"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: ["0.39", "0.61"],
+      volume: "215000000",
+      liquidity: "90000",
+      endDate: null,
+      negRisk: false,
+      rewardsMinSize: null,
+      rewardsMaxSpread: null,
+    },
+  ],
+};
+
+/** Routes /api/ai/generate-strategy vs /api/markets/search by URL. */
 const mockFetch = (status: number, body: unknown) =>
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () =>
-      Promise.resolve(
-        new Response(JSON.stringify(body), {
-          status,
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/markets/search")) {
+        return new Response(JSON.stringify(searchResults), {
+          status: 200,
           headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    ),
+        });
+      }
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
   );
 
 const renderPanel = (initialPrompt?: string) => {
@@ -118,6 +146,34 @@ describe("AiPanel", () => {
     expect(await screen.findByText(/free AI limit/)).toBeInTheDocument();
     // Template chips offer a non-AI path forward.
     expect(screen.getByText("Re-entry")).toBeInTheDocument();
+  });
+
+  it("@-mention: typing @fra surfaces markets; picking pins a chip and rewrites the input", async () => {
+    mockFetch(200, okResponse);
+    renderPanel();
+
+    const box = screen.getByLabelText("Describe your strategy");
+    fireEvent.change(box, { target: { value: "buy the dip on @fra" } });
+
+    // Dropdown row appears from the mocked search.
+    const row = await screen.findByText("Will France win the World Cup?");
+    fireEvent.click(row);
+
+    // Input rewritten with the quoted title; chip pinned.
+    expect((box as HTMLTextAreaElement).value).toContain('@"Will France win the World Cup?"');
+    expect(screen.getByLabelText(/Unpin Will France win/)).toBeInTheDocument();
+
+    // Submitting includes the pinned conditionIds in the request body.
+    fireEvent.click(screen.getByLabelText("Generate strategy"));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls as [
+        RequestInfo | URL,
+        RequestInit?,
+      ][];
+      const gen = calls.find(([u]) => String(u).includes("/api/ai/generate-strategy"));
+      expect(gen).toBeDefined();
+      expect(String(gen![1]?.body)).toContain('"pinnedConditionIds":["cond-france"]');
+    });
   });
 
   // Regression: mutating synchronously inside the mount effect loses the settle

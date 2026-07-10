@@ -14,8 +14,10 @@ import type { ConditionV2 } from "@mx2/rules";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { useFeatureFlags } from "@/lib/queries";
+import { useFeatureFlags, useShowcases } from "@/lib/queries";
+import { signedUsd } from "@/lib/format";
 import { UNBOUND, conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
+import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
 import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
@@ -93,11 +95,13 @@ function WouldTriggerNow({
   stale,
   hasConditions,
   loading,
+  projection,
 }: {
   satisfied: boolean;
   stale: boolean;
   hasConditions: boolean;
   loading: boolean;
+  projection: { text: string; positive: boolean } | null;
 }) {
   if (!hasConditions) return null;
   const [label, tone]: [string, "pos" | "warn" | "neutral"] = loading
@@ -108,11 +112,23 @@ function WouldTriggerNow({
         ? ["Waiting for fresh market data", "warn"]
         : ["Not yet", "neutral"];
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-surface px-3.5 py-2.5 shadow-panel">
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface px-3.5 py-2.5 shadow-panel">
       <span className="text-[13px] font-medium text-fg">Would trigger now?</span>
-      <Badge tone={tone === "neutral" ? "neutral" : tone} dot={tone === "pos"}>
-        {label}
-      </Badge>
+      <div className="flex items-center gap-2">
+        {projection ? (
+          <span
+            className={cn(
+              "tabular text-[12px] font-semibold",
+              projection.positive ? "text-pos" : "text-neg",
+            )}
+          >
+            {projection.text}
+          </span>
+        ) : null}
+        <Badge tone={tone === "neutral" ? "neutral" : tone} dot={tone === "pos"}>
+          {label}
+        </Badge>
+      </div>
     </div>
   );
 }
@@ -137,11 +153,13 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
 
   const flags = useFeatureFlags();
   const aiPrompt = params.get("prompt");
+  const showcaseId = params.get("showcase");
+  const showcases = useShowcases(Boolean(showcaseId));
 
-  // Entry modes: edit an existing strategy, AI prompt deep link (landing hero,
-  // ?prompt=…), or template-first creation. A ?conditionId=&tokenId=&outcome=
-  // &title= set pre-binds the template to a market (the cockpit's "Automate
-  // this market" deep link).
+  // Entry modes: edit an existing strategy, a backtested showcase deep link
+  // (?showcase=…), AI prompt deep link (landing hero, ?prompt=…), or
+  // template-first creation. A ?conditionId=&tokenId=&outcome=&title= set
+  // pre-binds the template to a market (the cockpit's deep link).
   useEffect(() => {
     if (initialized) return;
     if (editOf) {
@@ -149,6 +167,25 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       reset(layoutDoc(docFromDefinition(editing.data.definitionV2)));
       setInitialized(true);
       return;
+    }
+    if (showcaseId) {
+      if (showcases.isLoading) return; // wait for the showcase list
+      const sc = showcases.data?.showcases.find((s) => s.id === showcaseId);
+      if (sc) {
+        const next = layoutDoc(docFromDefinition(sc.definition));
+        next.marketMeta = {
+          [sc.market.tokenId]: {
+            title: sc.market.title,
+            ...(sc.market.image ? { image: sc.market.image } : {}),
+            rewardsMinSize: null,
+            rewardsMaxSpread: null,
+          },
+        };
+        reset(next);
+        setInitialized(true);
+        return;
+      }
+      // Unknown/expired showcase id → fall through to the template path.
     }
     if (aiPrompt) {
       if (flags.isLoading) return; // wait to know whether the AI panel exists
@@ -176,7 +213,19 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     const meta = params.get("title") ? { title: params.get("title")! } : undefined;
     reset(template.build(market, meta));
     setInitialized(true);
-  }, [initialized, params, reset, editOf, editing.data, aiPrompt, flags.isLoading, flags.data]);
+  }, [
+    initialized,
+    params,
+    reset,
+    editOf,
+    editing.data,
+    aiPrompt,
+    flags.isLoading,
+    flags.data,
+    showcaseId,
+    showcases.isLoading,
+    showcases.data,
+  ]);
 
   const issues = useMemo(() => validateDoc(doc), [doc]);
   const hasConditions = conditionLeavesOf(doc.expr).length > 0;
@@ -199,6 +248,18 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const signedIn = Boolean(session.data);
   const allowlisted = Boolean(session.data?.allowlisted);
   const canSave = issues.length === 0 && !create.isPending;
+
+  // Headline payoff next to the verdict — the number the owner wants seen
+  // first ("how much can this make me?"). Estimates only.
+  const projection = useMemo(() => {
+    const input = payoffInputFromDoc(doc, evaluation.data?.markets ?? []);
+    if (!input) return null;
+    const p = computePayoff(input);
+    return {
+      text: `Projected: ${signedUsd(p.payoffIfWinUsd)} if ${input.outcome || "YES"} wins`,
+      positive: p.payoffIfWinUsd >= 0,
+    };
+  }, [doc, evaluation.data]);
 
   // Definitions are immutable once armed (evidence stays tied to the exact
   // version), so "editing" = create the new version, then cancel the old one.
@@ -254,6 +315,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         stale={(evaluation.data?.staleTokenIds.length ?? 0) > 0}
         hasConditions={hasConditions && boundTokens}
         loading={evaluation.isLoading}
+        projection={projection}
       />
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_320px]">
@@ -305,9 +367,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
 
         <div className="space-y-3">
           {flags.data?.aiChat ? <AiPanel initialPrompt={aiPrompt} /> : null}
+          <ProjectionCard evaluation={evaluation.data} />
           <Inspector />
           <MakerEstimator evaluation={evaluation.data} />
-          <ProjectionCard evaluation={evaluation.data} />
 
           {/* Save / arm */}
           <div className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel">

@@ -11,3 +11,4 @@ export * from "./evaluate-v2.js";
 export * from "./evidence-v2.js";
 export * from "./state-machine-v2.js";
 export * from "./validate-v2.js";
+export * from "./simulate.js";

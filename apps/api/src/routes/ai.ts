@@ -29,6 +29,8 @@ const GenerateBodySchema = z.object({
     .max(6)
     .default([]),
   currentDefinition: StrategyDefinitionSchema.nullish(),
+  // @-pinned markets from the panel — resolved + verified server-side.
+  pinnedConditionIds: z.array(z.string().min(10).max(100)).max(4).optional(),
 });
 
 export const registerAiRoutes = (app: FastifyInstance, deps: AiRoutesDeps): void => {
@@ -105,6 +107,9 @@ export const registerAiRoutes = (app: FastifyInstance, deps: AiRoutesDeps): void
           prompt: parsed.data.prompt,
           history: parsed.data.history,
           currentDefinition,
+          ...(parsed.data.pinnedConditionIds
+            ? { pinnedConditionIds: parsed.data.pinnedConditionIds }
+            : {}),
         },
       );
 

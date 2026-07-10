@@ -1,5 +1,5 @@
 import { ok, type Result } from "@mx2/core";
-import type { GammaClient, PolymarketError } from "@mx2/polymarket-client";
+import type { GammaClient, GammaMarket, PolymarketError } from "@mx2/polymarket-client";
 
 /**
  * One search candidate in the shape the builder (and the AI generator) needs:
@@ -35,6 +35,38 @@ const parseJsonArray = (raw: string): string[] => {
   }
 };
 
+/**
+ * Map one Gamma market (optionally with its event for a better title/image)
+ * into the shared candidate shape. Reused by search, the AI generator's
+ * pinned markets, and the showcase engine.
+ */
+export const hitFromGammaMarket = (
+  market: GammaMarket,
+  event?: {
+    id: string;
+    title: string;
+    image: string;
+    endDate?: string | null;
+    marketCount?: number;
+  },
+): MarketSearchHit => ({
+  eventId: event?.id ?? "",
+  marketId: market.id,
+  title: event && (event.marketCount ?? 1) <= 1 ? event.title : market.question,
+  eventTitle: event?.title ?? market.question,
+  image: market.image || (event?.image ?? ""),
+  conditionId: market.conditionId,
+  tokenIds: parseJsonArray(market.clobTokenIds),
+  outcomes: parseJsonArray(market.outcomes),
+  outcomePrices: parseJsonArray(market.outcomePrices),
+  volume: market.volume,
+  liquidity: market.liquidity,
+  endDate: market.endDate ?? event?.endDate ?? null,
+  negRisk: market.neg_risk ?? false,
+  rewardsMinSize: market.rewardsMinSize ?? null,
+  rewardsMaxSpread: market.rewardsMaxSpread ?? null,
+});
+
 export const searchMarketHits = async (
   gammaClient: GammaClient,
   q: string,
@@ -47,23 +79,13 @@ export const searchMarketHits = async (
       const market = event.markets.find((m) => m.active && !m.closed) ?? event.markets[0];
       if (!market) return [];
       return [
-        {
-          eventId: event.id,
-          marketId: market.id,
-          title: event.markets.length > 1 ? market.question : event.title,
-          eventTitle: event.title,
-          image: market.image || event.image,
-          conditionId: market.conditionId,
-          tokenIds: parseJsonArray(market.clobTokenIds),
-          outcomes: parseJsonArray(market.outcomes),
-          outcomePrices: parseJsonArray(market.outcomePrices),
-          volume: market.volume,
-          liquidity: market.liquidity,
-          endDate: market.endDate ?? event.endDate ?? null,
-          negRisk: market.neg_risk ?? false,
-          rewardsMinSize: market.rewardsMinSize ?? null,
-          rewardsMaxSpread: market.rewardsMaxSpread ?? null,
-        },
+        hitFromGammaMarket(market, {
+          id: event.id,
+          title: event.title,
+          image: event.image,
+          endDate: event.endDate ?? null,
+          marketCount: event.markets.length,
+        }),
       ];
     }),
   );

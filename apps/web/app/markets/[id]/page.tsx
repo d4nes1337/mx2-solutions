@@ -20,6 +20,7 @@ import { RuleList } from "@/components/RuleList";
 import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
 import { AutomateCard } from "@/components/market/AutomateCard";
+import { BacktestTeaser } from "@/components/market/BacktestTeaser";
 
 type Prefill = { price?: string; size?: string; side?: OrderSide; nonce: number };
 
@@ -59,6 +60,12 @@ export default function MarketCockpitPage() {
   const ob = orderbook.data
     ? { bids: orderbook.data.bids, asks: orderbook.data.asks }
     : live?.orderbook;
+
+  // Live mid for the payoff estimate in the ticket (falls back to the
+  // outcome's implied probability when the book is thin).
+  const bestBid = toNum(ob?.bids?.[0]?.price);
+  const bestAsk = toNum(ob?.asks?.[0]?.price);
+  const currentPrice = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : outcomeProb;
 
   // Click a book level → prefill the ticket. Lifting an ask means you BUY into it;
   // a bid means you SELL into it. Suggested size = that level's depth.
@@ -193,6 +200,7 @@ export default function MarketCockpitPage() {
                 signedIn={signedIn}
                 outcomeIdx={outcomeIdx}
                 prefill={prefill}
+                currentPrice={currentPrice}
               />
             </div>
           </Card>
@@ -200,6 +208,13 @@ export default function MarketCockpitPage() {
           <AutomateCard
             conditionId={m.conditionId}
             tokenId={tokenIds[outcomeIdx]}
+            outcome={outcomes[outcomeIdx] ?? "YES"}
+            title={m.question}
+          />
+
+          <BacktestTeaser
+            conditionId={m.conditionId}
+            tokenId={tokenIds[outcomeIdx] ?? null}
             outcome={outcomes[outcomeIdx] ?? "YES"}
             title={m.question}
           />

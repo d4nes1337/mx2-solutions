@@ -9,7 +9,11 @@ import {
   type RecurrenceV2,
   type StrategyDefinition,
 } from "@mx2/rules";
-import { searchMarketHits, type MarketSearchHit } from "../lib/market-search.js";
+import {
+  hitFromGammaMarket,
+  searchMarketHits,
+  type MarketSearchHit,
+} from "../lib/market-search.js";
 import type { AiClient } from "./client.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
@@ -53,6 +57,8 @@ export interface GenerateRequest {
   history: GenerateHistoryEntry[];
   /** The builder's current definition when iterating, else null. */
   currentDefinition: StrategyDefinition | null;
+  /** Markets the user @-pinned in the panel (resolved server-side; ≤4). */
+  pinnedConditionIds?: string[];
 }
 
 export interface GeneratedMarketMeta {
@@ -379,18 +385,42 @@ export const generateStrategy = async (
 ): Promise<GenerateResult> => {
   const nowMs = deps.nowMs ?? Date.now();
 
-  const userContent = req.currentDefinition
+  let userContent = req.currentDefinition
     ? `Current strategy definition (the user is refining this — keep bound markets via source:"current"):\n\`\`\`json\n${JSON.stringify(req.currentDefinition)}\n\`\`\`\n\n${req.prompt}`
     : req.prompt;
+
+  const candidates: MarketSearchHit[] = [];
+  let searches = 0;
+  let repairUsed = false;
+
+  // @-pinned markets: resolved and verified HERE (never trusted from the
+  // client), then seeded as pre-verified candidates so the model can skip
+  // the search round entirely. Unresolvable ids are dropped.
+  if (req.pinnedConditionIds && req.pinnedConditionIds.length > 0) {
+    for (const conditionId of req.pinnedConditionIds.slice(0, 4)) {
+      const found = await deps.gammaClient.findMarket({ conditionId });
+      if (found.ok && found.value) {
+        candidates.push(hitFromGammaMarket(found.value));
+      } else {
+        deps.logger.warn(
+          { conditionId: conditionId.slice(0, 16) },
+          "ai.generate pinned market unresolved",
+        );
+      }
+    }
+    if (candidates.length > 0) {
+      userContent += `\n\nPinned markets (pre-verified candidates — reference by index, no search needed):\n${JSON.stringify(presentHits(candidates, 0))}`;
+    }
+  }
 
   const messages: Anthropic.MessageParam[] = [
     ...req.history.map((h) => ({ role: h.role, content: h.content }) as Anthropic.MessageParam),
     { role: "user", content: userContent },
   ];
 
-  const candidates: MarketSearchHit[] = [];
-  let searches = 0;
-  let repairUsed = false;
+  // Haiku-tier models reject the `effort` parameter (400) — only send it on
+  // tiers that support it.
+  const supportsEffort = !deps.model.toLowerCase().includes("haiku");
 
   for (let call = 1; call <= MAX_MODEL_CALLS; call++) {
     let resp: Anthropic.Message;
@@ -398,7 +428,7 @@ export const generateStrategy = async (
       resp = await deps.aiClient.create({
         model: deps.model,
         max_tokens: 4096,
-        output_config: { effort: "medium" },
+        ...(supportsEffort ? { output_config: { effort: "medium" as const } } : {}),
         system: [
           {
             type: "text",

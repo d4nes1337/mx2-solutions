@@ -38,6 +38,8 @@ export interface AiGenerateRequest {
   prompt: string;
   history?: AiHistoryEntry[];
   currentDefinition?: StrategyDefinitionInput | null;
+  /** Markets the user @-pinned — resolved and pre-verified server-side. */
+  pinnedConditionIds?: string[];
 }
 
 export function useGenerateStrategy() {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ExprNode, MarketRef } from "@mx2/rules";
-import { backtestTokenId, simulateTriggers, type PricePoint } from "./backtest";
+import type { ExprNode, MarketRef } from "./types-v2.js";
+import { backtestTokenId, simulateTriggers, type PricePoint } from "./simulate.js";
 
 const market: MarketRef = { conditionId: "cond-1", tokenId: "tok-1", outcome: "YES" };
 const otherMarket: MarketRef = { conditionId: "cond-2", tokenId: "tok-2", outcome: "YES" };

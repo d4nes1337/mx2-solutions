@@ -69,9 +69,11 @@ in, so the app runs against `docker-compose` Postgres with no `.env`.
 
 The landing-page "type a thought → strategy" flow (ADR-0011) needs `FEATURE_AI_CHAT=true` plus a
 real `ANTHROPIC_API_KEY` (config refuses to boot half-configured). `AI_MODEL` defaults to
-`claude-sonnet-5`. `FEATURE_OPEN_BETA=true` auto-allowlists any wallet that completes sign-in.
-Both flags default off — without them the app renders the classic hero and the AI endpoint
-serves `503 AI_DISABLED`.
+`claude-sonnet-5` (beta runs `claude-haiku-4-5`, D-022). `FEATURE_OPEN_BETA=true` auto-allowlists
+any wallet that completes sign-in. Both flags default off — without them the app renders the
+classic hero and the AI endpoint serves `503 AI_DISABLED`. Type `@` in the AI panel to pin
+markets. `GET /api/showcases` (public, cached) serves the backtested "would have paid off"
+examples on the home page, feed cards and cockpit (ADR-0012).
 
 ## Quality gates
 

@@ -6,7 +6,7 @@
  * Everything is a hypothetical estimate; past prices don't predict future
  * prices.
  */
-import type { ActionV2, ConditionV2, ExprNode, RecurrenceV2 } from "@mx2/rules";
+import type { ActionV2, ConditionV2, ExprNode, RecurrenceV2 } from "./types-v2.js";
 
 export interface PricePoint {
   t: number; // unix seconds or ms

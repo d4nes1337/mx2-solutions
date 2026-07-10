@@ -23,6 +23,7 @@ import type {
   PositionsResponse,
   PricesHistoryResponse,
   TokenPricesHistoryResponse,
+  ShowcasesResponse,
   RuleRow,
   RulesResponse,
   SetupCredentialsRequest,
@@ -158,6 +159,16 @@ export function usePricesHistory(
     enabled: Boolean(id) && (opts?.enabled ?? true),
     staleTime: 30_000,
     refetchInterval: opts?.refetchInterval,
+  });
+}
+
+/** Backtested "would have paid off" showcases (server-cached 15 min). */
+export function useShowcases(enabled = true) {
+  return useQuery({
+    queryKey: ["showcases"],
+    queryFn: () => api.get<ShowcasesResponse>("/api/showcases"),
+    enabled,
+    staleTime: 5 * 60_000,
   });
 }
 
