@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Providers } from "./providers";
 import { Header } from "@/components/Header";
+import { THEME_INIT_SCRIPT } from "@/lib/theme-constants";
 
 export const metadata: Metadata = {
   title: "arima — smart orders for Polymarket",
@@ -12,8 +13,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
+        {/* Applies the persisted theme to <html> before first paint. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <Providers>
           <Header />
           <main className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4 sm:py-5">

@@ -131,6 +131,8 @@ const mockClobClient: ClobClient = {
 
 const mockDataClient: DataClient = {
   getPositions: async () => ok([]),
+  getMarketTrades: async () => ok([]),
+  getHolders: async () => ok([]),
   getClosedPositions: async () => ok([]),
   getActivity: async () => ok([]),
   getPositionValue: async () => ok(null),
@@ -680,79 +682,6 @@ describe("GET /api/trade/account", () => {
   });
 });
 
-// ── POST /api/trade/orders/preview ────────────────────────────────────────────
-
-describe("POST /api/trade/orders/preview", () => {
-  it("returns 401 without session", async () => {
-    const app = buildTestApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders/preview",
-      body: "{}",
-      headers: { "content-type": "application/json" },
-    });
-    expect(res.statusCode).toBe(401);
-    await app.close();
-  });
-
-  it("returns 400 when required fields missing", async () => {
-    const app = buildTestApp({ sessions: mockSessionsAuthed });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders/preview",
-      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
-      body: JSON.stringify({ conditionId: "0xcond", tokenId: "0xtok" }),
-    });
-    expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it("returns 400 for invalid price", async () => {
-    const app = buildTestApp({ sessions: mockSessionsAuthed });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders/preview",
-      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
-      body: JSON.stringify({
-        conditionId: "0xcond",
-        tokenId: "0xtok",
-        side: "BUY",
-        price: "1.5",
-        size: "100",
-        funder: "0xfunder",
-      }),
-    });
-    expect(res.statusCode).toBe(400);
-    const body = res.json() as Record<string, unknown>;
-    expect(body.error).toBe("INVALID_PRICE");
-    await app.close();
-  });
-
-  it("returns order preview with maxSpend and warning when trading is disabled", async () => {
-    const app = buildTestApp({ sessions: mockSessionsAuthed });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/trade/orders/preview",
-      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
-      body: JSON.stringify({
-        conditionId: "0xcond",
-        tokenId: "0xtok",
-        side: "BUY",
-        price: "0.45",
-        size: "100",
-        funder: "0xfunder",
-      }),
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as Record<string, unknown>;
-    expect(body.maxSpend).toBe("45.000000");
-    expect(body.signatureType).toBe(2);
-    expect(typeof body.warning).toBe("string");
-    expect(body.warning as string).toContain("DISABLED");
-    await app.close();
-  });
-});
-
 // ── POST /api/trade/orders ─────────────────────────────────────────────────────
 
 describe("POST /api/trade/orders", () => {
@@ -1247,6 +1176,289 @@ describe("Trading wallet onboarding", () => {
     await app.close();
   });
 
+  // ── Self-healing after out-of-band wallet deletion (e.g. Privy dashboard) ──
+
+  const signerWith = (over: Partial<TradingSigner>): TradingSigner => ({
+    ...mockTradingSigner,
+    ...over,
+  });
+
+  const captureAudit = () => {
+    const events: string[] = [];
+    const auditStore: AuditStore = {
+      ...mockAuditStore,
+      emit: async (e) => {
+        events.push(e.action);
+        return mockAuditStore.emit(e);
+      },
+    };
+    return { events, auditStore };
+  };
+
+  it("POST /provision self-heals when the provider says the wallet is gone", async () => {
+    let upserted: { privyWalletId: string } | null = null;
+    let provisionCalls = 0;
+    const archived: string[] = [];
+    const ghostAccount = makeTradingAccountRow({
+      id: "acct-ghost",
+      kind: "internal_privy",
+      privyWalletId: "pw-test",
+      signerAddress: "0x1111111111111111111111111111111111111111",
+      isPrimary: false,
+    });
+    const { events, auditStore } = captureAudit();
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      auditStore,
+      privyWallets: {
+        ...mockPrivyWallets,
+        find: async () => makePrivyWalletRow(), // stale row → pw-test
+        upsert: async (opts) => {
+          upserted = { privyWalletId: opts.privyWalletId };
+          return {
+            ...makePrivyWalletRow(),
+            privyWalletId: opts.privyWalletId,
+            embeddedAddress: opts.embeddedAddress,
+            allowancesBootstrappedAt: null,
+          };
+        },
+      },
+      tradingAccounts: {
+        ...mockTradingAccounts,
+        listByOwner: async () => [makeTradingAccountRow(), ghostAccount],
+        archive: async (_owner, id) => {
+          archived.push(id);
+          return { ...ghostAccount, archivedAt: new Date() };
+        },
+      },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({ ok: true, value: "not_found" as const }),
+        provisionWallet: async () => {
+          provisionCalls++;
+          return {
+            ok: true,
+            value: { walletId: "pw-new", address: "0x2222222222222222222222222222222222222222" },
+          };
+        },
+      }),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/provision",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.alreadyProvisioned).toBe(false);
+    expect(body.reissued).toBe(true);
+    expect(body.walletHealth).toBe("ok");
+    expect(provisionCalls).toBe(1);
+    expect(upserted!.privyWalletId).toBe("pw-new");
+    expect(archived).toEqual(["acct-ghost"]); // only the ghost, never the external account
+    expect(events).toContain("trading_wallet.ghost_detected");
+    expect(events).toContain("trading_wallet.reissued");
+    await app.close();
+  });
+
+  it("POST /provision never destroys the mapping on a transient verification failure", async () => {
+    let upsertCalls = 0;
+    let provisionCalls = 0;
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: {
+        ...mockPrivyWallets,
+        find: async () => makePrivyWalletRow(),
+        upsert: async () => {
+          upsertCalls++;
+          throw new Error("must not be called");
+        },
+      },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({
+          ok: false,
+          error: { code: "NETWORK_ERROR", message: "timeout" },
+        }),
+        provisionWallet: async () => {
+          provisionCalls++;
+          throw new Error("must not be called");
+        },
+      }),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/provision",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.alreadyProvisioned).toBe(true);
+    expect(body.reissued).toBe(false);
+    expect(body.walletHealth).toBe("unknown");
+    expect(upsertCalls).toBe(0);
+    expect(provisionCalls).toBe(0);
+    await app.close();
+  });
+
+  it("POST /provision re-links an active wallet exactly as before", async () => {
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({ ok: true, value: "active" as const }),
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/provision",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.alreadyProvisioned).toBe(true);
+    expect(body.reissued).toBe(false);
+    expect(body.walletHealth).toBe("ok");
+    await app.close();
+  });
+
+  it("POST /reissue returns 401 without session and 409 when the wallet is still active", async () => {
+    const noSession = buildTestApp({ cfg: configPrivy });
+    const unauth = await noSession.inject({ method: "POST", url: "/api/trading-wallet/reissue" });
+    expect(unauth.statusCode).toBe(401);
+    await noSession.close();
+
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({ ok: true, value: "active" as const }),
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/reissue",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as Record<string, unknown>).error).toBe("WALLET_STILL_ACTIVE");
+    await app.close();
+  });
+
+  it("POST /reissue fails closed (502) when the provider is unreachable", async () => {
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({
+          ok: false,
+          error: { code: "NETWORK_ERROR", message: "timeout" },
+        }),
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/reissue",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(502);
+    expect((res.json() as Record<string, unknown>).error).toBe("WALLET_VERIFY_FAILED");
+    await app.close();
+  });
+
+  it("POST /reissue heals a dead wallet", async () => {
+    let upserted: { privyWalletId: string } | null = null;
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: {
+        ...mockPrivyWallets,
+        find: async () => makePrivyWalletRow(),
+        upsert: async (opts) => {
+          upserted = { privyWalletId: opts.privyWalletId };
+          return {
+            ...makePrivyWalletRow(),
+            privyWalletId: opts.privyWalletId,
+            embeddedAddress: opts.embeddedAddress,
+            allowancesBootstrappedAt: null,
+          };
+        },
+      },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({ ok: true, value: "not_found" as const }),
+        provisionWallet: async () => ({
+          ok: true,
+          value: { walletId: "pw-new", address: "0x2222222222222222222222222222222222222222" },
+        }),
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/reissue",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.reissued).toBe(true);
+    expect(body.created).toBe(false);
+    expect(upserted!.privyWalletId).toBe("pw-new");
+    await app.close();
+  });
+
+  it("GET /api/trading-wallet?verify=1 reports walletHealth missing/ok/unknown", async () => {
+    const build = (status: Awaited<ReturnType<TradingSigner["getWalletStatus"]>>) =>
+      buildTestApp({
+        cfg: configPrivy,
+        sessions: mockSessionsAuthed,
+        privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+        tradingSigner: signerWith({ getWalletStatus: async () => status }),
+      });
+
+    for (const [status, expected] of [
+      [{ ok: true, value: "active" }, "ok"],
+      [{ ok: true, value: "not_found" }, "missing"],
+      [{ ok: false, error: { code: "NETWORK_ERROR", message: "x" } }, "unknown"],
+    ] as const) {
+      const app = build(status as Awaited<ReturnType<TradingSigner["getWalletStatus"]>>);
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/trading-wallet?verify=1",
+        headers: { cookie: "mx2_session=tok" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as Record<string, unknown>).walletHealth).toBe(expected);
+      await app.close();
+    }
+
+    // Without ?verify the provider is never consulted.
+    let statusCalls = 0;
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => {
+          statusCalls++;
+          return { ok: true, value: "active" as const };
+        },
+      }),
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/trading-wallet",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as Record<string, unknown>).walletHealth).toBeNull();
+    expect(statusCalls).toBe(0);
+    await app.close();
+  });
+
   it("POST /activate-deposit-wallet returns 503 when the relayer is disabled", async () => {
     const app = buildTestApp({
       cfg: configPrivy,
@@ -1577,14 +1789,14 @@ describe("Admin kill switch", () => {
 // TODO(geoblock): route-level geoblock is TEMPORARILY DISABLED for local testing
 // (see trade.ts). Re-enable these tests together with the geoblockCheck preHandlers.
 describe.skip("Geoblock enforcement on trading routes", () => {
-  it("blocks order preview from blocked IP", async () => {
+  it("blocks order submission from blocked IP", async () => {
     const blockedGeoblock: GeoblockClient = {
       check: async (ip) => ok({ status: "blocked", country: "RU", region: null, ip }),
     };
     const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: blockedGeoblock });
     const res = await app.inject({
       method: "POST",
-      url: "/api/trade/orders/preview",
+      url: "/api/trade/orders",
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify({
         conditionId: "0x",
@@ -1601,14 +1813,14 @@ describe.skip("Geoblock enforcement on trading routes", () => {
     await app.close();
   });
 
-  it("blocks close_only region from placing new orders (preview endpoint)", async () => {
+  it("blocks close_only region from placing new orders", async () => {
     const closeOnlyGeoblock: GeoblockClient = {
       check: async (ip) => ok({ status: "close_only", country: "SG", region: null, ip }),
     };
     const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: closeOnlyGeoblock });
     const res = await app.inject({
       method: "POST",
-      url: "/api/trade/orders/preview",
+      url: "/api/trade/orders",
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify({
         conditionId: "0x",
@@ -1632,7 +1844,7 @@ describe.skip("Geoblock enforcement on trading routes", () => {
     const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: failingGeoblock });
     const res = await app.inject({
       method: "POST",
-      url: "/api/trade/orders/preview",
+      url: "/api/trade/orders",
       headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
       body: JSON.stringify({
         conditionId: "0x",

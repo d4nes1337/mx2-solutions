@@ -5,6 +5,7 @@
  * React Flow state logic beyond Handles, so they stay testable and the canvas
  * library remains swappable (ADR-0010).
  */
+import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { AlertCircle, Bell, CircleDollarSign, GitBranch, OctagonX, TrendingUp } from "lucide-react";
 import { cn } from "@/components/ui";
@@ -40,9 +41,11 @@ export interface ActionNodeData extends Record<string, unknown> {
   issue: string | null;
 }
 
+// Transition only paint-cheap properties — `transition-all` made the browser
+// interpolate the large-blur shadow every frame while a node was dragged.
 const shell = (selected: boolean | undefined, issue?: boolean) =>
   cn(
-    "w-[260px] rounded-xl border bg-surface px-3.5 py-3 shadow-panel transition-all",
+    "w-[260px] rounded-xl border bg-surface px-3.5 py-3 shadow-panel transition-[border-color,background-color,box-shadow]",
     selected ? "border-brand shadow-elev" : issue ? "border-neg/60" : "border-border",
   );
 
@@ -72,7 +75,10 @@ const statePill = (state: ConditionNodeData["state"], actual: string | null) => 
   );
 };
 
-export function MarketNode({ data, selected }: NodeProps<Node<MarketNodeData>>) {
+export const MarketNode = memo(function MarketNode({
+  data,
+  selected,
+}: NodeProps<Node<MarketNodeData>>) {
   return (
     <div className={shell(selected, !data.bound)}>
       <div className="flex items-center gap-2">
@@ -92,9 +98,12 @@ export function MarketNode({ data, selected }: NodeProps<Node<MarketNodeData>>) 
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
-}
+});
 
-export function ConditionNode({ data, selected }: NodeProps<Node<ConditionNodeData>>) {
+export const ConditionNode = memo(function ConditionNode({
+  data,
+  selected,
+}: NodeProps<Node<ConditionNodeData>>) {
   return (
     <div className={shell(selected, Boolean(data.issue))}>
       <Handle type="target" position={Position.Left} className="!bg-border-strong" />
@@ -116,14 +125,17 @@ export function ConditionNode({ data, selected }: NodeProps<Node<ConditionNodeDa
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
-}
+});
 
-export function LogicNode({ data, selected }: NodeProps<Node<LogicNodeData>>) {
+export const LogicNode = memo(function LogicNode({
+  data,
+  selected,
+}: NodeProps<Node<LogicNodeData>>) {
   const label = data.op === "and" ? "ALL OF" : data.op === "or" ? "ANY OF" : "NOT";
   return (
     <div
       className={cn(
-        "rounded-full border bg-surface px-4 py-2 shadow-panel transition-all",
+        "rounded-full border bg-surface px-4 py-2 shadow-panel transition-[border-color,background-color,box-shadow]",
         selected ? "border-brand shadow-elev" : "border-border",
       )}
     >
@@ -143,9 +155,12 @@ export function LogicNode({ data, selected }: NodeProps<Node<LogicNodeData>>) {
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
-}
+});
 
-export function ActionNode({ data, selected }: NodeProps<Node<ActionNodeData>>) {
+export const ActionNode = memo(function ActionNode({
+  data,
+  selected,
+}: NodeProps<Node<ActionNodeData>>) {
   const icon =
     data.kind === "alert" ? (
       <Bell size={14} aria-hidden />
@@ -180,7 +195,7 @@ export function ActionNode({ data, selected }: NodeProps<Node<ActionNodeData>>) 
       ) : null}
     </div>
   );
-}
+});
 
 export const NODE_TYPES = {
   market: MarketNode,

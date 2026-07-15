@@ -8,6 +8,7 @@
  * never a promise.
  */
 import Link from "next/link";
+import { useMemo } from "react";
 import { Badge } from "@/components/ui";
 import { AnimatedNumber } from "@/components/motion";
 import { AreaChart } from "@/components/charts/AreaChart";
@@ -35,29 +36,41 @@ export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | u
   const doc = useBuilderStore((s) => s.doc);
   const session = useSession();
 
-  const input = payoffInputFromDoc(doc, evaluation?.markets ?? []);
+  const input = useMemo(
+    () => payoffInputFromDoc(doc, evaluation?.markets ?? []),
+    [doc, evaluation],
+  );
   const btTokenId = backtestTokenId(doc.expr);
   const history = useTokenPricesHistory(btTokenId);
 
-  if (!input) return null;
-  const payoff = computePayoff(input);
+  const payoff = useMemo(() => (input ? computePayoff(input) : null), [input]);
 
-  const backtest =
-    history.data && history.data.history.length > 1
-      ? simulateTriggers({
-          expr: doc.expr,
-          holdsForMs: doc.holdsForMs,
-          recurrence: doc.recurrence,
-          action: doc.action,
-          series: history.data.history,
-        })
-      : null;
+  // The 30-day backtest is the expensive part — keyed on the strategy fields
+  // it reads so drops/selection (which only change doc identity) skip it.
+  const backtest = useMemo(
+    () =>
+      history.data && history.data.history.length > 1
+        ? simulateTriggers({
+            expr: doc.expr,
+            holdsForMs: doc.holdsForMs,
+            recurrence: doc.recurrence,
+            action: doc.action,
+            series: history.data.history,
+          })
+        : null,
+    [history.data, doc.expr, doc.holdsForMs, doc.recurrence, doc.action],
+  );
+
+  if (!input || !payoff) return null;
 
   const outcome = input.outcome || "YES";
   const stakeLabel = input.hypothetical ? "Hypothetical stake" : "Capital committed";
 
   return (
-    <aside className="space-y-2.5 rounded-xl border border-border bg-surface p-4 shadow-panel">
+    <aside
+      className="space-y-2.5 rounded-xl border border-border bg-surface p-4 shadow-panel"
+      data-tour="builder-projection"
+    >
       <div className="flex items-center justify-between">
         <h3 className="text-[13px] font-semibold text-fg">Projection</h3>
         <Badge tone="neutral">estimates</Badge>

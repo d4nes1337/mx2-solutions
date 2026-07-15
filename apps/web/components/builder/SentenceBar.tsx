@@ -4,6 +4,7 @@
  * The always-visible plain-English strategy sentence. Chips are clickable —
  * selecting one focuses the corresponding node on the canvas/inspector.
  */
+import { useMemo } from "react";
 import { cn } from "@/components/ui";
 import { describeStrategy } from "@/lib/smart-orders/sentence";
 import { useBuilderStore } from "@/lib/smart-orders/store";
@@ -18,12 +19,13 @@ const TONE_STYLES: Record<string, string> = {
 export function SentenceBar() {
   const doc = useBuilderStore((s) => s.doc);
   const select = useBuilderStore((s) => s.select);
-  const segments = describeStrategy(doc);
+  const segments = useMemo(() => describeStrategy(doc), [doc]);
 
   return (
     <div
       className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-panel"
       aria-label="Strategy in plain English"
+      data-tour="sentence-bar"
     >
       {segments.map((seg, i) =>
         seg.nodeId ? (

@@ -2,30 +2,40 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount } from "wagmi";
-import { useSession, useSignIn, useSignOut } from "@/lib/auth";
-import { ApiError } from "@/lib/api";
 import { LogoMark } from "@/components/brand/LogoMark";
-import { Badge, Button, cn } from "./ui";
+import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
+import { AccountMenu } from "@/components/AccountMenu";
+import { HelpButton } from "@/components/onboarding/HelpButton";
+import { cn } from "./ui";
 
 const NAV = [
-  { href: "/", label: "Home" },
-  { href: "/markets", label: "Markets" },
-  { href: "/smart-orders", label: "Smart Orders" },
-  { href: "/wallet", label: "Wallet" },
+  { href: "/", label: "Home", tour: null },
+  { href: "/markets", label: "Markets", tour: "nav-markets" },
+  { href: "/smart-orders", label: "Smart Orders", tour: "nav-smart-orders" },
+  { href: "/wallet", label: "Wallet", tour: "nav-wallet" },
 ];
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-function NavLink({ href, label, mobile }: { href: string; label: string; mobile?: boolean }) {
+function NavLink({
+  href,
+  label,
+  mobile,
+  tour,
+}: {
+  href: string;
+  label: string;
+  mobile?: boolean;
+  tour?: string | null;
+}) {
   const pathname = usePathname();
   const active = isActive(pathname, href);
   return (
     <Link
       href={href}
+      {...(tour && !mobile ? { "data-tour": tour } : {})}
       className={cn(
         "relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
         mobile && "shrink-0",
@@ -43,70 +53,9 @@ function NavLink({ href, label, mobile }: { href: string; label: string; mobile?
 function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2">
-      <LogoMark className="h-7 w-auto text-brand drop-shadow-[0_2px_8px_rgba(42,54,255,0.3)]" />
+      <LogoMark className="h-7 w-auto text-brand drop-shadow-[0_2px_8px_rgba(var(--brand-rgb),0.3)]" />
       <span className="text-[17px] font-bold lowercase tracking-tight text-fg">arima</span>
     </Link>
-  );
-}
-
-function SessionControls() {
-  const { isConnected } = useAccount();
-  const session = useSession();
-  const signIn = useSignIn();
-  const signOut = useSignOut();
-
-  if (!isConnected) return null;
-
-  if (session.data) {
-    return (
-      <details className="group relative">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:border-border-strong [&::-webkit-details-marker]:hidden">
-          Account
-          <span className="text-[10px] text-faint transition-transform group-open:rotate-180">
-            ▾
-          </span>
-        </summary>
-        <div className="absolute right-0 top-full z-40 mt-1.5 w-52 space-y-1 rounded-lg border border-border bg-surface p-2 shadow-pop">
-          <div className="px-2 py-1">
-            <Badge tone={session.data.allowlisted ? "pos" : "warn"} dot>
-              {session.data.allowlisted ? "beta access" : "no beta access yet"}
-            </Badge>
-          </div>
-          <Link
-            href="/portfolio"
-            className="block rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-2"
-          >
-            Portfolio
-          </Link>
-          <button
-            type="button"
-            onClick={() => signOut.mutate()}
-            disabled={signOut.isPending}
-            className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-fg"
-          >
-            Sign out
-          </button>
-        </div>
-      </details>
-    );
-  }
-
-  const err =
-    signIn.error instanceof ApiError
-      ? signIn.error.message
-      : signIn.error instanceof Error
-        ? signIn.error.message
-        : null;
-
-  return (
-    <div className="flex items-center gap-2">
-      {err ? (
-        <span className="hidden max-w-[220px] truncate text-xs text-neg sm:inline">{err}</span>
-      ) : null}
-      <Button size="sm" onClick={() => signIn.mutate()} disabled={signIn.isPending}>
-        {signIn.isPending ? "Check wallet…" : "Sign in"}
-      </Button>
-    </div>
   );
 }
 
@@ -118,13 +67,14 @@ export function Header() {
           <Logo />
           <nav className="hidden items-center gap-0.5 md:flex">
             {NAV.map((n) => (
-              <NavLink key={n.href} href={n.href} label={n.label} />
+              <NavLink key={n.href} href={n.href} label={n.label} tour={n.tour} />
             ))}
           </nav>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
-          <SessionControls />
-          <ConnectButton showBalance={false} chainStatus="icon" accountStatus="address" />
+          <HelpButton />
+          <ThemeSwitcher />
+          <AccountMenu />
         </div>
       </div>
       {/* Mobile nav strip */}

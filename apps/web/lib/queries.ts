@@ -14,10 +14,11 @@ import type {
   HistoryResponse,
   HistoryTypeFilter,
   MarketDetail,
+  MarketHoldersResponse,
+  MarketScenariosResponse,
+  MarketTradesResponse,
   OpenOrdersResponse,
   OrderbookResponse,
-  OrderPreviewRequest,
-  OrderPreviewResponse,
   PortfolioOverviewResponse,
   PnlResponse,
   PositionsResponse,
@@ -33,7 +34,9 @@ import type {
   TradingAccountsResponse,
   TradingAccountResponse,
   TradingWalletActivationResponse,
+  TradingWalletBalanceResponse,
   TradingWalletProvisionResponse,
+  TradingWalletReissueResponse,
   TradingWalletStatusResponse,
   TradeStatus,
   TriggerDetailResponse,
@@ -58,6 +61,7 @@ export const POLL = {
   ruleEval: 3_000,
   triggers: 4_000,
   triggerDetail: 3_000,
+  marketTrades: 10_000,
 } as const;
 
 // ── Public read-only data ────────────────────────────────────────────────────
@@ -159,6 +163,38 @@ export function usePricesHistory(
     enabled: Boolean(id) && (opts?.enabled ?? true),
     staleTime: 30_000,
     refetchInterval: opts?.refetchInterval,
+  });
+}
+
+/** Recent public trades in a market (Data API tape, most recent first). */
+export function useMarketTrades(id: string, limit = 25) {
+  return useQuery({
+    queryKey: ["market-trades", id, limit],
+    queryFn: () => api.get<MarketTradesResponse>(`/api/markets/${id}/trades?limit=${limit}`),
+    enabled: Boolean(id),
+    refetchInterval: POLL.marketTrades,
+    staleTime: 10_000,
+  });
+}
+
+/** Top holders per outcome token. Slow-moving — no polling. */
+export function useMarketHolders(id: string, limit = 8) {
+  return useQuery({
+    queryKey: ["market-holders", id, limit],
+    queryFn: () => api.get<MarketHoldersResponse>(`/api/markets/${id}/holders?limit=${limit}`),
+    enabled: Boolean(id),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Backtested "how you could enter this market" scenarios (server-cached 15 min). */
+export function useMarketScenarios(id: string, outcome: number, enabled = true) {
+  return useQuery({
+    queryKey: ["market-scenarios", id, outcome],
+    queryFn: () =>
+      api.get<MarketScenariosResponse>(`/api/markets/${id}/scenarios?outcome=${outcome}`),
+    enabled: Boolean(id) && enabled,
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -286,6 +322,41 @@ export function useBootstrapAllowances() {
   });
 }
 
+/** Provider-verified wallet health (one Privy round-trip; no polling). */
+export function useTradingWalletHealth(enabled = true) {
+  return useQuery({
+    queryKey: ["trading-wallet-health"],
+    queryFn: () => api.get<TradingWalletStatusResponse>("/api/trading-wallet?verify=1"),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Repair path for a provider-side-deleted wallet (409s if it's still alive). */
+export function useReissueTradingWallet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<TradingWalletReissueResponse>("/api/trading-wallet/reissue"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-health"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
+    },
+  });
+}
+
+/** On-chain USDC.e balances for the deposit wallet + signer EOA. */
+export function useTradingWalletBalance(enabled = true) {
+  return useQuery({
+    queryKey: ["trading-wallet-balance"],
+    queryFn: () => api.get<TradingWalletBalanceResponse>("/api/trading-wallet/balance"),
+    enabled,
+    staleTime: 30_000,
+    retry: false, // 400/503 when not provisioned or RPC unset — show nothing.
+  });
+}
+
 // ── Authenticated portfolio ──────────────────────────────────────────────────
 // The Data API keys off the deposit/proxy wallet, so callers may pass an
 // optional proxyWallet override (see PnL limitations text).
@@ -360,15 +431,6 @@ export function usePnl(enabled: boolean, proxyWallet?: string) {
     queryKey: ["pnl", proxyWallet ?? ""],
     queryFn: () => api.get<PnlResponse>(`/api/profile/pnl${proxyQuery(proxyWallet)}`),
     enabled,
-  });
-}
-
-// ── Order preview (safe; no trading flag required) ───────────────────────────
-
-export function useOrderPreview() {
-  return useMutation({
-    mutationFn: (req: OrderPreviewRequest) =>
-      api.post<OrderPreviewResponse>("/api/trade/orders/preview", req),
   });
 }
 

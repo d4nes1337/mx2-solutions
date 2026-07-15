@@ -93,12 +93,70 @@ export const registerTradingWalletRoutes = (
       depositWalletAddress: result.depositWalletAddress,
       allowancesBootstrapped: result.allowancesBootstrapped,
       alreadyProvisioned: result.alreadyProvisioned,
+      reissued: result.reissued,
+      walletHealth: result.walletHealth,
       ...(result.alreadyProvisioned
         ? {}
         : {
             fundingInstructions:
               "Deposit-wallet activation is required before funding. Once active, fund the Polymarket deposit wallet, not the embedded signer EOA.",
           }),
+    };
+  });
+
+  // ── POST /api/trading-wallet/reissue ──────────────────────────────────────
+  // Explicit repair for a wallet deleted at the provider (e.g. via the Privy
+  // dashboard). Refuses when the wallet is still alive — recreating it would
+  // strand any funds its deposit wallet controls — and refuses to guess when
+  // the provider can't be reached (nothing is changed in either case).
+  app.post("/api/trading-wallet/reissue", { preHandler: requireAuth }, async (req, reply) => {
+    if (!ensureEnabled(reply)) return;
+    const user = req.user!;
+
+    const wallet = await deps.privyWallets.find(user.walletAddress);
+    if (wallet) {
+      const status = await deps.tradingSigner.getWalletStatus(wallet.privyWalletId);
+      if (!status.ok) {
+        reply.code(502);
+        return {
+          error: "WALLET_VERIFY_FAILED",
+          message:
+            "Could not verify the trading wallet with the provider — nothing was changed. Try again shortly.",
+        };
+      }
+      if (status.value === "active") {
+        reply.code(409);
+        return {
+          error: "WALLET_STILL_ACTIVE",
+          message:
+            "Your trading wallet is still active — re-creating it would strand any funds it controls. Nothing was changed.",
+        };
+      }
+    }
+
+    const result = await ensureTradingWalletProvisioned(
+      {
+        config: deps.config,
+        auditStore: deps.auditStore,
+        tradingSigner: deps.tradingSigner,
+        privyWallets: deps.privyWallets,
+        tradingAccounts: deps.tradingAccounts,
+      },
+      user.walletAddress,
+    );
+    if (!result.ok) {
+      reply.code(502);
+      return { error: result.code, message: result.message };
+    }
+
+    return {
+      ok: true,
+      reissued: result.reissued,
+      created: wallet === null,
+      tradingAccountId: result.tradingAccountId,
+      embeddedAddress: result.embeddedAddress,
+      depositWalletAddress: result.depositWalletAddress,
+      walletHealth: result.walletHealth,
     };
   });
 
@@ -299,6 +357,9 @@ export const registerTradingWalletRoutes = (
   );
 
   // ── GET /api/trading-wallet ───────────────────────────────────────────────
+  // Pass ?verify=1 to also check the wallet still exists at the provider
+  // (walletHealth: ok | missing | unknown). Off by default so routine status
+  // polling never hammers the provider API.
   app.get("/api/trading-wallet", { preHandler: requireAuth }, async (req) => {
     const user = req.user!;
     const wallet = await deps.privyWallets.find(user.walletAddress);
@@ -310,6 +371,14 @@ export const registerTradingWalletRoutes = (
             account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase(),
         )
       : null;
+
+    const wantsVerify = (req.query as Record<string, unknown>)["verify"] === "1";
+    let walletHealth: "ok" | "missing" | "unknown" | null = null;
+    if (wantsVerify && wallet) {
+      const status = await deps.tradingSigner.getWalletStatus(wallet.privyWalletId);
+      walletHealth = !status.ok ? "unknown" : status.value === "active" ? "ok" : "missing";
+    }
+
     return {
       privySigningEnabled: deps.config.features.privySigning,
       relayerEnabled: deps.config.features.relayer && deps.depositWalletRelayer.enabled,
@@ -321,6 +390,7 @@ export const registerTradingWalletRoutes = (
       allowancesBootstrapped: wallet?.allowancesBootstrappedAt != null,
       delegationActive: delegation !== null,
       delegationExpiresAt: delegation?.expiresAt.toISOString() ?? null,
+      walletHealth,
     };
   });
 

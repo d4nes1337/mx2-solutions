@@ -166,6 +166,7 @@ export const buildApp = (deps: AppDeps) => {
   registerMarketsRoutes(fastifyApp, {
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
+    dataClient: deps.dataClient,
     marketSnapshots: deps.marketSnapshots,
   });
   registerAuthRoutes(fastifyApp, {

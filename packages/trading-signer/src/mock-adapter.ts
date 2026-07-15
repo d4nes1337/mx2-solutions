@@ -52,6 +52,10 @@ export const createMockTradingSigner = (opts: MockTradingSignerOptions): Trading
       const walletId = `mock-${keccak256(toHex(userRef)).slice(2, 18)}`;
       return ok({ walletId, address: account.address });
     },
+    async getWalletStatus() {
+      // Mock wallets are deterministic and never deleted out-of-band.
+      return ok("active" as const);
+    },
     signOrder: sign,
     signClobAuth: sign,
     async sendTransaction(req: SendTransactionRequest) {

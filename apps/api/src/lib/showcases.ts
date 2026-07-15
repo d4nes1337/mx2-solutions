@@ -40,6 +40,8 @@ export interface Showcase {
   id: string;
   market: ShowcaseMarket;
   sentence: string;
+  /** Chat-voice text a user could paste into the AI prompt box to get this strategy. */
+  prompt: string;
   definition: StrategyDefinition;
   stats: {
     stakeUsd: number;
@@ -272,6 +274,7 @@ const buildShowcaseFor = (
       currentPriceCents: Math.round(candidate.mid * 100),
     },
     sentence: `If ${candidate.outcome} dips below ${centsLabel(best.threshold)} and holds 15 min → buy $${STAKE_USD} at ${centsLabel(best.threshold)}`,
+    prompt: `Buy $${STAKE_USD} of ${candidate.outcome} on "${candidate.title.slice(0, 80)}" if the price dips to ${centsLabel(best.threshold)} and holds for 15 minutes`,
     definition,
     stats: {
       stakeUsd: STAKE_USD,

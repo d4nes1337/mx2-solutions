@@ -3,6 +3,8 @@ import {
   ActivitySchema,
   ClosedPositionSchema,
   LeaderboardEntrySchema,
+  MarketHoldersGroupSchema,
+  MarketTradeSchema,
   PositionSchema,
   PositionValueSchema,
 } from "./data/schema.js";
@@ -174,5 +176,85 @@ describe("LeaderboardEntrySchema", () => {
       profileImage: "https://example.com/avatar.webp",
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// Fixtures matching the official Data-API reference (docs.polymarket.com,
+// /trades + /holders specs, checked 2026-07-15). See INTEGRATION_VERIFIED §11.
+const sampleMarketTrade: unknown = {
+  proxyWallet: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+  side: "BUY",
+  asset: "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+  conditionId: "0x1b6eab50dbd311232b55f08c226a8b713a8571adb1a72494ee2fe12356cbd00a",
+  size: 250,
+  price: 0.42,
+  timestamp: 1783002719,
+  title: "Will X happen?",
+  slug: "will-x-happen",
+  icon: "https://example.com/icon.png",
+  eventSlug: "x-event",
+  outcome: "Yes",
+  outcomeIndex: 0,
+  name: "trader-1",
+  pseudonym: "Fuzzy-Marmot",
+  bio: "",
+  profileImage: "https://example.com/p.png",
+  profileImageOptimized: "",
+  transactionHash: "0xtxhash",
+};
+
+const sampleHoldersGroup: unknown = {
+  token: "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+  holders: [
+    {
+      proxyWallet: "0x997c95d8be61d5779edfb49aaf5dd83d85f31434",
+      bio: "",
+      asset: "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+      pseudonym: "Fuzzy-Marmot",
+      amount: 15000.5,
+      displayUsernamePublic: true,
+      outcomeIndex: 0,
+      name: "whale-1",
+      profileImage: "https://example.com/p.png",
+      profileImageOptimized: "",
+    },
+  ],
+};
+
+describe("MarketTradeSchema", () => {
+  it("parses a Data-API trade row", () => {
+    const result = MarketTradeSchema.safeParse(sampleMarketTrade);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.side).toBe("BUY");
+      expect(result.data.price).toBe(0.42);
+      expect(result.data.timestamp).toBe(1783002719);
+    }
+  });
+
+  it("tolerates missing optional profile fields", () => {
+    const minimal = {
+      proxyWallet: "0xabc",
+      side: "SELL",
+      size: 1,
+      price: 0.5,
+      timestamp: 1783002719,
+    };
+    expect(MarketTradeSchema.safeParse(minimal).success).toBe(true);
+  });
+});
+
+describe("MarketHoldersGroupSchema", () => {
+  it("parses a per-token holders group", () => {
+    const result = MarketHoldersGroupSchema.safeParse(sampleHoldersGroup);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.holders[0]?.amount).toBe(15000.5);
+      expect(result.data.holders[0]?.outcomeIndex).toBe(0);
+    }
+  });
+
+  it("accepts an empty holders array", () => {
+    expect(MarketHoldersGroupSchema.safeParse({ token: "1", holders: [] }).success).toBe(true);
   });
 });

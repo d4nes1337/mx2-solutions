@@ -160,6 +160,8 @@ export interface Showcase {
   id: string;
   market: ShowcaseMarket;
   sentence: string;
+  /** Chat-voice text a user could paste into the AI prompt box. */
+  prompt?: string;
   definition: StrategyDefinition;
   stats: {
     stakeUsd: number;
@@ -191,7 +193,66 @@ export interface TradeStatus {
   tradingEnabled: boolean;
   featureFlag: boolean;
   runtimePaused: boolean;
+  /** Attribution code embedded in signed orders (public config). */
+  builderCode?: string | null;
   geoblock: { status: string; country?: string; error?: string };
+}
+
+// ── Market cockpit data panels ───────────────────────────────────────────────
+
+export interface MarketTradeRow {
+  side: string;
+  price: number;
+  size: number;
+  /** Unix seconds. */
+  timestamp: number;
+  outcome: string | null;
+  outcomeIndex: number | null;
+  name: string | null;
+  proxyWallet: string;
+  transactionHash: string | null;
+}
+
+export interface MarketTradesResponse {
+  conditionId: string;
+  trades: MarketTradeRow[];
+}
+
+export interface MarketHolderRow {
+  proxyWallet: string;
+  name: string | null;
+  amount: number;
+  profileImage: string | null;
+}
+
+export interface MarketHoldersResponse {
+  conditionId: string;
+  groups: { tokenId: string; outcome: string | null; holders: MarketHolderRow[] }[];
+}
+
+export interface MarketScenario {
+  id: string;
+  kind: "dip_buy" | "breakout" | "limit_entry";
+  label: string;
+  sentence: string;
+  prompt: string;
+  definition: StrategyDefinition;
+  entryPriceCents: number;
+  stats: {
+    stakeUsd: number;
+    windowDays: number;
+    hypotheticalPnlUsd?: number;
+    triggerCount?: number;
+    touches?: number;
+  };
+  triggers: { t: number; price: number }[];
+}
+
+export interface MarketScenariosResponse {
+  conditionId: string;
+  outcome: string;
+  generatedAt: string;
+  scenarios: MarketScenario[];
 }
 
 export type TradingAccountKind = "external_wallet" | "internal_privy";
@@ -241,6 +302,26 @@ export interface TradingWalletStatusResponse {
   allowancesBootstrapped: boolean;
   delegationActive: boolean;
   delegationExpiresAt: string | null;
+  /** Only populated when requested with ?verify=1 (provider round-trip). */
+  walletHealth: "ok" | "missing" | "unknown" | null;
+}
+
+export interface TradingWalletBalanceResponse {
+  depositWalletAddress: string | null;
+  depositWalletUsdc: number | null;
+  embeddedAddress: string;
+  embeddedUsdc: number;
+  asOf: string;
+}
+
+export interface TradingWalletReissueResponse {
+  ok: boolean;
+  reissued: boolean;
+  created: boolean;
+  tradingAccountId: string;
+  embeddedAddress: string;
+  depositWalletAddress: string | null;
+  walletHealth: "ok" | "unknown";
 }
 
 export interface TradingWalletProvisionResponse {
@@ -493,6 +574,8 @@ export interface PnlResponse {
 export type OrderSide = "BUY" | "SELL";
 export type OrderType = "GTC" | "GTD" | "FOK";
 
+/** Client-side validated order input (lib/orders.ts). No preview round-trip —
+ * the ticket signs and submits directly; the server re-validates everything. */
 export interface OrderPreviewRequest {
   tradingAccountId?: string;
   conditionId: string;
@@ -502,26 +585,6 @@ export interface OrderPreviewRequest {
   size: string;
   orderType: OrderType;
   funder: string;
-}
-
-export interface OrderPreviewResponse {
-  tradingAccountId: string;
-  tradingAccountLabel: string;
-  signingMode: TradingSigningMode;
-  requiresSignature: boolean;
-  conditionId: string;
-  tokenId: string;
-  side: OrderSide;
-  price: string;
-  size: string;
-  orderType: OrderType;
-  funder: string;
-  maxSpend: string;
-  builderCode: string | null;
-  signatureType: number;
-  timestamp: string;
-  note: string;
-  warning: string;
 }
 
 // CLOB V2 signed order produced client-side (lib/order-sign.ts).

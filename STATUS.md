@@ -1,8 +1,58 @@
 # Project Status
 
-_Last updated: 2026-07-10_
+_Last updated: 2026-07-15_
 
 ## Recent
+
+- **Round-3 UX polish: wallet lifecycle self-healing + cockpit intelligence + themes + onboarding
+  (built; D-023).** Owner's round-3 brief executed end-to-end:
+  - **Wallet lifecycle fixed (the "deleted my Privy wallet, can't re-create" bug).** Provisioning
+    now verifies the mapped wallet still exists at Privy: a definitive provider 404 archives the
+    ghost `internal_privy` account, re-issues a fresh wallet and overwrites the mapping (audit:
+    `trading_wallet.ghost_detected` / `.reissued`); a transient verification failure re-links
+    untouched (fail-closed — nothing is ever destroyed on a flake). New
+    `POST /api/trading-wallet/reissue` (409 `WALLET_STILL_ACTIVE` when alive, 502 when
+    unverifiable) + `GET /api/trading-wallet?verify=1` → `walletHealth`. Web: warn banner +
+    "Re-create trading wallet" in WalletsSection; auto-provision on login self-heals silently.
+    7 new route tests cover exactly the deletion/reissue matrix.
+  - **Header account UX.** RainbowKit's stock account modal replaced by a first-party
+    `AccountMenu` (ConnectButton.Custom): identity + beta badge, trading-wallet USDC balance with
+    one-click **Top up** (deep link `/wallet?topup=1` auto-opens the TopUpSheet; top-up is now
+    always reachable once a deposit wallet exists), portfolio/wallet links, sign out, disconnect.
+  - **Three-theme system.** `data-theme` tokens in globals.css — light (default), **paper**
+    (warm-grey, Claude-style) and dark — with `--brand-rgb` glow re-tinting, anti-flash inline
+    script, localStorage persistence, RainbowKit theme sync, and a header switcher.
+  - **Hero carousel.** Rotates the top backtested showcases (auto-advance 7s, dots/arrows,
+    reduced-motion aware); each slide shows the server-generated chat **prompt** that builds it
+    ("Try this prompt" seeds the AI box). `Showcase.prompt` added to `/api/showcases`.
+  - **Market cockpit rework.** "Preview order" button AND `POST /api/trade/orders/preview`
+    removed (client-side validation + payoff stay; `builderCode` now served by
+    `GET /api/trade/status`; submit signs directly, still fail-closed behind
+    `FEATURE_LIVE_TRADING`). Default view now shows: **entry scenarios** under the chart
+    (`GET /api/markets/:id/scenarios` — dip-buy/breakout/patient-limit backtested per market via
+    the shared simulator, 15-min per-market cache, R-023 honesty labels, "Open in builder" deep
+    links via `?scenarioMarket=&scenario=`), the **order book**, **real latest trades**
+    (`GET /api/markets/:id/trades`, Data-API taker fills) and **top holders**
+    (`GET /api/markets/:id/holders`) — upstream shapes verified against the official reference
+    (INTEGRATION_VERIFIED §15, R-026 tracks live confirmation). Advanced tab keeps tape/queue/
+    classic rule form.
+  - **Onboarding.** Dependency-free spotlight tour engine (skips missing targets, Esc/arrows,
+    localStorage flags, low-key first-visit invite): home tour (6 steps) + builder tour (4 steps),
+    replayable from a header "?" button.
+  - **Canvas smoothness.** React Flow now owns positions in local state; doc changes and 3s eval
+    polls RECONCILE into the arrays preserving node identity (a poll can no longer rebuild or
+    snap the graph mid-drag); node bodies memoized; ProjectionCard's 30-day backtest and
+    SentenceBar memoized; `transition-all` dropped from nodes.
+  - **AI-unlock runbook** (prod "AI still locked" root cause): the key alone does nothing —
+    set `FEATURE_AI_CHAT=true` in `.env.production` (exact lowercase) **and recreate** containers
+    (`docker compose -f docker-compose.prod.yml up -d`; `restart` does not re-read env_file).
+    Verify: `curl <api>/api/feature-flags` → `"aiChat":true`. `.env.production.example` now
+    documents the trap inline; dead `CLOSED_BETA_ALLOWLIST` var removed.
+  - Quality gates: format ✓, lint ✓, root typecheck ✓, backend **280 pass / 3 skipped** (incl.
+    7 wallet-reissue, 9 markets-data/scenarios, 4 signer), web **82 pass** (incl. 4 theme,
+    2 carousel), `next build` ✓; verified in-browser against live Polymarket data (hero carousel +
+    prompts, 3 themes + anti-flash reload, both tours, cockpit scenarios/book/trades/holders on a
+    liquid market, scenario→builder hydration, canvas drag with zero console errors).
 
 - **Round-2 growth: real examples everywhere + calm feed + @-mentions + Haiku (built; D-022,
   ADR-0012).** Owner's round-2 brief executed: the pure trigger simulator moved to

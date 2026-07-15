@@ -28,6 +28,7 @@ const disabledError: SignerError = {
 
 const createDisabledSigner = (): TradingSigner => ({
   provisionWallet: async () => err(disabledError),
+  getWalletStatus: async () => err(disabledError),
   signOrder: async () => err(disabledError),
   signClobAuth: async () => err(disabledError),
   sendTransaction: async () => err(disabledError),

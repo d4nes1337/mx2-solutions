@@ -49,6 +49,17 @@ export const createRealPrivyClient = (cfg: RealPrivyClientConfig): PrivySigningC
       return { id: wallet.id, address: wallet.address };
     },
 
+    async getWallet(params) {
+      try {
+        const wallet = await privy.wallets().get(params.walletId);
+        return { id: wallet.id, address: wallet.address };
+      } catch (e) {
+        // The SDK surfaces the HTTP status on its APIError; 404 = definitively gone.
+        if ((e as { status?: unknown }).status === 404) return null;
+        throw e;
+      }
+    },
+
     async signTypedData(params) {
       const account = accountFor(params.walletId, params.address);
       const signature = await account.signTypedData(

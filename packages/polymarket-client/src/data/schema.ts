@@ -109,3 +109,54 @@ export const LeaderboardEntrySchema = z
   .passthrough();
 
 export type LeaderboardEntry = z.infer<typeof LeaderboardEntrySchema>;
+
+// Shapes verified against the official Data-API reference on 2026-07-15
+// (docs.polymarket.com → /trades and /holders). See docs/INTEGRATION_VERIFIED.md §11.
+
+export const MarketTradeSchema = z
+  .object({
+    proxyWallet: z.string(),
+    side: z.string(),
+    conditionId: z.string().optional(),
+    asset: z.string().optional(),
+    size: z.number(),
+    price: z.number(),
+    /** Unix seconds. */
+    timestamp: z.number(),
+    title: z.string().optional(),
+    outcome: z.string().optional(),
+    outcomeIndex: z.number().optional(),
+    name: z.string().optional(),
+    pseudonym: z.string().optional(),
+    profileImage: z.string().optional(),
+    transactionHash: z.string().optional(),
+  })
+  .passthrough();
+
+export type MarketTrade = z.infer<typeof MarketTradeSchema>;
+
+export const MarketHolderSchema = z
+  .object({
+    proxyWallet: z.string(),
+    amount: z.number(),
+    outcomeIndex: z.number().optional(),
+    asset: z.string().optional(),
+    name: z.string().optional(),
+    pseudonym: z.string().optional(),
+    bio: z.string().optional(),
+    profileImage: z.string().optional(),
+    profileImageOptimized: z.string().optional(),
+    displayUsernamePublic: z.boolean().optional(),
+  })
+  .passthrough();
+
+export type MarketHolder = z.infer<typeof MarketHolderSchema>;
+
+export const MarketHoldersGroupSchema = z
+  .object({
+    token: z.string(),
+    holders: MarketHolderSchema.array(),
+  })
+  .passthrough();
+
+export type MarketHoldersGroup = z.infer<typeof MarketHoldersGroupSchema>;

@@ -163,6 +163,10 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       tradingEnabled: deps.config.features.liveTrading && !paused,
       featureFlag: deps.config.features.liveTrading,
       runtimePaused: paused,
+      // Attribution code the client embeds in signed orders. Public config,
+      // not a secret — surfaced here so the order ticket no longer depends on
+      // the preview endpoint for it.
+      builderCode: deps.config.polymarket.builderCode ?? null,
       geoblock: geoResult.ok
         ? { status: geoResult.value.status, country: geoResult.value.country }
         : { status: "unknown", error: geoResult.error.code },
@@ -304,90 +308,6 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         balanceError: balResult.ok ? null : balResult.error.code,
         openOrders: ordersResult.ok ? ordersResult.value : [],
         openOrdersError: ordersResult.ok ? null : ordersResult.error.code,
-      };
-    },
-  );
-
-  // ── POST /api/trade/orders/preview ────────────────────────────────────────
-  // Authenticated + geoblock. Does NOT require trading enabled (preview is safe).
-  // Returns order parameters for the user to review before signing.
-  app.post(
-    "/api/trade/orders/preview",
-    { preHandler: [requireAuth, geoblockCheck] },
-    async (req, reply) => {
-      const user = req.user!;
-      const body = req.body as Record<string, unknown>;
-      const account = await resolveTradingAccount(
-        deps,
-        user.walletAddress,
-        body["tradingAccountId"],
-        reply,
-      );
-      if (!account) return;
-      if (!(await accountNotReady(reply, account))) return;
-
-      const conditionId = typeof body["conditionId"] === "string" ? body["conditionId"] : null;
-      const tokenId = typeof body["tokenId"] === "string" ? body["tokenId"] : null;
-      const side = body["side"] === "BUY" || body["side"] === "SELL" ? body["side"] : null;
-      const price = typeof body["price"] === "string" ? body["price"] : null;
-      const size = typeof body["size"] === "string" ? body["size"] : null;
-      const orderType = ["GTC", "GTD", "FOK"].includes(body["orderType"] as string)
-        ? (body["orderType"] as string)
-        : "GTC";
-      const funder = account.funderAddress;
-
-      if (!conditionId || !tokenId || !side || !price || !size || !funder) {
-        reply.code(400);
-        return {
-          error: "INVALID_REQUEST",
-          message: "conditionId, tokenId, side, price, size, funder required",
-        };
-      }
-
-      const priceNum = parseFloat(price);
-      const sizeNum = parseFloat(size);
-      if (isNaN(priceNum) || priceNum <= 0 || priceNum >= 1) {
-        reply.code(400);
-        return { error: "INVALID_PRICE", message: "price must be between 0 and 1 (exclusive)" };
-      }
-      if (isNaN(sizeNum) || sizeNum <= 0) {
-        reply.code(400);
-        return { error: "INVALID_SIZE", message: "size must be positive" };
-      }
-
-      const maxSpend = (priceNum * sizeNum).toFixed(6);
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-
-      await deps.auditStore.emit({
-        actor: user.walletAddress,
-        action: "trade.order.preview" as const,
-        subject: `trading_account:${account.id}`,
-        metadata: { conditionId, tokenId, side, price, size, orderType, funder },
-      });
-
-      return {
-        tradingAccountId: account.id,
-        tradingAccountLabel: account.label,
-        signingMode: account.signingMode,
-        requiresSignature: account.signingMode === "browser",
-        conditionId,
-        tokenId,
-        side,
-        price,
-        size,
-        orderType,
-        funder,
-        maxSpend,
-        builderCode: deps.config.polymarket.builderCode ?? null,
-        signatureType: account.signatureType,
-        timestamp,
-        note:
-          account.signingMode === "browser"
-            ? "This wallet trades with manual signatures. Your browser signs the CTF Exchange order before submission."
-            : "This wallet is configured for server-side signing. No browser wallet popup is required once the deposit wallet is active.",
-        warning: deps.config.features.liveTrading
-          ? "Live trading is ENABLED. Submitting this order will use real funds."
-          : "Live trading is DISABLED. This preview is for demonstration only.",
       };
     },
   );

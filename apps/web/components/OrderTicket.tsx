@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useAccount } from "wagmi";
 import { Wallet } from "lucide-react";
 import {
-  useOrderPreview,
   useSetPrimaryTradingAccount,
   useSubmitOrder,
   useTradeStatus,
@@ -19,11 +18,13 @@ import { computePayoff } from "@/lib/smart-orders/projection";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
 
-// Order ticket: preview → sign → submit. Preview (POST /api/trade/orders/preview)
-// is always available. Submission builds + signs the full CTF Exchange order with
-// the EOA (signatureType 2; maker = the derived deposit wallet), then POSTs the
-// signed struct. The backend still gates submission behind FEATURE_LIVE_TRADING +
+// Order ticket: sign → submit, with everything the old Preview round-trip used
+// to show (position value, payoff-if-fills) computed inline as you type.
+// Submission builds + signs the full CTF Exchange order with the EOA
+// (signatureType 2; maker = the derived deposit wallet), then POSTs the signed
+// struct. The backend still gates submission behind FEATURE_LIVE_TRADING +
 // kill switch + geoblock, so submit stays disabled until trading is enabled.
+// The builder attribution code comes from GET /api/trade/status.
 //
 // Wallet *management* (add/activate/credentials) lives in the Profile page's
 // WalletsSection — this ticket only shows the active wallet + a quick-switch.
@@ -55,7 +56,6 @@ export function OrderTicket({
   const tradeStatus = useTradeStatus();
   const tradingAccounts = useTradingAccounts(signedIn);
   const setPrimaryAccount = useSetPrimaryTradingAccount();
-  const preview = useOrderPreview();
   const submit = useSubmitOrder();
 
   const [side, setSide] = useState<OrderSide>("BUY");
@@ -70,7 +70,6 @@ export function OrderTicket({
     if (prefill.size != null) setSize(prefill.size);
     if (prefill.side) setSide(prefill.side);
     setValidationError(null);
-    preview.reset();
     submit.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.nonce]);
@@ -88,11 +87,10 @@ export function OrderTicket({
       : activeAccount.status === "ready"
     : false;
 
-  const accountCanPreview =
-    activeAccount?.signingMode === "browser" ||
-    (activeAccount?.signingMode === "server" && activeAccount.status === "ready");
-  const canPreview = signedIn && !isStale && Boolean(conditionId) && Boolean(activeAccount);
   const tradingEnabled = tradeStatus.data?.tradingEnabled === true;
+  const priceNum = Number(price);
+  const sizeNum = Number(size);
+  const inputsValid = priceNum > 0 && priceNum < 1 && sizeNum > 0;
   const selectedBrowserAccountReady =
     activeAccount?.signingMode === "browser" &&
     activeAccount.credentialsReady &&
@@ -136,7 +134,9 @@ export function OrderTicket({
                 ? "Sign & submit order"
                 : "Submit (trading disabled)";
 
-  const submitPreview = () => {
+  const signAndSubmit = async () => {
+    setSignError(null);
+    // Same client-side validation the preview round-trip used to run.
     const built = buildPreviewRequest({
       conditionId,
       tokenId,
@@ -151,13 +151,6 @@ export function OrderTicket({
       return;
     }
     setValidationError(null);
-    setSignError(null);
-    submit.reset();
-    preview.mutate({ ...built.request, tradingAccountId: activeAccount?.id });
-  };
-
-  const signAndSubmit = async () => {
-    setSignError(null);
     if (!activeAccount) {
       setSignError("Select a trading account first.");
       return;
@@ -191,7 +184,7 @@ export function OrderTicket({
         size,
         funder,
         signer: activeAccount.signerAddress,
-        builderCode: preview.data?.builderCode,
+        builderCode: tradeStatus.data?.builderCode ?? undefined,
         chainId: 137,
         negRisk,
       });
@@ -209,13 +202,6 @@ export function OrderTicket({
       setSignError(e instanceof Error ? e.message : "Signing failed.");
     }
   };
-
-  const previewError =
-    preview.error instanceof ApiError
-      ? preview.error
-      : preview.error instanceof Error
-        ? { status: 0, message: preview.error.message }
-        : null;
 
   const submitError =
     submit.error instanceof ApiError
@@ -369,76 +355,28 @@ export function OrderTicket({
         </div>
       ) : null}
 
-      <Button
-        className="w-full"
-        onClick={submitPreview}
-        disabled={!canPreview || !accountCanPreview || preview.isPending}
-      >
-        {preview.isPending ? "Previewing…" : "Preview order"}
-      </Button>
-
       {!signedIn ? (
-        <p className="text-xs text-muted">Sign in to preview an order.</p>
+        <p className="text-xs text-muted">Sign in to trade.</p>
       ) : isStale ? (
         <p className="text-xs text-warn">
-          Orderbook is stale — preview is held back (fail-closed).
-        </p>
-      ) : activeAccount && !accountCanPreview ? (
-        <p className="text-xs text-warn">
-          Selected wallet is not ready for order preview. Set it up in{" "}
-          <Link href="/profile" className="font-medium underline">
-            Profile
-          </Link>
-          .
+          Orderbook is stale — trading is held back (fail-closed).
         </p>
       ) : null}
 
       {validationError ? <ErrorNote message={validationError} /> : null}
 
-      {previewError ? (
-        <ErrorNote
-          message={
-            previewError.status === 403
-              ? "Geoblocked: order preview is not available from your region."
-              : previewError.message
-          }
-        />
-      ) : null}
-
-      {preview.data ? (
-        <div
-          className={cn(
-            "space-y-1 rounded-md border bg-surface-2 p-3 text-xs transition-colors",
-            submit.data ? "celebrate border-pos/50" : "border-border",
-          )}
-        >
+      {submit.data ? (
+        <div className="celebrate space-y-1 rounded-md border border-pos/50 bg-surface-2 p-3 text-xs">
           <div className="mb-1 flex items-center justify-between">
-            <span className="font-semibold text-fg">
-              {submit.data ? "✓ Order submitted" : "Order preview"}
-            </span>
-            {submit.data ? (
-              <Badge tone="pos">{submit.data.status}</Badge>
-            ) : (
-              <Badge tone="warn">not submitted</Badge>
-            )}
+            <span className="font-semibold text-fg">✓ Order submitted</span>
+            <Badge tone="pos">{submit.data.status}</Badge>
           </div>
-          <Row
-            k="Side / outcome"
-            v={`${preview.data.side} · ${outcomes[outcomeIdx] ?? `#${outcomeIdx}`}`}
-          />
-          <Row k="Price" v={preview.data.price} />
-          <Row k="Size" v={preview.data.size} />
-          <Row k="Max spend" v={`$${preview.data.maxSpend}`} />
-          <Row k="Order type" v={preview.data.orderType} />
-          <Row k="Signature type" v={`${preview.data.signatureType}`} />
-          <Row k="Trading account" v={preview.data.tradingAccountLabel} />
-          <Row k="Funder" v={preview.data.funder} mono />
-          <Row k="Builder code" v={preview.data.builderCode ?? "—"} mono />
-          {submit.data?.clobOrderId ? (
+          <Row k="Side / outcome" v={`${side} · ${outcomes[outcomeIdx] ?? `#${outcomeIdx}`}`} />
+          <Row k="Price" v={price} />
+          <Row k="Size" v={size} />
+          {submit.data.clobOrderId ? (
             <Row k="CLOB order id" v={submit.data.clobOrderId} mono />
           ) : null}
-          <p className="mt-2 text-muted">{preview.data.note}</p>
-          <p className="text-warn">{preview.data.warning}</p>
         </div>
       ) : null}
 
@@ -475,7 +413,9 @@ export function OrderTicket({
         className="w-full"
         onClick={() => void signAndSubmit()}
         disabled={
-          !preview.data ||
+          !signedIn ||
+          !inputsValid ||
+          isStale ||
           !tradingEnabled ||
           submit.isPending ||
           Boolean(submit.data) ||
@@ -485,9 +425,9 @@ export function OrderTicket({
       >
         {submitButtonLabel}
       </Button>
-      {preview.data && !tradingEnabled ? (
+      {signedIn && inputsValid && !tradingEnabled ? (
         <p className="text-xs text-muted">
-          Preview is signable, but the server has live trading disabled — submission is blocked
+          The order is signable, but the server has live trading disabled — submission is blocked
           fail-closed.
         </p>
       ) : null}

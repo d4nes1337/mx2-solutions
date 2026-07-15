@@ -14,7 +14,7 @@ import type { ConditionV2 } from "@mx2/rules";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { useFeatureFlags, useShowcases } from "@/lib/queries";
+import { useFeatureFlags, useMarketScenarios, useShowcases } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
 import { UNBOUND, conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
@@ -29,6 +29,7 @@ import {
 } from "@/lib/smart-orders/queries";
 import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
 import { AiPanel } from "./AiPanel";
+import { BuilderTour } from "@/components/onboarding/tours";
 import { Inspector } from "./Inspector";
 import { MakerEstimator } from "./MakerEstimator";
 import { ProjectionCard } from "./ProjectionCard";
@@ -155,11 +156,20 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const aiPrompt = params.get("prompt");
   const showcaseId = params.get("showcase");
   const showcases = useShowcases(Boolean(showcaseId));
+  const scenarioId = params.get("scenario");
+  const scenarioMarket = params.get("scenarioMarket");
+  const scenarioOutcome = Number(params.get("outcome") ?? "0");
+  const scenarios = useMarketScenarios(
+    scenarioMarket ?? "",
+    Number.isFinite(scenarioOutcome) ? scenarioOutcome : 0,
+    Boolean(scenarioMarket && scenarioId),
+  );
 
   // Entry modes: edit an existing strategy, a backtested showcase deep link
-  // (?showcase=…), AI prompt deep link (landing hero, ?prompt=…), or
-  // template-first creation. A ?conditionId=&tokenId=&outcome=&title= set
-  // pre-binds the template to a market (the cockpit's deep link).
+  // (?showcase=…), a cockpit entry-scenario deep link (?scenarioMarket=&scenario=…),
+  // AI prompt deep link (landing hero, ?prompt=…), or template-first creation.
+  // A ?conditionId=&tokenId=&outcome=&title= set pre-binds the template to a
+  // market (the cockpit's deep link).
   useEffect(() => {
     if (initialized) return;
     if (editOf) {
@@ -186,6 +196,16 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         return;
       }
       // Unknown/expired showcase id → fall through to the template path.
+    }
+    if (scenarioMarket && scenarioId) {
+      if (scenarios.isLoading) return; // wait for the per-market scenario list
+      const sc = scenarios.data?.scenarios.find((s) => s.id === scenarioId);
+      if (sc) {
+        reset(layoutDoc(docFromDefinition(sc.definition)));
+        setInitialized(true);
+        return;
+      }
+      // Unknown/expired scenario id → fall through to the template path.
     }
     if (aiPrompt) {
       if (flags.isLoading) return; // wait to know whether the AI panel exists
@@ -225,6 +245,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     showcaseId,
     showcases.isLoading,
     showcases.data,
+    scenarioId,
+    scenarioMarket,
+    scenarios.isLoading,
+    scenarios.data,
   ]);
 
   const issues = useMemo(() => validateDoc(doc), [doc]);
@@ -309,6 +333,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         </div>
       </div>
 
+      <BuilderTour />
       <SentenceBar />
       <WouldTriggerNow
         satisfied={Boolean(evaluation.data?.satisfied)}
@@ -372,7 +397,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           <MakerEstimator evaluation={evaluation.data} />
 
           {/* Save / arm */}
-          <div className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel">
+          <div
+            className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"
+            data-tour="builder-save"
+          >
             {signedIn ? (
               allowlisted ? (
                 <>

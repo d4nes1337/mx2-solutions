@@ -21,6 +21,9 @@ import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
 import { AutomateCard } from "@/components/market/AutomateCard";
 import { BacktestTeaser } from "@/components/market/BacktestTeaser";
+import { MarketScenarios } from "@/components/market/MarketScenarios";
+import { RecentTradesCard } from "@/components/market/RecentTradesCard";
+import { HoldersCard } from "@/components/market/HoldersCard";
 
 type Prefill = { price?: string; size?: string; side?: OrderSide; nonce: number };
 
@@ -152,29 +155,38 @@ export default function MarketCockpitPage() {
 
           <MarketPriceChart marketId={id} outcome={outcomeIdx} outcomeLabel={outcomeLabel} />
 
+          {/* Entry scenarios live directly under the chart — the "how could I
+              play this?" answer a fresh user is actually looking for. */}
+          <MarketScenarios marketId={id} outcomeIdx={outcomeIdx} outcomeLabel={outcomeLabel} />
+
+          <Card>
+            <CardHeader
+              right={<span className="text-[11px] text-muted">click a level to trade</span>}
+            >
+              Order book
+            </CardHeader>
+            <div className="p-4">
+              {orderbook.isLoading && !ob ? (
+                <Spinner />
+              ) : ob ? (
+                <OrderbookTable bids={ob.bids} asks={ob.asks} onSelect={onBookSelect} />
+              ) : (
+                <div className="text-sm text-muted">Order book unavailable.</div>
+              )}
+              <div className="mt-3 flex justify-end text-[11px] text-faint">
+                source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}
+              </div>
+            </div>
+          </Card>
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <RecentTradesCard marketId={id} />
+            <HoldersCard marketId={id} />
+          </div>
+
           {view === "advanced" ? (
             <>
               {ob ? <MarketMovesTape bids={ob.bids} asks={ob.asks} /> : null}
-
-              <Card>
-                <CardHeader
-                  right={<span className="text-[11px] text-muted">click a level to trade</span>}
-                >
-                  Order book
-                </CardHeader>
-                <div className="p-4">
-                  {orderbook.isLoading && !ob ? (
-                    <Spinner />
-                  ) : ob ? (
-                    <OrderbookTable bids={ob.bids} asks={ob.asks} onSelect={onBookSelect} />
-                  ) : (
-                    <div className="text-sm text-muted">Order book unavailable.</div>
-                  )}
-                  <div className="mt-3 flex justify-end text-[11px] text-faint">
-                    source: {orderbook.data?.source ?? live?.orderbookSource ?? "—"}
-                  </div>
-                </div>
-              </Card>
 
               <QueueCard
                 signedIn={signedIn}

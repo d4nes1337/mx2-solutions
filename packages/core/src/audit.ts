@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = [
   "trading_account.primary_set",
   "trading_account.archived",
   "trading_wallet.provisioned",
+  "trading_wallet.ghost_detected",
+  "trading_wallet.reissued",
   "trading_wallet.deposit_wallet_activation_started",
   "trading_wallet.deposit_wallet_activation_ready",
   "trading_wallet.deposit_wallet_activation_failed",

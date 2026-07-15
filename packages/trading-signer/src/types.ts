@@ -59,6 +59,13 @@ export interface SendTransactionRequest {
 export interface TradingSigner {
   /** Provision a new embedded trading wallet for a user. */
   provisionWallet(userRef: string): Promise<Result<TradingWalletRef, SignerError>>;
+  /**
+   * Check whether an embedded wallet still exists at the provider.
+   * ok("not_found") is a DEFINITIVE provider answer (safe to heal from);
+   * transient failures come back as err(...) and must never trigger
+   * destructive cleanup of the wallet mapping.
+   */
+  getWalletStatus(walletId: string): Promise<Result<"active" | "not_found", SignerError>>;
   /** Sign a CTF Exchange Order (EIP-712). */
   signOrder(req: SignTypedDataRequest): Promise<Result<{ signature: string }, SignerError>>;
   /** Sign the L1 ClobAuth message (EIP-712) for L2 credential derivation. */

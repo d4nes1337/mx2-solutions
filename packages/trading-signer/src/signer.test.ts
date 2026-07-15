@@ -74,6 +74,10 @@ describe("privy trading signer adapter", () => {
         calls.push(`create:${p.ownerUserId}`);
         return { id: "pw-1", address: "0xdead" };
       },
+      async getWallet(p) {
+        calls.push(`get:${p.walletId}`);
+        return p.walletId === "gone" ? null : { id: p.walletId, address: "0xdead" };
+      },
       async signTypedData(p) {
         calls.push(`sign:${p.walletId}:${p.typedData.primaryType}`);
         return { signature: "0xsig" };
@@ -88,16 +92,51 @@ describe("privy trading signer adapter", () => {
     const prov = await signer.provisionWallet("user-9");
     const sig = await signer.signOrder({ wallet, typedData });
     const tx = await signer.sendTransaction({ wallet, to: "0xExchange", data: "0x", value: "0x5" });
+    const alive = await signer.getWalletStatus("pw-1");
+    const gone = await signer.getWalletStatus("gone");
 
     expect(prov.ok && prov.value.walletId).toBe("pw-1");
     expect(sig.ok && sig.value.signature).toBe("0xsig");
     expect(tx.ok && tx.value.txHash).toBe("0xhash");
-    expect(calls).toEqual(["create:user-9", "sign:w1:Order", "tx:w1:0xExchange:0x5"]);
+    expect(alive.ok && alive.value).toBe("active");
+    expect(gone.ok && gone.value).toBe("not_found");
+    expect(calls).toEqual([
+      "create:user-9",
+      "sign:w1:Order",
+      "tx:w1:0xExchange:0x5",
+      "get:pw-1",
+      "get:gone",
+    ]);
+  });
+
+  it("maps a transient getWallet failure to an error, never a not_found", async () => {
+    const client: PrivySigningClient = {
+      async createWallet() {
+        return { id: "x", address: "0x" };
+      },
+      async getWallet() {
+        throw new Error("network timeout");
+      },
+      async signTypedData() {
+        return { signature: "0x" };
+      },
+      async sendTransaction() {
+        return { txHash: "0x" };
+      },
+    };
+    const signer = createPrivyTradingSigner(client);
+    const res = await signer.getWalletStatus("pw-1");
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe("NETWORK_ERROR");
   });
 
   it("translates a policy denial into POLICY_DENIED", async () => {
     const client: PrivySigningClient = {
       async createWallet() {
+        return { id: "x", address: "0x" };
+      },
+      async getWallet() {
         return { id: "x", address: "0x" };
       },
       async signTypedData() {

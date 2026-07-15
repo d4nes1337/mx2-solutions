@@ -18,6 +18,8 @@ export interface PrivySigningClient {
     id: string;
     address: string;
   }>;
+  /** Fetch a wallet by id; resolves null when the provider says it no longer exists (404). */
+  getWallet(params: { walletId: string }): Promise<{ id: string; address: string } | null>;
   signTypedData(params: {
     walletId: string;
     address: string;
@@ -49,6 +51,14 @@ export const createPrivyTradingSigner = (client: PrivySigningClient): TradingSig
     try {
       const w = await client.createWallet({ chainType: "ethereum", ownerUserId: userRef });
       return ok({ walletId: w.id, address: w.address });
+    } catch (e) {
+      return err(mapError(e));
+    }
+  },
+  async getWalletStatus(walletId) {
+    try {
+      const w = await client.getWallet({ walletId });
+      return ok(w ? ("active" as const) : ("not_found" as const));
     } catch (e) {
       return err(mapError(e));
     }

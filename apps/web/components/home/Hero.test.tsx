@@ -169,9 +169,43 @@ describe("Hero", () => {
     expect(screen.getByText("Will BTC hit $150k in 2026?")).toBeInTheDocument();
     expect(screen.getByText(/\+\$18\.50/)).toBeInTheDocument();
     expect(screen.getByText(/across 3 × \$100 dip-buys/)).toBeInTheDocument();
-    // Concrete example chip derived from the showcase market.
-    expect(screen.getByText(/Buy the dip on Will BTC hit/)).toBeInTheDocument();
+    // The prompt appears both as an example chip and in the carousel bubble.
+    expect(screen.getAllByText(/Buy the dip on Will BTC hit/).length).toBeGreaterThanOrEqual(1);
     // The honesty label is non-negotiable (R-023).
     expect(screen.getByText(/past performance doesn/i)).toBeInTheDocument();
+  });
+
+  it("rotates showcases via the carousel and seeds the prompt box on request", async () => {
+    const second = {
+      ...showcase,
+      id: "cond-eth:5",
+      prompt: 'Buy $100 of Yes on "ETH flips BTC?" if the price dips to 30¢',
+      market: { ...showcase.market, title: "ETH flips BTC?", conditionId: "cond-eth" },
+    };
+    mockApis({
+      aiChat: true,
+      showcases: {
+        generatedAt: new Date().toISOString(),
+        showcases: [showcase, second] as unknown as ShowcasesResponse["showcases"],
+      },
+    });
+    renderHero();
+
+    // Two showcases → dots + arrows appear; first card is the top showcase.
+    expect(await screen.findByText("Will BTC hit $150k in 2026?")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Show strategy 2 of 2"));
+    expect(await screen.findByText("ETH flips BTC?")).toBeInTheDocument();
+
+    // Its chat prompt is shown and can be pushed into the prompt box.
+    fireEvent.click(screen.getByText("Try this prompt"));
+    const box = screen.getByLabelText<HTMLTextAreaElement>("Describe your trading idea");
+    expect(box.value).toContain("ETH flips BTC?");
+  });
+
+  it("shows no carousel controls for a single showcase", async () => {
+    mockApis({ aiChat: true, showcases: oneShowcase });
+    renderHero();
+    expect(await screen.findByText(/Open this strategy/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Next strategy")).not.toBeInTheDocument();
   });
 });

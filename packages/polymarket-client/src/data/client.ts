@@ -4,11 +4,15 @@ import {
   ActivitySchema,
   ClosedPositionSchema,
   LeaderboardEntrySchema,
+  MarketHoldersGroupSchema,
+  MarketTradeSchema,
   PositionSchema,
   PositionValueSchema,
   type Activity,
   type ClosedPosition,
   type LeaderboardEntry,
+  type MarketHoldersGroup,
+  type MarketTrade,
   type Position,
   type PositionValue,
 } from "./schema.js";
@@ -64,8 +68,27 @@ export interface GetLeaderboardParams {
   orderBy?: "PNL" | "VOL";
 }
 
+export interface GetMarketTradesParams {
+  /** Market condition id (0x…). */
+  conditionId: string;
+  limit?: number;
+  /** Default true upstream — taker fills only (one row per trade). */
+  takerOnly?: boolean;
+}
+
+export interface GetHoldersParams {
+  /** Market condition id (0x…). */
+  conditionId: string;
+  /** Upstream default 20, max 20 per token. */
+  limit?: number;
+}
+
 export interface DataClient {
   getPositions(params: GetPositionsParams): Promise<Result<Position[], PolymarketError>>;
+  /** Recent public trades in a market (Data API /trades, most recent first). */
+  getMarketTrades(params: GetMarketTradesParams): Promise<Result<MarketTrade[], PolymarketError>>;
+  /** Top holders per outcome token (Data API /holders). */
+  getHolders(params: GetHoldersParams): Promise<Result<MarketHoldersGroup[], PolymarketError>>;
   getClosedPositions(
     params: GetClosedPositionsParams,
   ): Promise<Result<ClosedPosition[], PolymarketError>>;
@@ -136,6 +159,23 @@ export const createDataClient = (opts?: DataClientOptions): DataClient => {
       if (params.limit !== undefined) q["limit"] = String(params.limit);
       if (params.offset !== undefined) q["offset"] = String(params.offset);
       return fetchJson(buildUrl(baseUrl, "/positions", q), PositionSchema.array(), timeoutMs);
+    },
+
+    getMarketTrades(params) {
+      const q: Record<string, string> = { market: params.conditionId };
+      if (params.limit !== undefined) q["limit"] = String(params.limit);
+      if (params.takerOnly !== undefined) q["takerOnly"] = String(params.takerOnly);
+      return fetchJson(buildUrl(baseUrl, "/trades", q), MarketTradeSchema.array(), timeoutMs);
+    },
+
+    getHolders(params) {
+      const q: Record<string, string> = { market: params.conditionId };
+      if (params.limit !== undefined) q["limit"] = String(params.limit);
+      return fetchJson(
+        buildUrl(baseUrl, "/holders", q),
+        MarketHoldersGroupSchema.array(),
+        timeoutMs,
+      );
     },
 
     getClosedPositions(params) {

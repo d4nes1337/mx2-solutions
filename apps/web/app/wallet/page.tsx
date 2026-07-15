@@ -1,15 +1,27 @@
 "use client";
 
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth";
 import { useTradingAccounts } from "@/lib/queries";
-import { Empty } from "@/components/ui";
+import { Empty, Spinner } from "@/components/ui";
 import { WalletsSection } from "@/components/profile/WalletsSection";
 import { TradingModeCards, WalletStepper } from "@/components/wallet/TradingModes";
 
 export default function WalletPage() {
+  return (
+    <Suspense fallback={<Spinner label="Loading wallet…" />}>
+      <WalletPageInner />
+    </Suspense>
+  );
+}
+
+function WalletPageInner() {
   const session = useSession();
   const signedIn = Boolean(session.data);
   const tradingAccounts = useTradingAccounts(signedIn);
+  const params = useSearchParams();
+  const autoOpenTopUp = params.get("topup") === "1";
 
   const internal =
     tradingAccounts.data?.accounts.find((a) => a.kind === "internal_privy" && a.isPrimary) ??
@@ -38,7 +50,7 @@ export default function WalletPage() {
               </p>
             ) : null}
           </div>
-          <WalletsSection signedIn={signedIn} />
+          <WalletsSection signedIn={signedIn} autoOpenTopUp={autoOpenTopUp} />
           <details className="rounded-xl border border-border bg-surface-2 px-4 py-3">
             <summary className="cursor-pointer text-[13px] font-medium text-muted">
               How is the Arima trading wallet secured?

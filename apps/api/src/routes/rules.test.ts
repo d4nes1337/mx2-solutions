@@ -339,6 +339,8 @@ const buildRulesApp = (opts: {
   };
   const data: DataClient = {
     getPositions: async () => ok([]),
+    getMarketTrades: async () => ok([]),
+    getHolders: async () => ok([]),
     getClosedPositions: async () => ok([]),
     getActivity: async () => ok([]),
     getPositionValue: async () => ok(null),

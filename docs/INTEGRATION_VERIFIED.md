@@ -238,3 +238,30 @@ public profiles.
   (id, title, slug, markets[] with conditionId/clobTokenIds/outcomePrices, volume, liquidity,
   endDate, image). Consumed by `GammaClient.searchMarkets` with a title-filtered `/events`
   scan as the fallback if the endpoint errors or changes shape.
+
+## 15. Data-API market trades + top holders (verified against official reference 2026-07-15)
+
+Source: docs.polymarket.com → API reference → "Get Top Holders for Markets"
+(`https://docs.polymarket.com/api-reference/core/get-top-holders-for-markets`), plus the
+Data-API reference for `/trades`. Verified from the published spec (not yet against the live
+API from this machine — tolerant `.passthrough()` schemas + fixture contract tests cover drift).
+
+- `GET https://data-api.polymarket.com/trades?market=<conditionId>&limit=N&takerOnly=true`
+  → array of `{ proxyWallet, side: "BUY"|"SELL", asset, conditionId, size: number,
+price: number, timestamp: number (unix seconds), title, slug, icon, eventSlug, outcome,
+outcomeIndex: number, name, pseudonym, bio, profileImage, profileImageOptimized,
+transactionHash }`. `limit` default 100 / max 500; `takerOnly` defaults true (one row per
+  trade). Public, no auth.
+- `GET https://data-api.polymarket.com/holders?market=<conditionId>&limit=N`
+  → array of `{ token, holders: [{ proxyWallet, bio, asset, pseudonym, amount: number,
+displayUsernamePublic: boolean, outcomeIndex: number, name, profileImage,
+profileImageOptimized }] }` — one group per outcome token. Official spec caps `limit`
+  at 20 (default 20); `minBalance` optional. Public, no auth.
+- NOTE: the CLOB host also has `/trades`, but it is L2-authenticated and user-scoped —
+  the public market tape must use the Data API. `ClobClient.getTrades` remains unused
+  by routes for this reason.
+
+Modeled in `packages/polymarket-client/src/data/` (`MarketTradeSchema`,
+`MarketHoldersGroupSchema`) and exposed via `GET /api/markets/:id/trades` and
+`GET /api/markets/:id/holders` (public, rate-limited). First prod deploy should confirm
+live shapes once; schemas tolerate unknown/missing optional fields.

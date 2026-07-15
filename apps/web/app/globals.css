@@ -18,6 +18,7 @@
 
   /* ── Brand (arima) ──────────────────────────────────────────────────── */
   --brand: #2a36ff;
+  --brand-rgb: 42, 54, 255; /* raw channels for rgba() glows — re-tints per theme */
   --brand-strong: #1d28e0; /* darker = stronger on light surfaces */
   --brand-soft: #e8eaff;
   --accent: #2230d9; /* darkened brand — readable as text/icons on light */
@@ -31,7 +32,9 @@
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
 }
 
-/* Dark terminal palette parked for a future theme toggle (darkMode: "class"). */
+/* Dark terminal palette. Selected via <html data-theme="dark"> (theme switcher);
+   `.dark` kept as a class alias for tooling/tests. */
+[data-theme="dark"],
 .dark {
   --bg: #06070d;
   --surface: #0b0d15;
@@ -42,6 +45,7 @@
   --fg: #e9ecf5;
   --muted: #8a93ab;
   --faint: #59617a;
+  --brand-rgb: 75, 86, 255; /* brighter glow channel reads better on near-black */
   --brand-strong: #4b56ff;
   --brand-soft: #1a1f4d;
   --accent: #7c84ff;
@@ -51,6 +55,30 @@
   color-scheme: dark;
 }
 
+/* Paper — calm warm-grey, Claude-app-inspired reading theme. */
+[data-theme="paper"] {
+  --bg: #eceae3;
+  --surface: #f6f5f0;
+  --surface-2: #efede6;
+  --surface-3: #e6e3da;
+  --border: #d9d5c9;
+  --border-strong: #b8b3a3;
+  --fg: #2a2925;
+  --muted: #6b675b;
+  --faint: #938e7f;
+  --brand: #2a36ff;
+  --brand-rgb: 42, 54, 255;
+  --brand-strong: #1d28e0;
+  --brand-soft: #e3e2f0; /* softened/desaturated for the warm background */
+  --accent: #2230d9;
+  --pos: #0d8a57; /* slightly darkened for AA parity on the warm bg */
+  --neg: #c22537;
+  --warn: #a06a08;
+  color-scheme: light;
+}
+
+/* Default color-scheme; the [data-theme] blocks above override it on <html>
+   (attribute selector out-specifies the bare `html` type selector). */
 html {
   color-scheme: light;
 }
@@ -78,8 +106,8 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(900px 480px at 12% -8%, rgba(42, 54, 255, 0.05), transparent 60%),
-    radial-gradient(800px 520px at 92% 0%, rgba(42, 54, 255, 0.03), transparent 55%);
+    radial-gradient(900px 480px at 12% -8%, rgba(var(--brand-rgb), 0.05), transparent 60%),
+    radial-gradient(800px 520px at 92% 0%, rgba(var(--brand-rgb), 0.03), transparent 55%);
 }
 
 /* Numeric/tabular data reads better monospaced in a trading UI. */
@@ -122,7 +150,7 @@ body::before {
 }
 
 ::selection {
-  background: rgba(42, 54, 255, 0.16);
+  background: rgba(var(--brand-rgb), 0.16);
 }
 
 /* ── Effects ──────────────────────────────────────────────────────────── */
@@ -137,8 +165,8 @@ body::before {
 
 .glow-brand {
   box-shadow:
-    0 0 0 1px rgba(42, 54, 255, 0.22),
-    0 0 24px -6px rgba(42, 54, 255, 0.3);
+    0 0 0 1px rgba(var(--brand-rgb), 0.22),
+    0 0 24px -6px rgba(var(--brand-rgb), 0.3);
 }
 
 /* ── Animations ───────────────────────────────────────────────────────── */
@@ -175,6 +203,9 @@ body::before {
   background: linear-gradient(90deg, transparent, rgba(14, 18, 32, 0.05), transparent);
   animation: shimmer 1.4s infinite;
 }
+[data-theme="dark"] .skeleton::after {
+  background: linear-gradient(90deg, transparent, rgba(233, 236, 245, 0.05), transparent);
+}
 
 @keyframes fade-in {
   from {
@@ -197,6 +228,14 @@ body::before {
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid rgba(207, 212, 227, 0.8); /* ~border-strong */
+}
+[data-theme="dark"] .glass {
+  background: rgba(11, 13, 21, 0.68);
+  border-color: rgba(43, 48, 70, 0.8);
+}
+[data-theme="paper"] .glass {
+  background: rgba(246, 245, 240, 0.68);
+  border-color: rgba(184, 179, 163, 0.55);
 }
 
 /* ── Live motion (all disabled under prefers-reduced-motion, see below) ────── */

@@ -99,16 +99,23 @@ interface WalletCardProps {
   /** The address the user is currently signed in with — cannot be archived. */
   loginAddress: string;
   onSetupCredentials: (account: TradingAccount) => void;
+  /** Open the top-up sheet immediately (deep link /wallet?topup=1). */
+  autoOpenTopUp?: boolean;
 }
 
-export function WalletCard({ account, loginAddress, onSetupCredentials }: WalletCardProps) {
+export function WalletCard({
+  account,
+  loginAddress,
+  onSetupCredentials,
+  autoOpenTopUp = false,
+}: WalletCardProps) {
   const setPrimary = useSetPrimaryTradingAccount();
   const activateDeposit = useActivateDepositWallet();
   const bootstrap = useBootstrapAllowances();
   const archive = useArchiveTradingAccount();
   const walletStatus = useTradingWallet(true);
 
-  const [topUpOpen, setTopUpOpen] = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(autoOpenTopUp);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const depositWalletAddress =
@@ -245,9 +252,14 @@ export function WalletCard({ account, loginAddress, onSetupCredentials }: Wallet
             </Button>
           )}
 
-          {/* Privy: top up */}
-          {isPrivy && account.nextAction === "top_up" && (
-            <Button size="sm" variant="primary" onClick={() => setTopUpOpen(true)}>
+          {/* Privy: top up — always reachable once a deposit wallet exists;
+              promoted to the primary action when funding is the next step. */}
+          {isPrivy && depositWalletAddress && (
+            <Button
+              size="sm"
+              variant={account.nextAction === "top_up" ? "primary" : "ghost"}
+              onClick={() => setTopUpOpen(true)}
+            >
               Top up USDC
             </Button>
           )}
