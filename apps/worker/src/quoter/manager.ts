@@ -1,5 +1,11 @@
 import type { Logger } from "@mx2/observability";
-import type { QuoterStore, RuleStore, RuntimeFlagStore, ConditionalRuleRow } from "@mx2/db";
+import type {
+  QuoterStore,
+  RuleStore,
+  RuntimeFlagStore,
+  ConditionalRuleRow,
+  QuoteSessionMode,
+} from "@mx2/db";
 import type { AuditStore } from "@mx2/db";
 import {
   evaluateExpression,
@@ -13,13 +19,17 @@ import {
 import {
   capBreach,
   capitalCommittedUsd,
+  computeBatchHash,
   computeDesiredQuotes,
+  diffOpenOrders,
   diffQuotes,
   inventoryPlan,
   type DesiredQuotes,
+  type ProposedBatch,
+  type QuoteIntent,
   type RestingQuote,
 } from "./engine.js";
-import type { QuoterExecutor } from "./executor.js";
+import type { QuoterExecutor, QuoterExecutorProvider, QuoterLoopContext } from "./executor.js";
 
 /**
  * Single-writer host for maker-loop quoting sessions (RFC-0003). Same D-001
@@ -28,12 +38,17 @@ import type { QuoterExecutor } from "./executor.js";
  * before scaling out).
  *
  * The loop per armed quote_loop rule, every cycle:
- *   kill switches → gate expression → desired quotes → diff vs resting →
- *   execute cancels/places → merge accumulated pairs → cap checks → persist.
- * A breach cancels everything and HALTS the session (manual resume via the
- * API); kill switches idle the session without halting (auto-recovers when
- * the flag clears). Every action lands in quote_events with a UNIQUE
- * idempotency key — replaying a cycle can never double-book.
+ *   session re-read (mode/status/approval — the API's writes take effect
+ *   within one cycle) → kill switches → executor resolution (an unavailable
+ *   live prerequisite HALTS, never silently shadows) → merge confirmations →
+ *   fill sync (venue open orders vs our resting view) → daily-loss rollover →
+ *   gate expression → desired quotes → cap checks → merge plan → EXECUTE:
+ *     shadow/live: cancels + places + merges directly;
+ *     confirm:     cancels immediately (risk-reducing), places/merges only
+ *                  when the approved batch hash matches the recomputed one —
+ *                  a moved book re-proposes and stale approvals cannot land.
+ * Every action lands in quote_events with a UNIQUE idempotency key —
+ * replaying a cycle can never double-book.
  */
 
 export interface QuoterManager {
@@ -49,12 +64,17 @@ export interface QuoterManagerOptions {
   quoterStore: QuoterStore;
   auditStore: AuditStore;
   runtimeFlags: RuntimeFlagStore;
-  executor: QuoterExecutor;
+  executorProvider: QuoterExecutorProvider;
   subscribe: (tokenIds: string[]) => void;
   unsubscribe: (tokenIds: string[]) => void;
   reloadIntervalMs?: number;
   /** Minimum quiet period between cycles for one session. */
   cycleMinIntervalMs?: number;
+}
+
+interface PendingMerge {
+  transactionId: string;
+  pairs: number;
 }
 
 interface ActiveLoop {
@@ -63,14 +83,23 @@ interface ActiveLoop {
   readonly def: StrategyDefinition;
   readonly params: QuoteLoopAction;
   sessionId: string;
-  halted: boolean;
   resting: RestingQuote[];
   inventoryYes: number;
   inventoryNo: number;
+  /** Total USD paid for the current YES/NO inventory (avg-cost pools). */
+  costYesUsd: number;
+  costNoUsd: number;
+  realizedPnlUsd: number;
   dailyLossUsd: number;
+  dailyLossDay: string | null;
+  pendingMerges: PendingMerge[];
+  /** Whether the venue open-order reconcile ran since attach/mode-flip. */
+  syncedLive: boolean;
   lastCycleMs: number;
   cycling: boolean;
 }
+
+const utcDay = (nowMs: number): string => new Date(nowMs).toISOString().slice(0, 10);
 
 export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager => {
   const {
@@ -79,7 +108,7 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
     quoterStore,
     auditStore,
     runtimeFlags,
-    executor,
+    executorProvider,
     subscribe,
     unsubscribe,
   } = opts;
@@ -103,6 +132,18 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
     }
   };
 
+  const loopContext = (loop: ActiveLoop): QuoterLoopContext => ({
+    ruleId: loop.ruleId,
+    walletAddress: loop.walletAddress,
+    market: {
+      conditionId: loop.params.market.conditionId,
+      yesTokenId: loop.params.market.yesTokenId,
+      noTokenId: loop.params.market.noTokenId,
+      negRisk: loop.params.market.negRisk ?? false,
+      tickSize: loop.params.market.tickSize ?? "0.01",
+    },
+  });
+
   const addLoop = async (row: ConditionalRuleRow): Promise<void> => {
     const def = normalizeDefinition(row.definition as RuleDefinition | StrategyDefinition);
     if (def.action.kind !== "quote_loop") return;
@@ -113,14 +154,19 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
       def,
       params: def.action,
       sessionId: session.id,
-      halted: session.status === "halted",
-      // Conservative restart: assume nothing rests (shadow) — the live
-      // executor's open-order reconciliation replaces this before any real
-      // order management (RFC-0003 checkpoint 2).
+      // Conservative restart: assume nothing rests; the live open-order
+      // reconcile (first live cycle) adopts whatever actually rests on the
+      // venue before any order management happens.
       resting: [],
       inventoryYes: Number(session.inventoryYes),
       inventoryNo: Number(session.inventoryNo),
+      costYesUsd: Number(session.inventoryYesCostUsd),
+      costNoUsd: Number(session.inventoryNoCostUsd),
+      realizedPnlUsd: Number(session.realizedPnlUsd),
       dailyLossUsd: Number(session.dailyLossUsd),
+      dailyLossDay: session.dailyLossDay,
+      pendingMerges: [],
+      syncedLive: false,
       lastCycleMs: 0,
       cycling: false,
     };
@@ -135,7 +181,7 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
       set.add(row.id);
     }
     logger.info(
-      { ruleId: row.id, mode: executor.mode, conditionId: def.action.market.conditionId },
+      { ruleId: row.id, mode: session.mode, conditionId: def.action.market.conditionId },
       "Maker loop attached",
     );
   };
@@ -199,8 +245,13 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
       payload,
     });
 
-  const cancelAll = async (loop: ActiveLoop, cycleKey: string): Promise<void> => {
-    for (const quote of [...loop.resting]) {
+  const cancelQuotes = async (
+    loop: ActiveLoop,
+    executor: QuoterExecutor,
+    quotes: readonly RestingQuote[],
+    cycleKey: string,
+  ): Promise<void> => {
+    for (const quote of quotes) {
       const key = `${cycleKey}:cancel:${quote.tokenId}:${quote.orderId ?? "virtual"}`;
       const res = await executor.cancel(quote, key);
       if (res.ok) {
@@ -212,93 +263,142 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
     }
   };
 
-  const halt = async (loop: ActiveLoop, reason: string, cycleKey: string): Promise<void> => {
-    await cancelAll(loop, cycleKey);
-    loop.halted = true;
+  const halt = async (
+    loop: ActiveLoop,
+    executor: QuoterExecutor | null,
+    reason: string,
+    cycleKey: string,
+  ): Promise<void> => {
+    if (executor) await cancelQuotes(loop, executor, [...loop.resting], cycleKey);
     await quoterStore.updateSession(loop.sessionId, { status: "halted", haltedReason: reason });
     await record(loop, "halt", { reason }, `${cycleKey}:halt`);
     await auditStore.emit({
       actor: loop.walletAddress,
       action: "quoter.halted",
       subject: `rule:${loop.ruleId}`,
-      metadata: { reason, mode: executor.mode },
+      metadata: { reason, mode: executor?.mode ?? "unresolved" },
     });
     logger.warn({ ruleId: loop.ruleId, reason }, "Maker loop halted");
   };
 
-  const cycle = async (loop: ActiveLoop, nowMs: number): Promise<void> => {
-    const cycleKey = `quoter:${loop.ruleId}:${nowMs}`;
-
-    // 1. Session halted → only the API's resume restarts it.
-    if (loop.halted) return;
-
-    // 2. Kill switches: idle without halting (auto-recovers when cleared).
-    if (
-      (await flagIsTrue("trading_paused")) ||
-      (await flagIsTrue("quoter_paused")) ||
-      (await flagIsTrue(`rule_auto_disabled:${loop.ruleId}`))
-    ) {
-      if (loop.resting.length > 0) {
-        await cancelAll(loop, cycleKey);
-        await quoterStore.updateSession(loop.sessionId, { status: "idle" });
-      }
-      return;
-    }
-
-    // 3. Gate expression (fail-closed: stale gate data = quotes down).
-    const yesView = latestView.get(loop.params.market.yesTokenId);
-    const desired: DesiredQuotes = gateSatisfied(loop, nowMs)
-      ? computeDesiredQuotes(loop.params, yesView, nowMs, loop.def.maxDataAgeMs)
-      : { kind: "idle", reason: "gate_unsatisfied" };
-
-    // 4. Cap checks BEFORE placing anything new.
-    const mid = desired.kind === "quote" ? desired.mid : null;
-    const committed = capitalCommittedUsd(loop.resting, loop.inventoryYes, loop.inventoryNo, mid);
-    const breach = capBreach(committed, loop.dailyLossUsd, loop.params);
-    if (breach) {
-      await halt(loop, breach, cycleKey);
-      return;
-    }
-
-    // 5. Inventory: merge accumulated pairs, halt on one-sided exposure.
-    const plan = inventoryPlan(loop.inventoryYes, loop.inventoryNo, loop.params);
-    if (plan.breach) {
-      await halt(loop, plan.breach, cycleKey);
-      return;
-    }
-    if (plan.mergePairs > 0) {
-      const key = `${cycleKey}:merge:${plan.mergePairs}`;
-      const res = await executor.mergePairs(plan.mergePairs, key);
-      if (res.ok) {
-        loop.inventoryYes -= plan.mergePairs;
-        loop.inventoryNo -= plan.mergePairs;
-        // Each merged pair returns $1 collateral; entry cost < $1 by 2·spread.
-        await record(
-          loop,
-          "merge_submitted",
-          { pairs: plan.mergePairs, transactionId: res.value.transactionId },
-          key,
-        );
-        await auditStore.emit({
-          actor: loop.walletAddress,
-          action: "quoter.merge_submitted",
-          subject: `rule:${loop.ruleId}`,
-          metadata: { pairs: plan.mergePairs, mode: executor.mode },
-        });
+  /** Poll relayer merge confirmations from previous cycles. */
+  const pollMerges = async (loop: ActiveLoop, executor: QuoterExecutor): Promise<void> => {
+    for (const pm of [...loop.pendingMerges]) {
+      const st = await executor.mergeState(pm.transactionId);
+      if (!st.ok) continue; // transient — retry next cycle
+      if (st.value === "pending") continue;
+      loop.pendingMerges = loop.pendingMerges.filter((x) => x !== pm);
+      await record(
+        loop,
+        "merge_confirmed",
+        { transactionId: pm.transactionId, pairs: pm.pairs, outcome: st.value },
+        `quoter:${loop.ruleId}:mergeconf:${pm.transactionId}`,
+      );
+      if (st.value === "failed") {
+        // Inventory was decremented at submit; a failed merge means the pair
+        // tokens are still held. Halt for manual review rather than guessing.
+        await halt(loop, executor, "merge_failed", `quoter:${loop.ruleId}:mergefail`);
+        return;
       }
     }
+  };
 
-    // 6. Reconcile quotes.
-    const diff = diffQuotes(loop.resting, desired, loop.params.requoteToleranceCents);
-    for (const cancel of diff.cancels) {
-      const key = `${cycleKey}:cancel:${cancel.tokenId}:${cancel.orderId ?? "virtual"}`;
-      const res = await executor.cancel(cancel, key);
-      if (res.ok) {
-        loop.resting = loop.resting.filter((r) => r !== cancel);
-        await record(loop, "order_cancelled", { quote: cancel }, key);
-      }
+  /** Venue open-order sync → fill deltas → inventory + cost pools + events. */
+  const syncFills = async (
+    loop: ActiveLoop,
+    executor: QuoterExecutor,
+    nowMs: number,
+  ): Promise<boolean> => {
+    const sync = await executor.syncOpenOrders();
+    if (!sync.ok) {
+      logger.warn({ ruleId: loop.ruleId, err: sync.message }, "Open-order sync failed");
+      return false; // fail-closed: no order management on a blind cycle
     }
-    for (const place of diff.places) {
+    const { fills, resting, adopted } = diffOpenOrders(loop.resting, sync.value, [
+      loop.params.market.yesTokenId,
+      loop.params.market.noTokenId,
+    ]);
+    loop.resting = [...resting];
+    loop.syncedLive = true;
+    if (adopted.length > 0) {
+      logger.info(
+        { ruleId: loop.ruleId, adopted: adopted.map((a) => a.orderId) },
+        "Adopted venue orders after restart",
+      );
+    }
+    for (const fill of fills) {
+      const isYes = fill.tokenId === loop.params.market.yesTokenId;
+      if (isYes) {
+        loop.inventoryYes += fill.sizeFilled;
+        loop.costYesUsd += fill.sizeFilled * fill.price;
+      } else {
+        loop.inventoryNo += fill.sizeFilled;
+        loop.costNoUsd += fill.sizeFilled * fill.price;
+      }
+      await record(
+        loop,
+        "fill",
+        {
+          orderId: fill.orderId,
+          tokenId: fill.tokenId,
+          price: fill.price,
+          sizeFilled: fill.sizeFilled,
+          side: isYes ? "YES" : "NO",
+          at: nowMs,
+        },
+        `quoter:${loop.ruleId}:fill:${fill.orderId}:${fill.cumulativeMatched}`,
+      );
+    }
+    return true;
+  };
+
+  /** Merge whole pairs: realize PnL from the avg-cost pools at submit. */
+  const executeMerge = async (
+    loop: ActiveLoop,
+    executor: QuoterExecutor,
+    pairs: number,
+    cycleKey: string,
+  ): Promise<void> => {
+    const key = `${cycleKey}:merge:${pairs}`;
+    const res = await executor.mergePairs(pairs, key);
+    if (!res.ok) {
+      logger.warn({ ruleId: loop.ruleId, err: res.message }, "Merge submit failed");
+      return;
+    }
+    const avgYes = loop.inventoryYes > 1e-9 ? loop.costYesUsd / loop.inventoryYes : 0;
+    const avgNo = loop.inventoryNo > 1e-9 ? loop.costNoUsd / loop.inventoryNo : 0;
+    // Each merged pair returns $1 of collateral; entry cost is avgYes + avgNo.
+    const pnl = pairs * (1 - avgYes - avgNo);
+    loop.inventoryYes = Math.max(0, loop.inventoryYes - pairs);
+    loop.inventoryNo = Math.max(0, loop.inventoryNo - pairs);
+    loop.costYesUsd = Math.max(0, loop.costYesUsd - avgYes * pairs);
+    loop.costNoUsd = Math.max(0, loop.costNoUsd - avgNo * pairs);
+    loop.realizedPnlUsd += pnl;
+    if (pnl < 0) loop.dailyLossUsd += -pnl;
+    if (res.value.transactionId) {
+      loop.pendingMerges.push({ transactionId: res.value.transactionId, pairs });
+    }
+    await record(
+      loop,
+      "merge_submitted",
+      { pairs, transactionId: res.value.transactionId, realizedPnlUsd: pnl },
+      key,
+    );
+    await auditStore.emit({
+      actor: loop.walletAddress,
+      action: "quoter.merge_submitted",
+      subject: `rule:${loop.ruleId}`,
+      metadata: { pairs, mode: executor.mode, realizedPnlUsd: pnl },
+    });
+  };
+
+  const executePlaces = async (
+    loop: ActiveLoop,
+    executor: QuoterExecutor,
+    places: readonly QuoteIntent[],
+    cycleKey: string,
+  ): Promise<void> => {
+    for (const place of places) {
       const key = `${cycleKey}:place:${place.tokenId}`;
       await record(loop, "quote_intent", { intent: place, mode: executor.mode }, key);
       const res = await executor.place(place, key);
@@ -311,12 +411,22 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
         logger.warn({ ruleId: loop.ruleId, err: res.message }, "Quote place failed");
       }
     }
+  };
 
-    // 7. Scoreboard.
+  const persistScoreboard = async (
+    loop: ActiveLoop,
+    mid: number | null,
+    nowMs: number,
+  ): Promise<void> => {
     await quoterStore.updateSession(loop.sessionId, {
       status: loop.resting.length > 0 ? "quoting" : "idle",
       inventoryYes: loop.inventoryYes,
       inventoryNo: loop.inventoryNo,
+      inventoryYesCostUsd: loop.costYesUsd,
+      inventoryNoCostUsd: loop.costNoUsd,
+      realizedPnlUsd: loop.realizedPnlUsd,
+      dailyLossUsd: loop.dailyLossUsd,
+      dailyLossDay: loop.dailyLossDay,
       capitalCommittedUsd: capitalCommittedUsd(
         loop.resting,
         loop.inventoryYes,
@@ -325,9 +435,157 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
       ),
       lastCycleAt: new Date(nowMs),
     });
+  };
+
+  const cycle = async (loop: ActiveLoop, nowMs: number): Promise<void> => {
+    const cycleKey = `quoter:${loop.ruleId}:${nowMs}`;
+
+    // 1. Re-read the session: the API's mode flips, halts, resumes and batch
+    // approvals all take effect within one cycle. Memory stays authoritative
+    // for inventory/PnL (single writer); the DB is authoritative for control.
+    const session = await quoterStore.findSessionByRuleId(loop.ruleId);
+    if (!session || session.status === "halted") return;
+
+    // 2. Kill switches: idle without halting (auto-recovers when cleared).
+    if (
+      (await flagIsTrue("trading_paused")) ||
+      (await flagIsTrue("quoter_paused")) ||
+      (await flagIsTrue(`rule_auto_disabled:${loop.ruleId}`))
+    ) {
+      if (loop.resting.length > 0) {
+        const res = await executorProvider.forLoop(
+          loopContext(loop),
+          session.mode as QuoteSessionMode,
+        );
+        if ("executor" in res) {
+          await cancelQuotes(loop, res.executor, [...loop.resting], cycleKey);
+          await quoterStore.updateSession(loop.sessionId, { status: "idle" });
+        }
+      }
+      return;
+    }
+
+    // 3. Resolve the executor for THIS cycle's mode. Fail-closed: a live/
+    // confirm session whose prerequisites are missing halts loudly.
+    const resolution = await executorProvider.forLoop(
+      loopContext(loop),
+      session.mode as QuoteSessionMode,
+    );
+    if ("unavailable" in resolution) {
+      await halt(loop, null, resolution.unavailable, cycleKey);
+      return;
+    }
+    const executor = resolution.executor;
+    const isLiveExecutor = executor.mode === "live";
+
+    // 4. Live only: merge confirmations, then venue open-order sync → fills.
+    if (isLiveExecutor) {
+      // Virtual (shadow-phase) quotes don't exist on the venue — a mode flip
+      // must not let them masquerade as resting orders.
+      loop.resting = loop.resting.filter((r) => r.orderId !== null);
+      await pollMerges(loop, executor);
+      const synced = await syncFills(loop, executor, nowMs);
+      if (!synced) return; // blind cycle — no order management
+    }
+
+    // 5. Daily-loss rollover (UTC).
+    const day = utcDay(nowMs);
+    if (loop.dailyLossDay !== day) {
+      loop.dailyLossDay = day;
+      loop.dailyLossUsd = 0;
+    }
+
+    // 6. Gate expression (fail-closed: stale gate data = quotes down).
+    const yesView = latestView.get(loop.params.market.yesTokenId);
+    const desired: DesiredQuotes = gateSatisfied(loop, nowMs)
+      ? computeDesiredQuotes(loop.params, yesView, nowMs, loop.def.maxDataAgeMs)
+      : { kind: "idle", reason: "gate_unsatisfied" };
+
+    // 7. Cap checks BEFORE placing anything new.
+    const mid = desired.kind === "quote" ? desired.mid : null;
+    const committed = capitalCommittedUsd(loop.resting, loop.inventoryYes, loop.inventoryNo, mid);
+    const breach = capBreach(committed, loop.dailyLossUsd, loop.params);
+    if (breach) {
+      await halt(loop, executor, breach, cycleKey);
+      await persistScoreboard(loop, mid, nowMs);
+      return;
+    }
+
+    // 8. Inventory plan: merge-ready pairs, one-sided exposure breach.
+    const plan = inventoryPlan(loop.inventoryYes, loop.inventoryNo, loop.params);
+    if (plan.breach) {
+      await halt(loop, executor, plan.breach, cycleKey);
+      await persistScoreboard(loop, mid, nowMs);
+      return;
+    }
+
+    // 9. Reconcile quotes → the cycle's intended actions.
+    const diff = diffQuotes(loop.resting, desired, loop.params.requoteToleranceCents);
+
+    if (session.mode === "confirm") {
+      // Confirm mode: cancels are risk-REDUCING and execute immediately;
+      // places and merges execute only under a hash-matching approval.
+      await cancelQuotes(loop, executor, diff.cancels, cycleKey);
+      const batch: ProposedBatch = {
+        cancels: [],
+        places: diff.places,
+        mergePairs: plan.mergePairs,
+      };
+      if (batch.places.length === 0 && batch.mergePairs === 0) {
+        if (session.pendingBatchHash !== null) {
+          await quoterStore.updateSession(loop.sessionId, {
+            pendingBatch: null,
+            pendingBatchHash: null,
+            pendingBatchAt: null,
+            approvedBatchHash: null,
+            approvedAt: null,
+          });
+        }
+      } else {
+        const hash = computeBatchHash(batch);
+        if (session.approvedBatchHash === hash) {
+          // Approved and STILL current — execute, then clear the protocol state.
+          if (batch.mergePairs > 0) await executeMerge(loop, executor, batch.mergePairs, cycleKey);
+          await executePlaces(loop, executor, batch.places, cycleKey);
+          await quoterStore.updateSession(loop.sessionId, {
+            pendingBatch: null,
+            pendingBatchHash: null,
+            pendingBatchAt: null,
+            approvedBatchHash: null,
+            approvedAt: null,
+          });
+        } else if (session.pendingBatchHash !== hash) {
+          // New (or changed) proposal — replaces the old one and voids any
+          // approval that pointed at it.
+          await quoterStore.updateSession(loop.sessionId, {
+            pendingBatch: batch as unknown as Record<string, unknown>,
+            pendingBatchHash: hash,
+            pendingBatchAt: new Date(nowMs),
+            approvedBatchHash: null,
+            approvedAt: null,
+          });
+          await record(
+            loop,
+            "batch_proposed",
+            { batch, hash, mid },
+            `quoter:${loop.ruleId}:batch:${hash}`,
+          );
+        }
+        // else: same proposal still awaiting approval — nothing to do.
+      }
+    } else {
+      // Shadow / live: execute the whole cycle directly.
+      if (plan.mergePairs > 0) await executeMerge(loop, executor, plan.mergePairs, cycleKey);
+      await cancelQuotes(loop, executor, diff.cancels, cycleKey);
+      await executePlaces(loop, executor, diff.places, cycleKey);
+    }
+
+    // 10. Scoreboard + cycle event.
+    await persistScoreboard(loop, mid, nowMs);
     await record(loop, "cycle", {
       desired: desired.kind,
       ...(desired.kind === "idle" ? { reason: desired.reason } : { mid: desired.mid }),
+      mode: session.mode,
       resting: loop.resting.length,
       cancels: diff.cancels.length,
       places: diff.places.length,
@@ -353,10 +611,7 @@ export const createQuoterManager = (opts: QuoterManagerOptions): QuoterManager =
         const now = Date.now();
         for (const loop of loops.values()) maybeCycle(loop, now);
       }, reloadIntervalMs);
-      logger.info(
-        { mode: executor.mode, reloadIntervalMs, cycleMinIntervalMs },
-        "Maker-loop quoter started",
-      );
+      logger.info({ reloadIntervalMs, cycleMinIntervalMs }, "Maker-loop quoter started");
     },
 
     onBook(view) {

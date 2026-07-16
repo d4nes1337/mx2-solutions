@@ -187,6 +187,7 @@ export interface FeatureFlags {
   privySigning: boolean;
   aiChat: boolean;
   openBeta: boolean;
+  walletWithdraw: boolean;
   makerLoop: boolean;
   makerLoopLive: boolean;
 }
@@ -311,9 +312,30 @@ export interface TradingWalletStatusResponse {
   walletHealth: "ok" | "missing" | "unknown" | null;
 }
 
+export interface WalletWithdrawalItem {
+  id: string;
+  amountUsd: number;
+  destination: string;
+  state: "requested" | "submitted" | "confirmed" | "failed";
+  transactionHash: string | null;
+  createdAt: string;
+}
+
+export interface WithdrawResponse {
+  ok: boolean;
+  withdrawalId?: string;
+  destination?: string;
+  amountUsd?: number;
+  alreadySubmitted?: boolean;
+  relayer?: { transactionId: string; state: string; transactionHash?: string };
+}
+
 export interface TradingWalletBalanceResponse {
   depositWalletAddress: string | null;
+  /** pUSD — the spendable/withdrawable Polymarket balance (1:1 USD). */
   depositWalletUsdc: number | null;
+  /** Raw USDC.e in the deposit wallet awaiting conversion to pUSD. */
+  depositWalletUnconvertedUsdc: number | null;
   embeddedAddress: string;
   embeddedUsdc: number;
   asOf: string;

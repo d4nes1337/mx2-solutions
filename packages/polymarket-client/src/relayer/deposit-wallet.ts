@@ -45,6 +45,20 @@ export interface DepositWalletDeploymentResult extends DepositWalletDeploymentSt
   submitted: boolean;
 }
 
+/** One call executed FROM the deposit wallet (SDK `DepositWalletCall`). */
+export interface DepositWalletBatchCall {
+  target: string;
+  value: string;
+  data: string;
+}
+
+export interface DepositWalletBatchResult {
+  depositWalletAddress: string;
+  transactionId: string;
+  state: RelayerTransactionState;
+  transactionHash?: string;
+}
+
 export interface DepositWalletRelayer {
   readonly enabled: boolean;
   deriveDepositWalletAddress(
@@ -56,6 +70,24 @@ export interface DepositWalletRelayer {
   deployDepositWallet(
     owner: DepositWalletOwner,
   ): Promise<Result<DepositWalletDeploymentResult, DepositWalletRelayerError>>;
+  /**
+   * Execute arbitrary calldata FROM the deposit wallet (gasless; authorized by
+   * a plain EIP-712 `DepositWallet` Batch signature from the owner's signer —
+   * INTEGRATION §4). The primitive behind withdrawals (USDC transfer to the
+   * owner), relayer allowance batches (W2) and CTF merges (maker loop).
+   */
+  executeBatch(
+    owner: DepositWalletOwner,
+    calls: DepositWalletBatchCall[],
+    opts?: { deadlineSeconds?: number },
+  ): Promise<Result<DepositWalletBatchResult, DepositWalletRelayerError>>;
+  /** Poll a previously submitted relayer transaction. */
+  getTransactionState(
+    owner: DepositWalletOwner,
+    transactionId: string,
+  ): Promise<
+    Result<{ state: RelayerTransactionState; transactionHash?: string }, DepositWalletRelayerError>
+  >;
 }
 
 export interface RelayerTransactionResponseLike {
@@ -70,6 +102,14 @@ export interface DepositWalletRelayerClient {
   deriveDepositWalletAddress(): Promise<string>;
   getDeployed(address: string, type?: string): Promise<boolean | { deployed: boolean }>;
   deployDepositWallet(): Promise<RelayerTransactionResponseLike>;
+  executeDepositWalletBatch(
+    calls: DepositWalletBatchCall[],
+    walletAddress: string,
+    deadline: string,
+  ): Promise<RelayerTransactionResponseLike>;
+  getTransaction(
+    transactionId: string,
+  ): Promise<Array<{ state?: string; transactionHash?: string }>>;
 }
 
 export interface DepositWalletRelayerOptions {
@@ -112,6 +152,8 @@ export const createDisabledDepositWalletRelayer = (): DepositWalletRelayer => ({
   deriveDepositWalletAddress: async () => err(disabledError),
   getDeploymentStatus: async () => err(disabledError),
   deployDepositWallet: async () => err(disabledError),
+  executeBatch: async () => err(disabledError),
+  getTransactionState: async () => err(disabledError),
 });
 
 /**
@@ -193,6 +235,59 @@ export const createDepositWalletRelayer = (
           });
         }
         return err(toError("Could not submit Polymarket deposit-wallet deployment.", cause));
+      }
+    },
+
+    async executeBatch(owner, calls, batchOpts) {
+      if (calls.length === 0) {
+        return err(toError("Refusing to submit an empty deposit-wallet batch.", undefined));
+      }
+      const address = await derive(owner);
+      if (!address.ok) return err(address.error);
+      try {
+        const client = opts.clientForOwner(owner);
+        const deadline = String(
+          Math.floor(Date.now() / 1000) + (batchOpts?.deadlineSeconds ?? 3_600),
+        );
+        const submitted = await client.executeDepositWalletBatch(
+          calls,
+          address.value.depositWalletAddress,
+          deadline,
+        );
+        let state: RelayerTransactionState = submitted.state;
+        let transactionHash = submitted.transactionHash ?? submitted.hash;
+        if (opts.waitForConfirmation && submitted.wait) {
+          const confirmed = await submitted.wait();
+          state = confirmed?.state ?? state;
+          transactionHash = confirmed?.transactionHash ?? transactionHash;
+        }
+        const value: DepositWalletBatchResult = {
+          depositWalletAddress: address.value.depositWalletAddress,
+          transactionId: submitted.transactionID,
+          state,
+        };
+        if (transactionHash) value.transactionHash = transactionHash;
+        return ok(value);
+      } catch (cause) {
+        return err(toError("Could not execute the deposit-wallet batch.", cause));
+      }
+    },
+
+    async getTransactionState(owner, transactionId) {
+      try {
+        const client = opts.clientForOwner(owner);
+        const rows = await client.getTransaction(transactionId);
+        const row = rows?.[0];
+        if (!row?.state) {
+          return err(toError("Relayer returned no state for the transaction.", undefined));
+        }
+        const out: { state: RelayerTransactionState; transactionHash?: string } = {
+          state: row.state,
+        };
+        if (row.transactionHash) out.transactionHash = row.transactionHash;
+        return ok(out);
+      } catch (cause) {
+        return err(toError("Could not read the relayer transaction state.", cause));
       }
     },
   };

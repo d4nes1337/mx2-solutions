@@ -121,6 +121,11 @@ const EnvSchema = z.object({
   // Allowlist table stays the source of truth (per-wallet revocation intact).
   FEATURE_OPEN_BETA: boolFromEnv(false),
 
+  // Trading-wallet withdrawals — deposit-wallet USDC.e back to the OWNER's
+  // login wallet only (destination is never client input). Cross-checked
+  // below: requires the relayer stack.
+  FEATURE_WALLET_WITHDRAW: boolFromEnv(false),
+
   // Maker loop (RFC-0003): quote_loop creation + SHADOW quoting + cockpit UI.
   // Places no orders and moves no funds by itself.
   FEATURE_MAKER_LOOP: boolFromEnv(false),
@@ -199,6 +204,7 @@ export type AppConfig = {
     privySigning: boolean;
     aiChat: boolean;
     openBeta: boolean;
+    walletWithdraw: boolean;
     makerLoop: boolean;
     makerLoopLive: boolean;
   };
@@ -265,6 +271,14 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
   // half-configured rather than 500 at request time.
   if (e.FEATURE_AI_CHAT && !e.ANTHROPIC_API_KEY) {
     throw new ConfigError("FEATURE_AI_CHAT=true requires ANTHROPIC_API_KEY.");
+  }
+
+  // Fail-closed: withdrawals execute through the deposit-wallet relayer.
+  if (e.FEATURE_WALLET_WITHDRAW && !e.FEATURE_RELAYER) {
+    throw new ConfigError(
+      "FEATURE_WALLET_WITHDRAW=true requires FEATURE_RELAYER=true (withdrawals execute " +
+        "through the deposit-wallet relayer batch).",
+    );
   }
 
   // Fail-closed ladder for the maker loop (RFC-0003): live quoting requires
@@ -346,6 +360,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       privySigning: e.FEATURE_PRIVY_SIGNING,
       aiChat: e.FEATURE_AI_CHAT,
       openBeta: e.FEATURE_OPEN_BETA,
+      walletWithdraw: e.FEATURE_WALLET_WITHDRAW,
       makerLoop: e.FEATURE_MAKER_LOOP,
       makerLoopLive: e.FEATURE_MAKER_LOOP_LIVE,
     },

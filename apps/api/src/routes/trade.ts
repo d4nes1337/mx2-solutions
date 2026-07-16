@@ -16,7 +16,13 @@ import type {
   L2Credentials,
   SignedClobOrder,
 } from "@mx2/polymarket-client";
-import { SignedClobOrderSchema } from "@mx2/polymarket-client";
+import {
+  CLOB_AUTH_DEFAULT_NONCE,
+  SignedClobOrderSchema,
+  build1271SignedOrder,
+  buildClobAuthTypedData,
+} from "@mx2/polymarket-client";
+import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeGeoblockCheck } from "../middleware/geoblock.js";
 import { encryptCredentials, decryptCredentials, fingerprintSecret } from "../auth/crypto.js";
@@ -31,6 +37,7 @@ export interface TradeRoutesDeps {
   runtimeFlags: RuntimeFlagStore;
   tradingClobClient: AuthenticatedClobClient;
   geoblockClient: GeoblockClient;
+  tradingSigner: TradingSigner;
 }
 
 const isTradingPaused = async (deps: TradeRoutesDeps): Promise<boolean> => {
@@ -227,6 +234,41 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       l1Signature = bodySig;
       timestamp = ts;
       nonce = nc;
+    } else if (
+      account.kind === "internal_privy" &&
+      account.privyWalletId &&
+      deps.config.features.privySigning
+    ) {
+      // Privy path (W3): the server signs ClobAuth with the embedded signer
+      // EOA — the CLOB identity for deposit-wallet accounts even though orders
+      // are POLY_1271-signed as the deposit wallet (INTEGRATION_VERIFIED §12a).
+      // MUST sign with CLOB server time; local clocks fail L1 auth.
+      const timeResult = await deps.tradingClobClient.getServerTime();
+      if (!timeResult.ok) {
+        reply.code(502);
+        return { error: "CLOB_TIME_FAILED", message: timeResult.error.message };
+      }
+      signingAddress = clobSignerAddress(account.signerAddress);
+      timestamp = String(timeResult.value);
+      nonce = String(CLOB_AUTH_DEFAULT_NONCE);
+      const signed = await deps.tradingSigner.signClobAuth({
+        wallet: { walletId: account.privyWalletId, address: account.signerAddress },
+        typedData: buildClobAuthTypedData(signingAddress, 137, timestamp),
+      });
+      if (!signed.ok) {
+        req.log.warn(
+          {
+            event: "trade.credentials.sign_failed",
+            wallet: user.walletAddress,
+            tradingAccountId: account.id,
+            error: signed.error.code,
+          },
+          "server-side ClobAuth signing failed",
+        );
+        reply.code(502);
+        return { error: signed.error.code, message: signed.error.message };
+      }
+      l1Signature = signed.value.signature;
     } else {
       reply.code(409);
       return {
@@ -398,13 +440,99 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       let clobAddress: `0x${string}`;
 
       if (account.signingMode === "server") {
-        reply.code(409);
-        return {
-          error: "RELAYER_ORDER_PATH_NOT_ENABLED",
-          message:
-            "No-signature trading requires the Polymarket deposit-wallet relayer order path. This account is not enabled for live server-side orders yet.",
-          tradingAccountId: account.id,
-        };
+        // W4: POLY_1271 deposit-wallet path. The server builds + signs the V2
+        // order struct with the embedded signer (maker = signer = funder =
+        // deposit wallet, sigType 3 — INTEGRATION §12a/§23). Fail-closed: any
+        // missing prerequisite keeps the pre-W4 409.
+        if (
+          !deps.config.features.privySigning ||
+          account.kind !== "internal_privy" ||
+          !account.privyWalletId ||
+          !account.depositWalletAddress
+        ) {
+          reply.code(409);
+          return {
+            error: "RELAYER_ORDER_PATH_NOT_ENABLED",
+            message:
+              "No-signature trading requires the Polymarket deposit-wallet order path (signer + deposit wallet + server signing enabled). This account is not ready for live server-side orders.",
+            tradingAccountId: account.id,
+          };
+        }
+        const tokenIdBody = typeof body["tokenId"] === "string" ? body["tokenId"] : null;
+        const sideBody =
+          body["side"] === "BUY" || body["side"] === "SELL"
+            ? (body["side"] as "BUY" | "SELL")
+            : null;
+        const tickSize = ["0.1", "0.01", "0.001", "0.0001"].includes(body["tickSize"] as string)
+          ? (body["tickSize"] as "0.1" | "0.01" | "0.001" | "0.0001")
+          : "0.01";
+        const negRisk = body["negRisk"] === true;
+        const priceNum = Number(price);
+        const sizeNum = Number(size);
+        if (
+          !tokenIdBody ||
+          !sideBody ||
+          !(Number.isFinite(priceNum) && priceNum > 0 && priceNum < 1) ||
+          !(Number.isFinite(sizeNum) && sizeNum > 0)
+        ) {
+          reply.code(400);
+          return {
+            error: "INVALID_REQUEST",
+            message:
+              "Server-signed orders require tokenId, side (BUY|SELL), a price in (0,1), and a positive size.",
+          };
+        }
+        const expiresAtSec =
+          orderType === "GTD" && typeof body["expiresAtSec"] === "number"
+            ? body["expiresAtSec"]
+            : undefined;
+        const walletRef = { walletId: account.privyWalletId, address: account.signerAddress };
+        try {
+          signedOrder = (await build1271SignedOrder(
+            {
+              signerAddress: account.signerAddress,
+              sign: async (payload) => {
+                const r = await deps.tradingSigner.signOrder({
+                  wallet: walletRef,
+                  typedData: payload,
+                });
+                if (!r.ok) throw new Error(`${r.error.code}: ${r.error.message}`);
+                return r.value.signature;
+              },
+              depositWalletAddress: account.depositWalletAddress,
+            },
+            {
+              tokenId: tokenIdBody,
+              side: sideBody,
+              price: priceNum,
+              size: sizeNum,
+              tickSize,
+              negRisk,
+              orderType,
+              postOnly,
+              ...(expiresAtSec !== undefined ? { expiresAtSec } : {}),
+            },
+          )) as unknown as SignedClobOrder;
+        } catch (e) {
+          req.log.warn(
+            {
+              event: "trade.order.sign_failed",
+              wallet: user.walletAddress,
+              tradingAccountId: account.id,
+              error: e instanceof Error ? e.message : String(e),
+            },
+            "server-side order signing failed",
+          );
+          reply.code(502);
+          return {
+            error: "ORDER_SIGN_FAILED",
+            message: e instanceof Error ? e.message : "order signing failed",
+          };
+        }
+        tokenId = tokenIdBody;
+        side = sideBody;
+        funder = account.depositWalletAddress;
+        clobAddress = clobSignerAddress(account.signerAddress);
       } else {
         // Browser-signed account: the client builds + signs the CLOB order struct
         // (EIP-712 over the CTF Exchange domain). We validate ownership-critical

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { MarketDataView, QuoteLoopAction, TickSize } from "@mx2/rules";
 
 /**
@@ -22,6 +23,8 @@ export interface QuoteIntent {
 export interface RestingQuote extends QuoteIntent {
   /** CLOB order id (null for shadow-mode virtual quotes). */
   readonly orderId: string | null;
+  /** Cumulative filled size last seen from the venue (fill-delta baseline). */
+  readonly sizeMatched?: number;
 }
 
 export type IdleReason = "gate_unsatisfied" | "no_book" | "stale_book" | "mid_out_of_range";
@@ -185,4 +188,152 @@ export const capBreach = (
   if (dailyLossUsd > params.maxDailyLossUsd) return "daily_loss";
   if (committedUsd > params.maxCapitalUsd) return "capital";
   return null;
+};
+
+// ── Confirm-mode batch protocol (RFC-0003 checkpoint 3) ─────────────────────
+
+/** One cycle's worth of side effects, as data — what confirm mode approves. */
+export interface ProposedBatch {
+  readonly cancels: readonly RestingQuote[];
+  readonly places: readonly QuoteIntent[];
+  readonly mergePairs: number;
+}
+
+/** JSON with recursively sorted object keys — a canonical byte encoding. */
+const canonicalJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+};
+
+/**
+ * Deterministic identity of a proposed batch: sha256 over canonical JSON.
+ * The worker executes an approved batch ONLY when the hash it recomputes from
+ * the CURRENT book still equals the approved hash — a moved market changes
+ * the batch, changes the hash, and structurally voids the stale approval.
+ */
+export const computeBatchHash = (batch: ProposedBatch): string =>
+  createHash("sha256")
+    .update(
+      canonicalJson({
+        cancels: batch.cancels.map((c) => ({
+          tokenId: c.tokenId,
+          orderId: c.orderId,
+          price: c.price,
+          size: c.size,
+        })),
+        places: batch.places.map((p) => ({ tokenId: p.tokenId, price: p.price, size: p.size })),
+        mergePairs: batch.mergePairs,
+      }),
+    )
+    .digest("hex");
+
+// ── Fill detection from open-order polling (R-032) ──────────────────────────
+
+export interface Fill {
+  readonly orderId: string;
+  readonly tokenId: string;
+  readonly price: number;
+  /** Newly-filled size since the last poll (the delta, not the cumulative). */
+  readonly sizeFilled: number;
+  /** Venue-cumulative matched size after this fill (idempotency key input). */
+  readonly cumulativeMatched: number;
+}
+
+export interface VenueOpenOrder {
+  readonly orderId: string;
+  readonly tokenId: string;
+  readonly price: number;
+  readonly originalSize: number;
+  readonly sizeMatched: number;
+}
+
+export interface OpenOrderDiff {
+  readonly fills: readonly Fill[];
+  /** The reconciled resting set (updated baselines; vanished orders removed). */
+  readonly resting: readonly RestingQuote[];
+  /** Venue orders on loop tokens we didn't know about (restart) — adopted. */
+  readonly adopted: readonly RestingQuote[];
+}
+
+/**
+ * Reconcile our resting view against the venue's open orders (no user WS in
+ * MVP — this is the polling fallback):
+ *  - matched order with a higher size_matched → a fill for the delta;
+ *  - VANISHED order → approximated as filled for the remainder (could also be
+ *    an external cancel — the over-count errs toward the inventory cap, i.e.
+ *    fail-closed; logged as R-032);
+ *  - venue order we don't know (worker restart) → adopted with its current
+ *    size_matched as the fill baseline, so pre-restart fills are not
+ *    double-counted.
+ */
+export const diffOpenOrders = (
+  resting: readonly RestingQuote[],
+  venueOrders: readonly VenueOpenOrder[],
+  loopTokenIds: readonly string[],
+): OpenOrderDiff => {
+  const fills: Fill[] = [];
+  const next: RestingQuote[] = [];
+  const byId = new Map(venueOrders.map((o) => [o.orderId, o]));
+  const known = new Set<string>();
+
+  for (const quote of resting) {
+    if (quote.orderId === null) {
+      next.push(quote); // shadow/virtual — nothing to reconcile
+      continue;
+    }
+    known.add(quote.orderId);
+    const venue = byId.get(quote.orderId);
+    const baseline = quote.sizeMatched ?? 0;
+    if (!venue) {
+      // Vanished: treat the remainder as filled (R-032 approximation).
+      const remainder = quote.size - baseline;
+      if (remainder > 1e-9) {
+        fills.push({
+          orderId: quote.orderId,
+          tokenId: quote.tokenId,
+          price: quote.price,
+          sizeFilled: remainder,
+          cumulativeMatched: quote.size,
+        });
+      }
+      continue; // no longer resting
+    }
+    if (venue.sizeMatched > baseline + 1e-9) {
+      fills.push({
+        orderId: quote.orderId,
+        tokenId: quote.tokenId,
+        price: quote.price,
+        sizeFilled: venue.sizeMatched - baseline,
+        cumulativeMatched: venue.sizeMatched,
+      });
+    }
+    if (venue.sizeMatched >= venue.originalSize - 1e-9) continue; // fully filled
+    next.push({ ...quote, sizeMatched: venue.sizeMatched });
+  }
+
+  const adopted: RestingQuote[] = [];
+  for (const venue of venueOrders) {
+    if (known.has(venue.orderId)) continue;
+    if (!loopTokenIds.includes(venue.tokenId)) continue;
+    if (venue.sizeMatched >= venue.originalSize - 1e-9) continue;
+    const quote: RestingQuote = {
+      tokenId: venue.tokenId,
+      side: "BUY",
+      price: venue.price,
+      size: venue.originalSize,
+      orderId: venue.orderId,
+      sizeMatched: venue.sizeMatched,
+    };
+    adopted.push(quote);
+    next.push(quote);
+  }
+
+  return { fills, resting: next, adopted };
 };

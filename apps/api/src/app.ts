@@ -20,6 +20,7 @@ import type {
   TriggerStore,
   PrivyWalletStore,
   DelegationStore,
+  WithdrawalStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -75,6 +76,8 @@ export interface AppDeps {
   quoterStore?: QuoterStore;
   privyWallets: PrivyWalletStore;
   delegations: DelegationStore;
+  /** Withdrawal ledger; omitted only in tests that never touch withdraw routes. */
+  withdrawals?: WithdrawalStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
@@ -203,10 +206,19 @@ export const buildApp = (deps: AppDeps) => {
     runtimeFlags: deps.runtimeFlags,
     tradingClobClient: deps.tradingClobClient,
     geoblockClient: deps.geoblockClient,
+    tradingSigner: deps.tradingSigner,
   });
   const allowanceReader =
     deps.allowanceReader ??
     (deps.config.polygonRpcUrl ? createViemAllowanceReader(deps.config.polygonRpcUrl) : null);
+  const withdrawals =
+    deps.withdrawals ??
+    ({
+      create: async () => null,
+      updateState: async () => {},
+      findByIdempotencyKey: async () => null,
+      listByWallet: async () => [],
+    } satisfies WithdrawalStore);
   registerTradingWalletRoutes(fastifyApp, {
     config: deps.config,
     sessions: deps.sessions,
@@ -217,6 +229,7 @@ export const buildApp = (deps: AppDeps) => {
     delegations: deps.delegations,
     allowanceReader,
     depositWalletRelayer,
+    withdrawals,
   });
   registerTradingAccountsRoutes(fastifyApp, {
     sessions: deps.sessions,
@@ -260,6 +273,12 @@ export const buildApp = (deps: AppDeps) => {
       auditStore: deps.auditStore,
       gammaClient: deps.gammaClient,
       clobClient: deps.clobClient,
+      geoblockClient: deps.geoblockClient,
+      privyWallets: deps.privyWallets,
+      tradingAccounts,
+      accountClobCredentials,
+      allowanceReader,
+      relayerEnabled: deps.config.features.relayer && depositWalletRelayer.enabled,
     });
   }
   registerAiRoutes(fastifyApp, {

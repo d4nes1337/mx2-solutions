@@ -6,7 +6,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "FEATURE_AI_CHAT=true ANTHROPIC_API_KEY=local-placeholder-not-a-real-key FEATURE_OPEN_BETA=true POLYGON_RPC_URL=https://polygon-rpc.com MOCK_SIGNER_PRIVATE_KEY=0x1111111111111111111111111111111111111111111111111111111111111111 pnpm --filter @mx2/api dev"
+        "FEATURE_AI_CHAT=true ANTHROPIC_API_KEY=local-placeholder-not-a-real-key FEATURE_OPEN_BETA=true FEATURE_MAKER_LOOP=true POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com MOCK_SIGNER_PRIVATE_KEY=0x1111111111111111111111111111111111111111111111111111111111111111 pnpm --filter @mx2/api dev"
       ],
       "port": 3001
     },

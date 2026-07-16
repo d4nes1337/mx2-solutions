@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, ne, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   quoteEvents,
@@ -23,6 +23,7 @@ export type QuoteEventType =
   | "order_placed"
   | "order_cancelled"
   | "fill"
+  | "batch_proposed"
   | "merge_submitted"
   | "merge_confirmed"
   | "halt"
@@ -38,6 +39,17 @@ export interface QuoteSessionUpdate {
   dailyLossUsd?: number;
   rewardsAccruedUsd?: number;
   lastCycleAt?: Date;
+  /** Confirm-mode batch protocol — the WORKER is the only writer of pending_*. */
+  pendingBatch?: Record<string, unknown> | null;
+  pendingBatchHash?: string | null;
+  pendingBatchAt?: Date | null;
+  /** Cleared (nulled) by the worker after execution or re-propose. */
+  approvedBatchHash?: string | null;
+  approvedAt?: Date | null;
+  /** Fill-accounting cost pools + the UTC day the daily loss belongs to. */
+  inventoryYesCostUsd?: number;
+  inventoryNoCostUsd?: number;
+  dailyLossDay?: string | null;
 }
 
 export interface QuoterStore {
@@ -47,6 +59,15 @@ export interface QuoterStore {
   updateSession(id: string, update: QuoteSessionUpdate): Promise<QuoteSessionRow | null>;
   /** Audited mode escalation (shadow → confirm → live); API-only. */
   setMode(id: string, mode: QuoteSessionMode): Promise<QuoteSessionRow | null>;
+  /**
+   * Confirm-mode approval — the ONLY session field the API writes during a
+   * running session. Guarded: succeeds only while `pending_batch_hash` still
+   * equals the hash being approved; returns null when the proposal moved on
+   * (BATCH_STALE) so a stale approval can never land.
+   */
+  approveBatch(id: string, batchHash: string): Promise<QuoteSessionRow | null>;
+  /** Non-halted sessions (rewards poller sweep). */
+  listActiveSessions(): Promise<QuoteSessionRow[]>;
   /**
    * Append one event. Returns false (and writes nothing) when the idempotency
    * key was already used — the anti-replay invariant.
@@ -103,6 +124,16 @@ export const createQuoterStore = (db: Database): QuoterStore => ({
     if (update.rewardsAccruedUsd !== undefined)
       set["rewardsAccruedUsd"] = String(update.rewardsAccruedUsd);
     if (update.lastCycleAt !== undefined) set["lastCycleAt"] = update.lastCycleAt;
+    if (update.pendingBatch !== undefined) set["pendingBatch"] = update.pendingBatch;
+    if (update.pendingBatchHash !== undefined) set["pendingBatchHash"] = update.pendingBatchHash;
+    if (update.pendingBatchAt !== undefined) set["pendingBatchAt"] = update.pendingBatchAt;
+    if (update.approvedBatchHash !== undefined) set["approvedBatchHash"] = update.approvedBatchHash;
+    if (update.approvedAt !== undefined) set["approvedAt"] = update.approvedAt;
+    if (update.inventoryYesCostUsd !== undefined)
+      set["inventoryYesCostUsd"] = String(update.inventoryYesCostUsd);
+    if (update.inventoryNoCostUsd !== undefined)
+      set["inventoryNoCostUsd"] = String(update.inventoryNoCostUsd);
+    if (update.dailyLossDay !== undefined) set["dailyLossDay"] = update.dailyLossDay;
     const rows = await db
       .update(quoteSessions)
       .set(set)
@@ -118,6 +149,19 @@ export const createQuoterStore = (db: Database): QuoterStore => ({
       .where(eq(quoteSessions.id, id))
       .returning();
     return rows[0] ?? null;
+  },
+
+  async approveBatch(id, batchHash) {
+    const rows = await db
+      .update(quoteSessions)
+      .set({ approvedBatchHash: batchHash, approvedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(quoteSessions.id, id), eq(quoteSessions.pendingBatchHash, batchHash)))
+      .returning();
+    return rows[0] ?? null;
+  },
+
+  async listActiveSessions() {
+    return db.select().from(quoteSessions).where(ne(quoteSessions.status, "halted"));
   },
 
   async recordEvent(event) {

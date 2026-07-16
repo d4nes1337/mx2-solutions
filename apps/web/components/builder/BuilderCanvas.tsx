@@ -20,6 +20,9 @@ import {
   Background,
   Controls,
   ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Connection,
   type Edge,
   type Node,
   type NodeChange,
@@ -27,6 +30,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { ConditionV2, ExprNode, ExprResultNode } from "@mx2/rules";
 import {
+  UNBOUND,
   conditionLeavesOf,
   docMarketRefs,
   isBound,
@@ -34,6 +38,7 @@ import {
   marketLabel,
   type StrategyDoc,
 } from "@/lib/smart-orders/doc";
+import { dropTargetFor, validateConnection } from "@/lib/smart-orders/connection-rules";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import type { BuilderIssue } from "@/lib/smart-orders/compile";
 import type { DraftEvaluation } from "@/lib/smart-orders/queries";
@@ -183,14 +188,18 @@ function buildGraph(
         edges.push({
           id: `m-${node.id}`,
           source: `market:${c.market.tokenId}`,
+          sourceHandle: "m-out",
           target: node.id,
+          targetHandle: "m-in",
           style: { strokeDasharray: "4 3" },
         });
       }
       edges.push({
         id: `e-${node.id}`,
         source: node.id,
+        sourceHandle: "t-out",
         target: parentId,
+        targetHandle: "t-in",
         animated: state === "pass",
       });
       return;
@@ -206,7 +215,13 @@ function buildGraph(
         selected: doc.selectedNodeId === node.id,
       });
       groupRow++;
-      edges.push({ id: `e-${node.id}`, source: node.id, target: parentId });
+      edges.push({
+        id: `e-${node.id}`,
+        source: node.id,
+        sourceHandle: "t-out",
+        target: parentId,
+        targetHandle: "t-in",
+      });
     }
     const childParent = node.id === "root" ? "root" : node.id;
     for (const child of node.children) walk(child, childParent, negated !== (node.op === "not"));
@@ -252,10 +267,25 @@ function buildGraph(
   edges.push({
     id: "e-root-action",
     source: "root",
+    sourceHandle: "t-out",
     target: "action",
+    targetHandle: "t-in",
     animated: Boolean(evaluation?.satisfied),
     style: { strokeWidth: 2 },
+    reconnectable: false,
+    deletable: false,
   });
+  // The order action's market binding, drawable/deletable like condition binds.
+  if (doc.action.kind === "order" && isBound(doc.action.market)) {
+    edges.push({
+      id: "m-action",
+      source: `market:${doc.action.market.tokenId}`,
+      sourceHandle: "m-out",
+      target: "action",
+      targetHandle: "m-in",
+      style: { strokeDasharray: "4 3" },
+    });
+  }
 
   // Manual sizes (resize handles / expand toggle) ride along with positions.
   for (const n of nodes) {
@@ -314,14 +344,24 @@ function reconcileEdges(prev: Edge[], fresh: Edge[]): Edge[] {
   return fresh.map((fe) => {
     const pe = prevById.get(fe.id);
     if (!pe) return fe;
-    if (pe.source === fe.source && pe.target === fe.target && pe.animated === fe.animated) {
+    if (
+      pe.source === fe.source &&
+      pe.target === fe.target &&
+      pe.sourceHandle === fe.sourceHandle &&
+      pe.targetHandle === fe.targetHandle &&
+      pe.animated === fe.animated
+    ) {
       return pe;
     }
     return fe;
   });
 }
 
-export default function BuilderCanvas({
+/** Full MarketRef for a canvas market node (market node data lacks conditionId). */
+const refForToken = (doc: StrategyDoc, tokenId: string) =>
+  docMarketRefs(doc).find((r) => r.tokenId === tokenId) ?? null;
+
+function BuilderCanvasInner({
   evaluation,
   issues,
 }: {
@@ -332,6 +372,21 @@ export default function BuilderCanvas({
   const select = useBuilderStore((s) => s.select);
   const setPosition = useBuilderStore((s) => s.setPosition);
   const revealTick = useBuilderStore((s) => s.revealTick);
+  const { getIntersectingNodes } = useReactFlow();
+
+  // Connection UX state: the last refusal reason (shown as a transient hint)
+  // and the current drop-to-bind highlight target.
+  const rejectReason = useRef<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const dropTarget = useRef<string | null>(null);
+  const dragThrottle = useRef(0);
+
+  const showHint = useCallback((msg: string) => {
+    setHint(msg);
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => setHint(null), 2_600);
+  }, []);
 
   // Latest props/doc for effects that must not re-fire on their changes.
   const evalRef = useRef(evaluation);
@@ -448,9 +503,52 @@ export default function BuilderCanvas({
     [select, setPosition],
   );
 
+  /**
+   * Translate a completed connection into a doc mutation. NEVER addEdge —
+   * edges are 100% doc-derived and any local edge would be wiped by the next
+   * reconcile (see the header invariant).
+   */
+  const applyConnection = useCallback((c: { source: string | null; target: string | null }) => {
+    const store = useBuilderStore.getState();
+    const d = store.doc;
+    if (!c.source || !c.target) return;
+    if (c.source.startsWith("market:")) {
+      const tokenId = c.source.slice("market:".length);
+      const ref = refForToken(d, tokenId);
+      if (!ref) return;
+      const meta = d.marketMeta[tokenId];
+      store.bindMarket(c.target === "action" ? "action" : c.target, ref, meta);
+      return;
+    }
+    store.moveNode(c.source, c.target === "root" ? "root" : c.target);
+  }, []);
+
+  /** Unbind a market edge, keeping the market block on the canvas as watched. */
+  const unbindEdge = useCallback((edge: Edge) => {
+    const store = useBuilderStore.getState();
+    const d = store.doc;
+    const tokenId = edge.source.startsWith("market:") ? edge.source.slice("market:".length) : null;
+    if (tokenId) {
+      const ref = refForToken(d, tokenId);
+      if (ref) store.addWatchedMarket(ref, d.marketMeta[tokenId]);
+    }
+    store.bindMarket(edge.id === "m-action" ? "action" : edge.target, UNBOUND);
+  }, []);
+
+  const isValidConnection = useCallback((c: Edge | Connection) => {
+    const verdict = validateConnection(docRef.current, {
+      source: c.source ?? null,
+      target: c.target ?? null,
+      sourceHandle: c.sourceHandle ?? null,
+      targetHandle: c.targetHandle ?? null,
+    });
+    rejectReason.current = verdict.ok ? null : verdict.reason;
+    return verdict.ok;
+  }, []);
+
   return (
     <div
-      className="h-full min-h-[420px] w-full rounded-xl border border-border bg-surface-2/50"
+      className="relative h-full min-h-[420px] w-full rounded-xl border border-border bg-surface-2/50"
       data-tour="builder-canvas"
     >
       <ReactFlow
@@ -461,27 +559,105 @@ export default function BuilderCanvas({
         onNodeDragStart={(_, node) => {
           draggingId.current = node.id;
         }}
-        onNodeDragStop={() => {
+        onNodeDrag={(_, node) => {
+          // Drop-to-bind: dragging a market block over a bindable target
+          // highlights it (bind happens on drop). Throttled hit-testing.
+          if (!node.id.startsWith("market:")) return;
+          const now = Date.now();
+          if (now - dragThrottle.current < 60) return;
+          dragThrottle.current = now;
+          const hits = getIntersectingNodes(node).map((n) => n.id);
+          const target = dropTargetFor(docRef.current, node.id.slice("market:".length), hits);
+          if (target !== dropTarget.current) {
+            dropTarget.current = target;
+            setNodes((prev) =>
+              prev.map((n) => {
+                const wants = n.id === target ? "drop-target" : undefined;
+                const has = n.className === "drop-target" ? "drop-target" : undefined;
+                return wants === has ? n : { ...n, className: wants };
+              }),
+            );
+          }
+        }}
+        onNodeDragStop={(_, node) => {
           draggingId.current = null;
+          const target = dropTarget.current;
+          if (target && node.id.startsWith("market:")) {
+            applyConnection({ source: node.id, target });
+          }
+          if (target !== null) {
+            dropTarget.current = null;
+            setNodes((prev) =>
+              prev.map((n) => (n.className === "drop-target" ? { ...n, className: undefined } : n)),
+            );
+          }
         }}
         onPaneClick={() => select(null)}
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         proOptions={{ hideAttribution: true }}
-        nodesConnectable={false}
+        // ── User-drawn connections (doc mutations, never local edges) ──
+        nodesConnectable
+        connectionLineStyle={{ strokeDasharray: "4 3" }}
+        isValidConnection={isValidConnection}
+        onConnect={(c) => applyConnection(c)}
+        onConnectEnd={(_, state) => {
+          if (!state.isValid && state.toHandle && rejectReason.current) {
+            showHint(rejectReason.current);
+          }
+          rejectReason.current = null;
+        }}
+        edgesReconnectable
+        onReconnect={(oldEdge, next) => {
+          const verdict = validateConnection(docRef.current, {
+            source: next.source,
+            target: next.target,
+            sourceHandle: next.sourceHandle ?? null,
+            targetHandle: next.targetHandle ?? null,
+          });
+          if (!verdict.ok) {
+            showHint(verdict.reason);
+            return;
+          }
+          if (oldEdge.id.startsWith("m-")) {
+            // Rebinding: moving either end re-points the market binding.
+            if (next.target !== oldEdge.target || next.target === "action") {
+              unbindEdge(oldEdge);
+            }
+            applyConnection(next);
+            return;
+          }
+          // Tree edges: only the parent end may move (a child edge is 1:1).
+          if (next.source !== oldEdge.source) {
+            showHint("Drag the group end of the connection to re-nest a block.");
+            return;
+          }
+          applyConnection(next);
+        }}
         // Keyboard delete works on blocks; React Flow already ignores it while
         // an input has focus. Root, action and referenced markets are guarded.
         deleteKeyCode={["Backspace", "Delete"]}
-        onBeforeDelete={async ({ nodes: toDelete }) => {
+        onBeforeDelete={async ({ nodes: toDelete, edges: edgesToDelete }) => {
           const d = docRef.current;
-          const allowed = toDelete.filter((n) => {
+          const allowedNodes = toDelete.filter((n) => {
             if (n.id === "root" || n.id === "action") return false;
             if (n.id.startsWith("market:")) {
               return !isTokenReferenced(d, n.id.slice("market:".length));
             }
             return true;
           });
-          return allowed.length > 0 ? { nodes: allowed, edges: [] } : false;
+          const allowedEdges = edgesToDelete.filter((e) => {
+            if (e.id.startsWith("m-")) return true; // unbind
+            if (e.id === "e-root-action") return false;
+            if (e.id.startsWith("e-")) {
+              // Un-nest only makes sense when the block sits inside a group.
+              return e.target !== "root";
+            }
+            return false;
+          });
+          return allowedNodes.length > 0 || allowedEdges.length > 0
+            ? { nodes: allowedNodes, edges: allowedEdges }
+            : false;
         }}
         onNodesDelete={(deleted) => {
           const store = useBuilderStore.getState();
@@ -493,10 +669,38 @@ export default function BuilderCanvas({
             }
           }
         }}
+        onEdgesDelete={(deleted) => {
+          const store = useBuilderStore.getState();
+          for (const e of deleted) {
+            if (e.id.startsWith("m-")) {
+              unbindEdge(e);
+            } else if (e.id.startsWith("e-") && e.target !== "root") {
+              // Deleting a child→group edge un-nests the block to the root.
+              store.moveNode(e.source, "root");
+            }
+          }
+        }}
       >
         <Background gap={24} size={1.5} />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {hint ? (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[320px] rounded-lg border border-warn/40 bg-warn/10 px-3 py-1.5 text-[12px] leading-snug text-warn shadow-panel">
+          {hint}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/** Provider wrapper: getIntersectingNodes (drop-to-bind) needs the RF context. */
+export default function BuilderCanvas(props: {
+  evaluation: DraftEvaluation | undefined;
+  issues: BuilderIssue[];
+}) {
+  return (
+    <ReactFlowProvider>
+      <BuilderCanvasInner {...props} />
+    </ReactFlowProvider>
   );
 }

@@ -63,7 +63,8 @@ export const GTD_MAX_EXPIRES_AFTER_MS = 86_400_000;
 export const TRAILING_OFFSET_MIN = 0.01;
 export const TRAILING_OFFSET_MAX = 0.5;
 
-const depthOf = (node: ExprNode): number =>
+/** Expression depth (a condition counts 1). Exported for builder-side guards. */
+export const depthOf = (node: ExprNode): number =>
   node.type === "condition" ? 1 : 1 + Math.max(0, ...node.children.map(depthOf));
 
 const walkGroups = (

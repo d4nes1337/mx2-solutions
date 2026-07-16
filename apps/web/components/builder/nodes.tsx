@@ -222,7 +222,7 @@ export const MarketNode = memo(function MarketNode({
           {data.deletable ? "" : " Referenced by a block — unbind it before removing."}
         </p>
       ) : null}
-      <Handle type="source" position={Position.Right} className="!bg-border-strong" />
+      <Handle id="m-out" type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
 });
@@ -241,7 +241,7 @@ export const ConditionNode = memo(function ConditionNode({
   return (
     <div className={shell(selected, sized, Boolean(data.issue))}>
       <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} />
-      <Handle type="target" position={Position.Left} className="!bg-border-strong" />
+      <Handle id="m-in" type="target" position={Position.Left} className="!bg-border-strong" />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-faint">
@@ -273,7 +273,7 @@ export const ConditionNode = memo(function ConditionNode({
         fit={FIT_SIZE.condition}
         expanded={showEditor}
       />
-      <Handle type="source" position={Position.Right} className="!bg-border-strong" />
+      <Handle id="t-out" type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
 });
@@ -299,7 +299,7 @@ export const LogicNode = memo(function LogicNode({
       )}
     >
       <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} maxHeight={320} />
-      <Handle type="target" position={Position.Left} className="!bg-border-strong" />
+      <Handle id="t-in" type="target" position={Position.Left} className="!bg-border-strong" />
       <div className="flex items-center gap-1.5">
         <GitBranch size={13} className="text-accent" aria-hidden />
         <span className="text-[12px] font-semibold tracking-wide text-fg">{label}</span>
@@ -332,7 +332,7 @@ export const LogicNode = memo(function LogicNode({
           expanded={showEditor}
         />
       ) : null}
-      <Handle type="source" position={Position.Right} className="!bg-border-strong" />
+      <Handle id="t-out" type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
 });
@@ -361,7 +361,26 @@ export const ActionNode = memo(function ActionNode({
   return (
     <div className={shell(selected, sized, Boolean(data.issue))}>
       <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} />
-      <Handle type="target" position={Position.Left} className="!bg-border-strong" />
+      <Handle
+        id="t-in"
+        type="target"
+        position={Position.Left}
+        className="!bg-border-strong"
+        isConnectableStart={false}
+        isConnectableEnd={false}
+      />
+      {data.kind === "order" ? (
+        // Market-binding port: drag a market's right handle here to set the
+        // market this order trades (only order actions trade a market).
+        <Handle
+          id="m-in"
+          type="target"
+          position={Position.Left}
+          style={{ top: "70%" }}
+          className="!bg-border-strong"
+          isConnectableStart={false}
+        />
+      ) : null}
       <div className="flex items-center gap-2">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-pos/10 text-pos">
           {icon}

@@ -445,6 +445,22 @@ export const quoteSessions = pgTable(
     dailyLossUsd: numeric("daily_loss_usd").notNull().default("0"),
     rewardsAccruedUsd: numeric("rewards_accrued_usd").notNull().default("0"),
     lastCycleAt: timestamp("last_cycle_at", { withTimezone: true }),
+    /**
+     * Confirm-mode batch protocol (migration 0012, RFC-0003 checkpoint 3):
+     * the worker proposes {cancels, places, mergePairs} + its hash; the API
+     * writes ONLY approved_batch_hash; the worker executes only when the
+     * recomputed hash still matches (a moved book re-proposes — stale
+     * approvals structurally cannot execute).
+     */
+    pendingBatch: jsonb("pending_batch"),
+    pendingBatchHash: text("pending_batch_hash"),
+    pendingBatchAt: timestamp("pending_batch_at", { withTimezone: true }),
+    approvedBatchHash: text("approved_batch_hash"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    /** Fill accounting cost pools (avg entry per side) + daily-loss UTC day. */
+    inventoryYesCostUsd: numeric("inventory_yes_cost_usd").notNull().default("0"),
+    inventoryNoCostUsd: numeric("inventory_no_cost_usd").notNull().default("0"),
+    dailyLossDay: text("daily_loss_day"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -521,3 +537,36 @@ export const rewardAccruals = pgTable(
 
 export type RewardAccrualRow = typeof rewardAccruals.$inferSelect;
 export type NewRewardAccrualRow = typeof rewardAccruals.$inferInsert;
+
+/**
+ * Owner-only trading-wallet withdrawals (migration 0012). Destination is
+ * ALWAYS the session user's login wallet, resolved server-side — never client
+ * input. The (wallet, idempotency key) unique index is the double-submit
+ * guard; audit events mirror every state change.
+ */
+export const walletWithdrawals = pgTable(
+  "wallet_withdrawals",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    depositWalletAddress: text("deposit_wallet_address").notNull(),
+    destinationAddress: text("destination_address").notNull(),
+    amountUsd: numeric("amount_usd").notNull(),
+    state: text("state").notNull().default("requested"), // requested | submitted | confirmed | failed
+    relayerTransactionId: text("relayer_transaction_id"),
+    transactionHash: text("transaction_hash"),
+    error: text("error"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("wallet_withdrawals_idem_unique").on(t.walletAddress, t.idempotencyKey),
+    index("wallet_withdrawals_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type WalletWithdrawalRow = typeof walletWithdrawals.$inferSelect;
+export type NewWalletWithdrawalRow = typeof walletWithdrawals.$inferInsert;

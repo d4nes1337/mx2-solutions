@@ -11,14 +11,21 @@ import {
   createRuntimeFlagStore,
   createOrderIntentStore,
   createClobCredentialStore,
+  createTradingAccountStore,
+  createTradingAccountClobCredentialStore,
 } from "@mx2/db";
-import { createAuthenticatedClobClient, createUsdcBalanceReader } from "@mx2/polymarket-client";
+import {
+  createAuthenticatedClobClient,
+  createConfiguredDepositWalletRelayer,
+  createPusdBalanceReader,
+} from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
 import { createQuoterManager, type QuoterManager } from "./quoter/manager.js";
-import { createShadowExecutor } from "./quoter/executor.js";
+import { createLiveCapableProvider } from "./quoter/executor-provider.js";
+import { createRewardsPoller, type RewardsPoller } from "./quoter/rewards-poller.js";
 import { createQuoterStore } from "@mx2/db";
 
 /**
@@ -87,16 +94,19 @@ const main = async (): Promise<void> => {
         runtimeFlags: createRuntimeFlagStore(dbHandle.db),
         orderIntents: createOrderIntentStore(dbHandle.db),
         clobCredentials: createClobCredentialStore(dbHandle.db),
+        tradingAccounts: createTradingAccountStore(dbHandle.db),
+        accountClobCredentials: createTradingAccountClobCredentialStore(dbHandle.db),
         tradingClobClient: createAuthenticatedClobClient({
           baseUrl: config.polymarket.clobBaseUrl,
         }),
         ruleStore,
         triggerStore,
         auditStore,
-        // Balance pre-check (W6): raw USDC.e units → USD (6 decimals).
+        // Balance pre-check (W6/W4): the deposit wallet's pUSD — its actual
+        // spendable balance (INTEGRATION §23) — raw 6-decimal units → USD.
         balanceOfUsdc: config.polygonRpcUrl
           ? (() => {
-              const readBalance = createUsdcBalanceReader(config.polygonRpcUrl);
+              const readBalance = createPusdBalanceReader(config.polygonRpcUrl);
               return async (owner: string) => Number(await readBalance(owner)) / 1e6;
             })()
           : null,
@@ -119,22 +129,84 @@ const main = async (): Promise<void> => {
     logger.warn("FEATURE_CONDITIONAL_RULES is off — rule evaluator disabled");
   }
 
-  // Maker-loop quoter (RFC-0003): SHADOW executor only — the live executor
-  // arrives with the W4 order path and is separately gated by
-  // FEATURE_MAKER_LOOP_LIVE plus the RFC's rollout ladder.
+  // Maker-loop quoter (RFC-0003). The executor is resolved PER CYCLE from the
+  // session's mode: shadow sessions always run; confirm/live sessions resolve
+  // the real executor only when FEATURE_MAKER_LOOP_LIVE plus every W2–W4
+  // prerequisite (signer, deposit wallet, CLOB creds, verified adapters,
+  // relayer) is present — anything missing halts the session visibly.
   let quoter: QuoterManager | null = null;
+  let rewardsPoller: RewardsPoller | null = null;
   if (config.features.makerLoop && config.features.conditionalRules) {
+    const quoterStore = createQuoterStore(dbHandle.db);
+    const quoterRuleStore = createRuleStore(dbHandle.db);
+    const quoterSigner = createConfiguredTradingSigner({
+      enabled: config.features.privySigning,
+      isProduction: config.env === "production",
+      mockSignerPrivateKey: config.mockSignerPrivateKey,
+      privy:
+        config.privy.appId && config.privy.appSecret && config.privy.authorizationKey
+          ? {
+              appId: config.privy.appId,
+              appSecret: config.privy.appSecret,
+              authorizationPrivateKey: config.privy.authorizationKey,
+              keyQuorumId: config.privy.keyQuorumId,
+              tradingPolicyId: config.privy.tradingPolicyId,
+              rpcUrl: config.polygonRpcUrl,
+            }
+          : undefined,
+    });
+    const quoterSharedDeps = {
+      config,
+      tradingSigner: quoterSigner,
+      privyWallets: createPrivyWalletStore(dbHandle.db),
+      tradingAccounts: createTradingAccountStore(dbHandle.db),
+      accountClobCredentials: createTradingAccountClobCredentialStore(dbHandle.db),
+    };
     quoter = createQuoterManager({
       logger,
-      ruleStore: createRuleStore(dbHandle.db),
-      quoterStore: createQuoterStore(dbHandle.db),
+      ruleStore: quoterRuleStore,
+      quoterStore,
       auditStore: createAuditStore(dbHandle.db),
       runtimeFlags: createRuntimeFlagStore(dbHandle.db),
-      executor: createShadowExecutor(),
+      executorProvider: createLiveCapableProvider({
+        ...quoterSharedDeps,
+        depositWalletRelayer: createConfiguredDepositWalletRelayer({
+          enabled: config.features.relayer,
+          relayerUrl: config.polymarket.relayer.url,
+          builderApiKey: config.polymarket.relayer.builderApiKey,
+          builderSecret: config.polymarket.relayer.builderSecret,
+          builderPassphrase: config.polymarket.relayer.builderPassphrase,
+          chainId: config.polymarket.chainId,
+          polygonRpcUrl: config.polygonRpcUrl,
+          signTypedData: async (owner, typedData) => {
+            if (!owner.ownerWalletId) {
+              throw new Error("Deposit-wallet relayer requires a provisioned Privy wallet id.");
+            }
+            const signed = await quoterSigner.signOrder({
+              wallet: { walletId: owner.ownerWalletId, address: owner.ownerAddress },
+              typedData,
+            });
+            if (!signed.ok) throw new Error(signed.error.message);
+            return signed.value.signature;
+          },
+        }),
+        tradingClobClient: createAuthenticatedClobClient({
+          baseUrl: config.polymarket.clobBaseUrl,
+        }),
+      }),
       subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
       unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
     });
-    logger.info("FEATURE_MAKER_LOOP is ON — quoter running in SHADOW mode");
+    rewardsPoller = createRewardsPoller({
+      logger,
+      ...quoterSharedDeps,
+      quoterStore,
+      ruleStore: quoterRuleStore,
+    });
+    logger.info(
+      { liveCapable: config.features.makerLoopLive },
+      "FEATURE_MAKER_LOOP is ON — quoter running (shadow by default; mode per session)",
+    );
   }
 
   const marketFeed = createMarketFeedManager({
@@ -160,6 +232,7 @@ const main = async (): Promise<void> => {
 
   evaluator?.start();
   quoter?.start();
+  rewardsPoller?.start();
 
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
@@ -170,6 +243,7 @@ const main = async (): Promise<void> => {
     clearInterval(heartbeat);
     evaluator?.stop();
     quoter?.stop();
+    rewardsPoller?.stop();
     marketFeed.close();
     await dbHandle.close();
     process.exit(0);

@@ -20,7 +20,7 @@ import {
 } from "@/lib/queries";
 import type { TradingAccount } from "@/lib/types";
 import { Badge, Button, cn } from "@/components/ui";
-import { TopUpSheet } from "./TopUpSheet";
+import { FundsSheet } from "./FundsSheet";
 
 function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -320,10 +320,11 @@ export function WalletCard({
       </div>
 
       {isPrivy && depositWalletAddress && (
-        <TopUpSheet
+        <FundsSheet
           open={topUpOpen}
           onClose={() => setTopUpOpen(false)}
           depositWalletAddress={depositWalletAddress}
+          signerAddress={account.signerAddress}
         />
       )}
     </>

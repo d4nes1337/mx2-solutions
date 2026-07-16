@@ -4,6 +4,43 @@ _Last updated: 2026-07-16_
 
 ## Recent
 
+- **Round 6: withdrawal path, live farming execution, canvas wiring (built; D-026).**
+  - **pUSD discovery (load-bearing, verified on-chain — INTEGRATION §23):** both V2 exchanges
+    use pUSD (`0xC011…2DFB`, 6dp) as collateral, and deposit wallets hold pUSD, not USDC.e
+    (owner's real wallet: ≈$103 pUSD, zero USDC.e). Allowances, balance reads, the withdraw
+    transfer and the worker's balance pre-check all moved to pUSD; raw USDC.e in a deposit
+    wallet is surfaced as "converting…".
+  - **Withdrawals (owner-only, R-031):** `POST /api/trading-wallet/withdraw` sends pUSD from
+    the deposit wallet to the SESSION login wallet via a gasless relayer batch — destination is
+    never client input (strict schema 400s smuggled fields, asserted by test); idempotent
+    `wallet_withdrawals` ledger (migration 0012) + full audit chain; unified **Funds sheet**
+    (Top up / Withdraw / History) replaces TopUpSheet.
+  - **W2–W4 order path (resolves RFC-0003 §7, partially unblocks R-017):** W2 deposit-wallet
+    allowance batch (pUSD + CTF to both V2 exchanges + verified adapters; chain = source of
+    truth, only gaps submitted); W3 server-signed ClobAuth for internal accounts (identity =
+    signer EOA, CLOB server time); W4 shared `submit1271Order` seam used identically by the
+    manual route, the auto-executor (step 10 hard-skip replaced with fail-closed skip reasons +
+    a full submit path: CAS rule claim, intent ledger, `rule.executed_auto`), and the quoter.
+  - **Live farming (B4–B6):** executor resolved PER CYCLE from the session mode (shadow always;
+    confirm/live require every prerequisite or the session halts visibly); venue open-order
+    sync → fill deltas → inventory/cost pools (`fill` events, R-032 approximation documented);
+    merges realize PnL from avg-cost pools with UTC daily-loss rollover; **confirm mode** =
+    sha256 batch-hash protocol (worker proposes, API approves WHERE-guarded, worker executes
+    only on hash re-match; cancels bypass approval as risk-reducing); rewards poller rolls CLOB
+    earnings into per-day accruals + the session scoreboard; `POST …/confirm` + geoblock on
+    mode escalation and every approval; live→shadow requires halt first.
+  - **Cockpit:** go-live readiness ladder (presence booleans only), humanized event stream,
+    confirm-approval inbox with stale-batch recovery, kill-switch drill strip; admin quoter
+    pause/resume (`quoter_paused`); `check-live-readiness` script (prints key NAMES only).
+  - **Canvas wiring (R6-C):** user-drawn edges translate synchronously to store mutations
+    (market→condition bind, market→order-action bind, condition/group re-parent via
+    `moveNode`), reconnect/delete-edge semantics (deleting a market edge keeps the market as
+    watched), drop-to-bind with highlight, human rejection hints; 12 new connection-rule tests.
+  - **Owner testing guide:** `docs/OWNER_TESTING_GUIDE.md` — env readiness, canvas checks,
+    $5-in/$2-out withdrawal staging test incl. crafted-destination rejection, the farming
+    ladder mapped to RFC-0003 checkpoints 2–4, kill-switch drill, regression smoke.
+  - Suite: 439 root + 122 web tests green; migration 0012 additive with rollback comments.
+
 - **Audit/polish round: canvas multitool, trailing engine, wallet restore, orderbook root-cause
   (built; D-025).** Owner's senior-audit brief executed end-to-end:
   - **Broken orderbook root-caused and fixed.** The builder passed a `conditionId` to

@@ -162,3 +162,113 @@ describe("inventory + caps", () => {
     expect(capBreach(100, 0, params())).toBeNull();
   });
 });
+
+describe("computeBatchHash (confirm-mode protocol)", () => {
+  const batch = () => ({
+    cancels: [],
+    places: [
+      { tokenId: "tok-yes", side: "BUY" as const, price: 0.48, size: 100 },
+      { tokenId: "tok-no", side: "BUY" as const, price: 0.48, size: 100 },
+    ],
+    mergePairs: 0,
+  });
+
+  it("is deterministic for identical batches (key order irrelevant)", async () => {
+    const { computeBatchHash } = await import("./engine.js");
+    expect(computeBatchHash(batch())).toBe(computeBatchHash(batch()));
+    expect(computeBatchHash(batch())).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("changes when any price, size, token or merge count changes", async () => {
+    const { computeBatchHash } = await import("./engine.js");
+    const base = computeBatchHash(batch());
+    const b1 = batch();
+    expect(
+      computeBatchHash({
+        ...b1,
+        places: [{ ...b1.places[0]!, price: 0.47 }, b1.places[1]!],
+      }),
+    ).not.toBe(base);
+    expect(computeBatchHash({ ...batch(), mergePairs: 25 })).not.toBe(base);
+    const b2 = batch();
+    expect(
+      computeBatchHash({
+        ...b2,
+        places: [{ ...b2.places[0]!, size: 50 }, b2.places[1]!],
+      }),
+    ).not.toBe(base);
+  });
+});
+
+describe("diffOpenOrders (fill detection, R-032)", () => {
+  const LOOP_TOKENS = ["tok-yes", "tok-no"];
+  const restingQuote = (over: Partial<RestingQuote> = {}): RestingQuote => ({
+    tokenId: "tok-yes",
+    side: "BUY",
+    price: 0.48,
+    size: 100,
+    orderId: "ord-1",
+    sizeMatched: 0,
+    ...over,
+  });
+
+  it("reports the DELTA when size_matched advances, updating the baseline", async () => {
+    const { diffOpenOrders } = await import("./engine.js");
+    const d = diffOpenOrders(
+      [restingQuote({ sizeMatched: 10 })],
+      [{ orderId: "ord-1", tokenId: "tok-yes", price: 0.48, originalSize: 100, sizeMatched: 35 }],
+      LOOP_TOKENS,
+    );
+    expect(d.fills).toEqual([
+      {
+        orderId: "ord-1",
+        tokenId: "tok-yes",
+        price: 0.48,
+        sizeFilled: 25,
+        cumulativeMatched: 35,
+      },
+    ]);
+    expect(d.resting[0]?.sizeMatched).toBe(35);
+  });
+
+  it("treats a vanished order as filled for the remainder (fail-closed over-count)", async () => {
+    const { diffOpenOrders } = await import("./engine.js");
+    const d = diffOpenOrders([restingQuote({ sizeMatched: 40 })], [], LOOP_TOKENS);
+    expect(d.fills[0]?.sizeFilled).toBe(60);
+    expect(d.resting).toHaveLength(0);
+  });
+
+  it("adopts unknown venue orders on loop tokens with their matched baseline (restart)", async () => {
+    const { diffOpenOrders } = await import("./engine.js");
+    const d = diffOpenOrders(
+      [],
+      [
+        { orderId: "ord-9", tokenId: "tok-no", price: 0.47, originalSize: 100, sizeMatched: 15 },
+        { orderId: "ord-x", tokenId: "other", price: 0.3, originalSize: 10, sizeMatched: 0 },
+      ],
+      LOOP_TOKENS,
+    );
+    expect(d.adopted).toHaveLength(1);
+    expect(d.adopted[0]?.orderId).toBe("ord-9");
+    expect(d.adopted[0]?.sizeMatched).toBe(15); // pre-restart fills NOT recounted
+    expect(d.fills).toHaveLength(0);
+  });
+
+  it("drops fully-filled orders from the resting set after reporting the fill", async () => {
+    const { diffOpenOrders } = await import("./engine.js");
+    const d = diffOpenOrders(
+      [restingQuote()],
+      [{ orderId: "ord-1", tokenId: "tok-yes", price: 0.48, originalSize: 100, sizeMatched: 100 }],
+      LOOP_TOKENS,
+    );
+    expect(d.fills[0]?.sizeFilled).toBe(100);
+    expect(d.resting).toHaveLength(0);
+  });
+
+  it("leaves shadow (virtual) quotes untouched", async () => {
+    const { diffOpenOrders } = await import("./engine.js");
+    const d = diffOpenOrders([restingQuote({ orderId: null })], [], LOOP_TOKENS);
+    expect(d.fills).toHaveLength(0);
+    expect(d.resting).toHaveLength(1);
+  });
+});

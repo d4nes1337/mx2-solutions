@@ -4,6 +4,7 @@
  * the engine's StrategyDefinition plus editor-only metadata (node positions,
  * selection, market display names) that never leaves the browser.
  */
+import { EXPR_LIMITS, depthOf } from "@mx2/rules";
 import type {
   ActionV2,
   ConditionV2,
@@ -104,6 +105,49 @@ export const removeNodeFromTree = (root: GroupNode, id: string): GroupNode => {
   };
   const out = strip(root);
   return out && out.type === "group" ? out : { ...root, children: [] };
+};
+
+/**
+ * Move a node under a new parent, preserving its identity (id, and therefore
+ * canvas positions/selection/eval-result identity). Returns the SAME root
+ * reference when the move is refused, so callers can detect a no-op.
+ * Guards: no root/self moves; target must exist and be an AND/OR group (NOT
+ * groups are single-child wrappers) or "root"; no moving a group into its own
+ * subtree; depth must stay within EXPR_LIMITS after the move. The emptied
+ * source group auto-collapses via removeNodeFromTree.
+ */
+export const moveNodeInTree = (root: GroupNode, id: string, newParentId: string): GroupNode => {
+  if (id === "root" || id === newParentId) return root;
+  const moved = findNode(root, id);
+  if (!moved) return root;
+
+  const targetNode = newParentId === "root" ? root : findNode(root, newParentId);
+  if (!targetNode || targetNode.type !== "group" || targetNode.op === "not") return root;
+  // No-op when already a direct child of the target.
+  if (targetNode.children.some((c) => c.id === id)) return root;
+  // A group can't move into its own subtree.
+  if (moved.type === "group" && findNode(moved, newParentId) !== null) return root;
+
+  // Detach, collapsing groups the move emptied — but NEVER the target group
+  // itself (an empty ANY-OF/ALL-OF group from the palette IS a valid target).
+  const strip = (node: ExprNode): ExprNode | null => {
+    if (node.id === id) return null;
+    if (node.type !== "group") return node;
+    const children = node.children.map(strip).filter((c): c is ExprNode => c !== null);
+    if (node.id !== "root" && node.id !== newParentId && children.length === 0) return null;
+    return { ...node, children };
+  };
+  const strippedRaw = strip(root);
+  const stripped = strippedRaw && strippedRaw.type === "group" ? strippedRaw : root;
+  const survivingTarget = newParentId === "root" ? stripped : findNode(stripped, newParentId);
+  if (!survivingTarget || survivingTarget.type !== "group") return root;
+
+  const inserted = replaceNodeInTree(stripped, survivingTarget.id, {
+    ...survivingTarget,
+    children: [...survivingTarget.children, moved],
+  });
+  if (depthOf(inserted) > EXPR_LIMITS.maxDepth) return root;
+  return inserted;
 };
 
 export const replaceNodeInTree = (root: GroupNode, id: string, next: ExprNode): GroupNode => {

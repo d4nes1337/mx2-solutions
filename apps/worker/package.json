@@ -15,7 +15,8 @@
     "@mx2/observability": "workspace:*",
     "@mx2/polymarket-client": "workspace:*",
     "@mx2/rules": "workspace:*",
-    "@mx2/trading-signer": "workspace:*"
+    "@mx2/trading-signer": "workspace:*",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "pino-pretty": "^13.0.0",

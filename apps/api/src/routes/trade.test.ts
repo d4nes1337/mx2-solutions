@@ -25,6 +25,7 @@ import type {
   TradingAccountRow,
   TradingAccountClobCredentialStore,
   TradingAccountClobCredentialRow,
+  WithdrawalStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -409,6 +410,7 @@ const buildTestApp = (
     delegations?: DelegationStore;
     allowanceReader?: AllowanceReader | null;
     auditStore?: AuditStore;
+    withdrawals?: WithdrawalStore;
   } = {},
 ) => {
   const deps: Parameters<typeof buildApp>[0] = {
@@ -433,6 +435,7 @@ const buildTestApp = (
     triggerStore: mockTriggerStore,
     privyWallets: overrides.privyWallets ?? mockPrivyWallets,
     delegations: overrides.delegations ?? mockDelegations,
+    ...(overrides.withdrawals ? { withdrawals: overrides.withdrawals } : {}),
     tradingClobClient: overrides.tradingClobClient ?? mockTradingClobClient,
     tradingSigner: overrides.tradingSigner ?? mockTradingSigner,
     geoblockClient: overrides.geoblockClient ?? mockGeoblockClient,
@@ -987,9 +990,11 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
     await app.close();
   });
 
-  it("returns 409 for server-signing accounts until the relayer order path is enabled", async () => {
+  it("returns 409 for server-signing accounts when a prerequisite is missing (fail-closed)", async () => {
+    // Ready account but FEATURE_PRIVY_SIGNING off → the W4 path must refuse
+    // rather than sign with a disabled signer.
     const app = buildTestApp({
-      cfg: configPrivy,
+      cfg: configTradingEnabled,
       sessions: mockSessionsAuthed,
       tradingAccounts: internalReadyAccounts,
     });
@@ -1001,6 +1006,83 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
     });
     expect(res.statusCode).toBe(409);
     expect((res.json() as Record<string, unknown>).error).toBe("RELAYER_ORDER_PATH_NOT_ENABLED");
+    await app.close();
+  });
+
+  it("400s a server-signed order without tokenId/side (never guesses)", async () => {
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      tradingAccounts: internalReadyAccounts,
+    });
+    const { tokenId: _t, side: _s, ...withoutToken } = privyOrderBody;
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify(withoutToken),
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as Record<string, unknown>).error).toBe("INVALID_REQUEST");
+    await app.close();
+  });
+
+  it("submits a server-built POLY_1271 order (maker = signer = funder = deposit wallet)", async () => {
+    const submitted: { order: Record<string, unknown>; address: string; postOnly?: boolean }[] = [];
+    const intents: Record<string, unknown>[] = [];
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      tradingAccounts: internalReadyAccounts,
+      orderIntents: {
+        ...mockOrderIntents,
+        create: async (opts) => {
+          intents.push(opts as unknown as Record<string, unknown>);
+          return {
+            id: "intent-w4",
+            ...opts,
+            status: "pending",
+            clobOrderId: null,
+            errorMessage: null,
+            metadata: opts.metadata ?? {},
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          } as never;
+        },
+      },
+      tradingClobClient: {
+        ...mockTradingClobClient,
+        submitOrder: async (order, _type, _creds, address, _idem, opts) => {
+          submitted.push({
+            order: order as unknown as Record<string, unknown>,
+            address,
+            ...(opts?.postOnly !== undefined ? { postOnly: opts.postOnly } : {}),
+          });
+          return ok({ orderID: "clob-1271-1", status: "live" });
+        },
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify({ ...privyOrderBody, postOnly: true }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().clobOrderId).toBe("clob-1271-1");
+    expect(submitted).toHaveLength(1);
+    const order = submitted[0]!.order;
+    // The V2 struct: maker = signer = funder = the DEPOSIT wallet, sigType 3,
+    // ERC-7739 signature; the L2 header identity is the checksummed EOA.
+    expect((order["maker"] as string).toLowerCase()).toBe(FUNDER.toLowerCase());
+    expect((order["signer"] as string).toLowerCase()).toBe(FUNDER.toLowerCase());
+    expect(order["signatureType"]).toBe(3);
+    expect(order["tokenId"]).toBe("123456");
+    expect((order["signature"] as string).length).toBeGreaterThan(132); // 7739 envelope > plain sig
+    expect(submitted[0]!.address.toLowerCase()).toBe(EMBEDDED.toLowerCase());
+    expect(submitted[0]!.postOnly).toBe(true);
+    expect(intents[0]!["funder"]).toBe(FUNDER);
+    expect(intents[0]!["signingMode"]).toBe("server");
     await app.close();
   });
 
@@ -1025,7 +1107,9 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
     await app.close();
   });
 
-  it("POST /bootstrap-allowances is blocked until the relayer deposit wallet exists", async () => {
+  it("POST /bootstrap-allowances fails closed when the relayer is disabled", async () => {
+    // Allowances execute FROM the deposit wallet via the relayer batch (W2);
+    // without the relayer the route must refuse before touching anything.
     const reader: AllowanceReader = {
       erc20Allowance: async () => 0n,
       isApprovedForAll: async () => false,
@@ -1050,14 +1134,17 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
       url: "/api/trading-wallet/bootstrap-allowances",
       headers: { cookie: "mx2_session=tok" },
     });
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(503);
     const body = res.json() as Record<string, unknown>;
-    expect(body.error).toBe("DEPOSIT_WALLET_REQUIRED");
+    expect(body.error).toBe("RELAYER_DISABLED");
     expect(marked).toBe(false);
     await app.close();
   });
 
-  it("requires a manual CLOB auth signature until deposit-wallet auth is implemented", async () => {
+  it("still requires a manual CLOB auth signature for EXTERNAL accounts", async () => {
+    // Server-side ClobAuth (W3) only covers internal Privy accounts — an
+    // external wallet's key never touches the server, so no body signature
+    // means 409, exactly as before.
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
@@ -1072,6 +1159,123 @@ describe("POST /api/trade/orders (Privy deposit-wallet guardrails)", () => {
     const body = res.json() as Record<string, unknown>;
     expect(body.error).toBe("MANUAL_SIGNATURE_REQUIRED");
     await app.close();
+  });
+
+  describe("server-side ClobAuth for internal accounts (W3)", () => {
+    const internalPrivyAccount = () =>
+      makeTradingAccountRow({
+        kind: "internal_privy",
+        signerAddress: "0x1111111111111111111111111111111111111111",
+        privyWalletId: "pw-test",
+        depositWalletAddress: "0x9999999999999999999999999999999999999999",
+        signatureType: 3,
+        signingMode: "server",
+      });
+    const internalAccounts: TradingAccountStore = {
+      ...mockTradingAccounts,
+      getPrimary: async () => internalPrivyAccount(),
+      findByOwner: async () => internalPrivyAccount(),
+    };
+
+    it("derives L2 creds with a server-signed ClobAuth at CLOB server time", async () => {
+      const derived: Record<string, unknown>[] = [];
+      const upserts: string[] = [];
+      const events: string[] = [];
+      const app = buildTestApp({
+        cfg: configPrivy,
+        sessions: mockSessionsAuthed,
+        tradingAccounts: internalAccounts,
+        tradingClobClient: {
+          ...mockTradingClobClient,
+          getServerTime: async () => ok(1_782_226_240),
+          deriveApiKey: async (params) => {
+            derived.push(params as unknown as Record<string, unknown>);
+            return ok({ apiKey: "ak-1271", secret: "c2VjcmV0", passphrase: "pass" });
+          },
+        },
+        accountClobCredentials: {
+          ...mockAccountClobCredentials,
+          upsert: async (id, owner, encryptedCreds) => {
+            upserts.push(id);
+            return { tradingAccountId: id, ownerWalletAddress: owner, encryptedCreds } as never;
+          },
+        },
+        auditStore: {
+          ...mockAuditStore,
+          emit: async (e) => {
+            events.push(e.action);
+            return mockAuditStore.emit(e);
+          },
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/trade/credentials/setup",
+        headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+        body: JSON.stringify({}),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().apiKey).toBe("ak-1271");
+      expect(derived).toHaveLength(1);
+      // Identity = the checksummed signer EOA; timestamp = CLOB server time;
+      // nonce = Polymarket's default 0.
+      expect(derived[0]!["address"]).toBe("0x1111111111111111111111111111111111111111");
+      expect(derived[0]!["timestamp"]).toBe("1782226240");
+      expect(derived[0]!["nonce"]).toBe("0");
+      expect(typeof derived[0]!["l1Signature"]).toBe("string");
+      expect((derived[0]!["l1Signature"] as string).length).toBe(132); // plain 65-byte sig
+      expect(upserts).toEqual([TRADING_ACCOUNT_ID]);
+      expect(events).toContain("trade.credentials.setup");
+      await app.close();
+    });
+
+    it("502s (nothing stored) when the signer refuses", async () => {
+      const upserts: string[] = [];
+      const app = buildTestApp({
+        cfg: configPrivy,
+        sessions: mockSessionsAuthed,
+        tradingAccounts: internalAccounts,
+        tradingSigner: {
+          ...mockTradingSigner,
+          signClobAuth: async () =>
+            err({ code: "POLICY_DENIED" as const, message: "policy says no" }),
+        },
+        accountClobCredentials: {
+          ...mockAccountClobCredentials,
+          upsert: async (id, owner, encryptedCreds) => {
+            upserts.push(id);
+            return { tradingAccountId: id, ownerWalletAddress: owner, encryptedCreds } as never;
+          },
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/trade/credentials/setup",
+        headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+        body: JSON.stringify({}),
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error).toBe("POLICY_DENIED");
+      expect(upserts).toHaveLength(0);
+      await app.close();
+    });
+
+    it("falls back to 409 when privy signing is disabled (fail-closed)", async () => {
+      const app = buildTestApp({
+        cfg: configTradingEnabled, // has master key, no FEATURE_PRIVY_SIGNING
+        sessions: mockSessionsAuthed,
+        tradingAccounts: internalAccounts,
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/trade/credentials/setup",
+        headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+        body: JSON.stringify({}),
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("MANUAL_SIGNATURE_REQUIRED");
+      await app.close();
+    });
   });
 });
 
@@ -1557,6 +1761,9 @@ describe("Trading wallet onboarding", () => {
           transactionId: "relayer-tx-1",
           transactionHash: "0xabc",
         }),
+      executeBatch: async () =>
+        ok({ depositWalletAddress, transactionId: "batch-1", state: "STATE_EXECUTED" }),
+      getTransactionState: async () => ok({ state: "STATE_CONFIRMED" }),
     };
     const tradingAccounts: TradingAccountStore = {
       ...mockTradingAccounts,
@@ -1781,6 +1988,44 @@ describe("Admin kill switch", () => {
     await app.close();
   });
 
+  it("POST /api/admin/quoter/pause flips the quoter-only kill switch (audited)", async () => {
+    let capturedKey = "";
+    let capturedValue = "";
+    const captureFlags: RuntimeFlagStore = {
+      ...mockRuntimeFlags,
+      set: async (key, value, by) => {
+        capturedKey = key;
+        capturedValue = value;
+        return { key, value, updatedBy: by, updatedAt: new Date() };
+      },
+    };
+    const events: Record<string, unknown>[] = [];
+    const app = buildTestApp({
+      runtimeFlags: captureFlags,
+      auditStore: {
+        ...mockAuditStore,
+        emit: async (e) => {
+          events.push({ action: e.action, metadata: e.metadata });
+          return mockAuditStore.emit(e);
+        },
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/admin/quoter/pause",
+      headers: { "x-admin-secret": "test-admin-secret-123" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().quoterPaused).toBe(true);
+    expect(capturedKey).toBe("quoter_paused");
+    expect(capturedValue).toBe("true");
+    expect(events).toContainEqual({
+      action: "kill_switch.toggled",
+      metadata: { flag: "quoter_paused", switch: "quoter" },
+    });
+    await app.close();
+  });
+
   it("POST /api/admin/trading/resume lifts kill switch", async () => {
     let capturedValue = "";
     const captureFlags: RuntimeFlagStore = {
@@ -1924,6 +2169,412 @@ describe("Geoblock reporting (status endpoint)", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as Record<string, unknown>;
     expect((body.geoblock as Record<string, unknown>).status).toBe("blocked");
+    await app.close();
+  });
+});
+
+// ── Owner-only withdrawals (R6 Track A) ─────────────────────────────────────
+
+describe("POST /api/trading-wallet/withdraw", () => {
+  const DEPOSIT = "0x9999999999999999999999999999999999999999";
+
+  const configWithdraw = loadConfig({
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
+    TRADING_ADMIN_SECRET: "test-admin-secret-123",
+    FEATURE_LIVE_TRADING: "true",
+    FEATURE_PRIVY_SIGNING: "true",
+    FEATURE_RELAYER: "true",
+    FEATURE_WALLET_WITHDRAW: "true",
+    MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+    POLYGON_RPC_URL: "https://polygon.example.test",
+    POLYMARKET_RELAYER_URL: "https://relayer.example.test",
+    POLYMARKET_BUILDER_API_KEY: "builder-key",
+    POLYMARKET_BUILDER_SECRET: "builder-secret",
+    POLYMARKET_BUILDER_PASSPHRASE: "builder-passphrase",
+  });
+
+  const internalAccount = () =>
+    makeTradingAccountRow({
+      id: "acct-int",
+      kind: "internal_privy",
+      signerAddress: "0x1111111111111111111111111111111111111111",
+      privyWalletId: "pw-test",
+      depositWalletAddress: DEPOSIT,
+      status: "ready",
+    });
+
+  const makeWithdrawalStoreMock = () => {
+    const rows = new Map<string, Record<string, unknown>>();
+    const store: WithdrawalStore = {
+      create: async (opts) => {
+        if (rows.has(opts.idempotencyKey)) return null;
+        const row = {
+          id: `wd-${rows.size + 1}`,
+          walletAddress: opts.walletAddress.toLowerCase(),
+          depositWalletAddress: opts.depositWalletAddress,
+          destinationAddress: opts.destinationAddress.toLowerCase(),
+          amountUsd: String(opts.amountUsd),
+          state: "requested",
+          relayerTransactionId: null,
+          transactionHash: null,
+          error: null,
+          idempotencyKey: opts.idempotencyKey,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        rows.set(opts.idempotencyKey, row);
+        return row as never;
+      },
+      updateState: async (id, update) => {
+        for (const row of rows.values()) {
+          if (row["id"] === id) Object.assign(row, update);
+        }
+      },
+      findByIdempotencyKey: async (_w, key) => (rows.get(key) as never) ?? null,
+      listByWallet: async () => [...rows.values()] as never,
+    };
+    return { store, rows };
+  };
+
+  const withdrawHarness = (
+    over: {
+      cfg?: ReturnType<typeof loadConfig>;
+      balanceRaw?: bigint;
+      batchFails?: boolean;
+      reader?: AllowanceReader;
+      accounts?: TradingAccountRow[];
+    } = {},
+  ) => {
+    const { events, auditStore } = (() => {
+      const events: string[] = [];
+      return {
+        events,
+        auditStore: {
+          ...mockAuditStore,
+          emit: async (e: Parameters<AuditStore["emit"]>[0]) => {
+            events.push(e.action);
+            return mockAuditStore.emit(e);
+          },
+        } as AuditStore,
+      };
+    })();
+    const batches: { calls: { target: string; value: string; data: string }[] }[] = [];
+    const relayer: DepositWalletRelayer = {
+      enabled: true,
+      deriveDepositWalletAddress: async (owner) =>
+        ok({ ownerAddress: owner.ownerAddress, depositWalletAddress: DEPOSIT }),
+      getDeploymentStatus: async (owner) =>
+        ok({
+          ownerAddress: owner.ownerAddress,
+          depositWalletAddress: DEPOSIT,
+          deployed: true,
+          state: "STATE_CONFIRMED",
+        }),
+      deployDepositWallet: async () => {
+        throw new Error("not needed");
+      },
+      executeBatch: async (_owner, calls) => {
+        if (over.batchFails) {
+          return {
+            ok: false as const,
+            error: { code: "RELAYER_UPSTREAM_ERROR" as const, message: "boom" },
+          };
+        }
+        batches.push({ calls });
+        return ok({
+          depositWalletAddress: DEPOSIT,
+          transactionId: "batch-77",
+          state: "STATE_EXECUTED",
+        });
+      },
+      getTransactionState: async () => ok({ state: "STATE_CONFIRMED" }),
+    };
+    const { store } = makeWithdrawalStoreMock();
+    const app = buildTestApp({
+      cfg: over.cfg ?? configWithdraw,
+      sessions: mockSessionsAuthed,
+      auditStore,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingAccounts: {
+        ...mockTradingAccounts,
+        listByOwner: async () => over.accounts ?? [internalAccount()],
+      },
+      depositWalletRelayer: relayer,
+      withdrawals: store,
+      allowanceReader: over.reader ?? {
+        erc20Allowance: async () => 0n,
+        isApprovedForAll: async () => false,
+        erc20Balance: async () => over.balanceRaw ?? 100_000_000n, // $100
+      },
+    });
+    return { app, events, batches };
+  };
+
+  const post = (app: ReturnType<typeof buildTestApp>, payload: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/withdraw",
+      headers: { cookie: "mx2_session=tok", "content-type": "application/json" },
+      payload,
+    });
+
+  it("503s when the withdraw flag is off", async () => {
+    const { app } = withdrawHarness({ cfg: configRelayer });
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-1234567890" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("WALLET_WITHDRAW_DISABLED");
+    await app.close();
+  });
+
+  it("rejects a smuggled destination field (strict schema)", async () => {
+    const { app, batches } = withdrawHarness();
+    const res = await post(app, {
+      amountUsd: 5,
+      idempotencyKey: "k-1234567890",
+      destination: "0xattacker0000000000000000000000000000dead",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(batches).toHaveLength(0);
+    await app.close();
+  });
+
+  it("400s when the amount exceeds the on-chain balance", async () => {
+    const { app, batches } = withdrawHarness({ balanceRaw: 3_000_000n }); // $3
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-1234567890" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("INSUFFICIENT_BALANCE");
+    expect(res.json().availableUsd).toBe(3);
+    expect(batches).toHaveLength(0);
+    await app.close();
+  });
+
+  it("withdraws to the SESSION wallet only, with audit chain + ledger", async () => {
+    const { app, events, batches } = withdrawHarness();
+    const res = await post(app, { amountUsd: 2.5, idempotencyKey: "k-1234567890" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.destination).toBe(WALLET);
+    expect(body.relayer.transactionId).toBe("batch-77");
+
+    // Exactly one batch call: pUSD.transfer(sessionWallet, 2.5e6) — deposit
+    // wallets hold pUSD, not USDC.e (INTEGRATION_VERIFIED §23).
+    expect(batches).toHaveLength(1);
+    const call = batches[0]!.calls[0]!;
+    expect(call.target.toLowerCase()).toBe("0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb");
+    expect(call.data.slice(0, 10)).toBe("0xa9059cbb"); // transfer selector
+    // address word (32 bytes) contains the session wallet
+    expect(call.data.slice(10, 74).toLowerCase()).toContain(WALLET.slice(2).toLowerCase());
+    // amount word = 2_500_000 (0x2625a0)
+    expect(BigInt(`0x${call.data.slice(74, 138)}`)).toBe(2_500_000n);
+
+    expect(events).toContain("wallet.withdraw.requested");
+    expect(events).toContain("wallet.withdraw.submitted");
+    await app.close();
+  });
+
+  it("is idempotent — the same key never reaches the relayer twice", async () => {
+    const { app, batches } = withdrawHarness();
+    const first = await post(app, { amountUsd: 2, idempotencyKey: "k-repeat-123" });
+    expect(first.statusCode).toBe(200);
+    const second = await post(app, { amountUsd: 2, idempotencyKey: "k-repeat-123" });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().alreadySubmitted).toBe(true);
+    expect(batches).toHaveLength(1);
+    await app.close();
+  });
+
+  it("marks the ledger failed and audits when the relayer errors", async () => {
+    const { app, events } = withdrawHarness({ batchFails: true });
+    const res = await post(app, { amountUsd: 2, idempotencyKey: "k-fail-1234" });
+    expect(res.statusCode).toBe(502);
+    expect(events).toContain("wallet.withdraw.failed");
+    await app.close();
+  });
+});
+
+describe("POST /api/trading-wallet/bootstrap-allowances (deposit-wallet path, W2)", () => {
+  // Reuses the withdraw describe's constants via module scope is not possible —
+  // redeclare the essentials locally.
+  const DEPOSIT = "0x9999999999999999999999999999999999999999";
+  const PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb";
+  const CTF = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045";
+
+  const cfgRelayer = loadConfig({
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
+    TRADING_ADMIN_SECRET: "test-admin-secret-123",
+    FEATURE_PRIVY_SIGNING: "true",
+    FEATURE_RELAYER: "true",
+    MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+    POLYGON_RPC_URL: "https://polygon.example.test",
+    POLYMARKET_RELAYER_URL: "https://relayer.example.test",
+    POLYMARKET_BUILDER_API_KEY: "builder-key",
+    POLYMARKET_BUILDER_SECRET: "builder-secret",
+    POLYMARKET_BUILDER_PASSPHRASE: "builder-passphrase",
+  });
+
+  const harness = (
+    over: {
+      reader?: AllowanceReader;
+      accounts?: TradingAccountRow[];
+      batchFails?: boolean;
+    } = {},
+  ) => {
+    const events: string[] = [];
+    const auditStore = {
+      ...mockAuditStore,
+      emit: async (e: Parameters<AuditStore["emit"]>[0]) => {
+        events.push(e.action);
+        return mockAuditStore.emit(e);
+      },
+    } as AuditStore;
+    const batches: { calls: { target: string; value: string; data: string }[] }[] = [];
+    const relayer: DepositWalletRelayer = {
+      enabled: true,
+      deriveDepositWalletAddress: async (owner) =>
+        ok({ ownerAddress: owner.ownerAddress, depositWalletAddress: DEPOSIT }),
+      getDeploymentStatus: async (owner) =>
+        ok({
+          ownerAddress: owner.ownerAddress,
+          depositWalletAddress: DEPOSIT,
+          deployed: true,
+          state: "STATE_CONFIRMED",
+        }),
+      deployDepositWallet: async () => {
+        throw new Error("not needed");
+      },
+      executeBatch: async (_owner, calls) => {
+        if (over.batchFails) {
+          return {
+            ok: false as const,
+            error: { code: "RELAYER_UPSTREAM_ERROR" as const, message: "boom" },
+          };
+        }
+        batches.push({ calls });
+        return ok({
+          depositWalletAddress: DEPOSIT,
+          transactionId: "batch-allow-1",
+          state: "STATE_EXECUTED",
+        });
+      },
+      getTransactionState: async () => ok({ state: "STATE_CONFIRMED" }),
+    };
+    const marked: string[] = [];
+    const app = buildTestApp({
+      cfg: cfgRelayer,
+      sessions: mockSessionsAuthed,
+      auditStore,
+      privyWallets: {
+        ...mockPrivyWallets,
+        find: async () => ({ ...makePrivyWalletRow(), allowancesBootstrappedAt: null }),
+        markAllowancesBootstrapped: async (w) => {
+          marked.push(w);
+        },
+      },
+      tradingAccounts: {
+        ...mockTradingAccounts,
+        listByOwner: async () =>
+          over.accounts ?? [
+            makeTradingAccountRow({
+              id: "acct-int",
+              kind: "internal_privy",
+              signerAddress: "0x1111111111111111111111111111111111111111",
+              privyWalletId: "pw-test",
+              depositWalletAddress: DEPOSIT,
+              status: "ready",
+            }),
+          ],
+      },
+      depositWalletRelayer: relayer,
+      allowanceReader: over.reader ?? {
+        erc20Allowance: async () => 0n,
+        isApprovedForAll: async () => false,
+        erc20Balance: async () => 0n,
+      },
+    });
+    return { app, events, batches, marked };
+  };
+
+  const post = (app: ReturnType<typeof buildTestApp>) =>
+    app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/bootstrap-allowances",
+      headers: { cookie: "mx2_session=tok", "content-type": "application/json" },
+      payload: {},
+    });
+
+  it("409s until the deposit wallet exists", async () => {
+    const { app, batches } = harness({ accounts: [] });
+    const res = await post(app);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("DEPOSIT_WALLET_REQUIRED");
+    expect(batches).toHaveLength(0);
+    await app.close();
+  });
+
+  it("submits ONE batch containing exactly the missing grants (pUSD approve + CTF operator)", async () => {
+    const { app, events, batches, marked } = harness();
+    const res = await post(app);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.alreadyBootstrapped).toBe(false);
+    // No adapters configured → 2 exchanges × (collateral + ctf) = 4 grants.
+    expect(body.submitted).toHaveLength(4);
+    expect(batches).toHaveLength(1);
+    const calls = batches[0]!.calls;
+    expect(calls).toHaveLength(4);
+    const approveCalls = calls.filter((c) => c.data.startsWith("0x095ea7b3")); // approve
+    const operatorCalls = calls.filter((c) => c.data.startsWith("0xa22cb465")); // setApprovalForAll
+    expect(approveCalls).toHaveLength(2);
+    expect(operatorCalls).toHaveLength(2);
+    for (const c of approveCalls) expect(c.target.toLowerCase()).toBe(PUSD);
+    for (const c of operatorCalls) expect(c.target.toLowerCase()).toBe(CTF);
+    expect(events).toContain("allowance.approve.submitted");
+    expect(marked).toHaveLength(1);
+    await app.close();
+  });
+
+  it("no-ops when the chain already holds every grant (chain = source of truth)", async () => {
+    const { app, batches } = harness({
+      reader: {
+        erc20Allowance: async () => 2n ** 255n,
+        isApprovedForAll: async () => true,
+        erc20Balance: async () => 0n,
+      },
+    });
+    const res = await post(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alreadyBootstrapped).toBe(true);
+    expect(batches).toHaveLength(0);
+    await app.close();
+  });
+
+  it("submits only the gaps on a partially-approved wallet", async () => {
+    // Exchange grants present; simulate a wallet where only the CTF operator
+    // grant for the neg-risk exchange is missing.
+    const { app, batches } = harness({
+      reader: {
+        erc20Allowance: async () => 2n ** 255n,
+        isApprovedForAll: async (_t, _o, operator) =>
+          operator.toLowerCase() !== "0xe2222d279d744050d28e00520010520000310f59",
+        erc20Balance: async () => 0n,
+      },
+    });
+    const res = await post(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().submitted).toEqual(["neg_risk_exchange_v2:ctf"]);
+    expect(batches[0]!.calls).toHaveLength(1);
+    await app.close();
+  });
+
+  it("502s and audits when the relayer batch fails (nothing marked)", async () => {
+    const { app, events, marked } = harness({ batchFails: true });
+    const res = await post(app);
+    expect(res.statusCode).toBe(502);
+    expect(events).toContain("allowance.failed");
+    expect(marked).toHaveLength(0);
     await app.close();
   });
 });

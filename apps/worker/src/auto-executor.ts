@@ -9,7 +9,11 @@ import type {
   PrivyWalletStore,
   DelegationStore,
   RuntimeFlagStore,
+  TradingAccountStore,
+  TradingAccountClobCredentialStore,
 } from "@mx2/db";
+import { decryptCredentials } from "@mx2/core";
+import { submit1271Order, type L2Credentials } from "@mx2/polymarket-client";
 import type { AuthenticatedClobClient } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import type { StrategyDefinition, TriggerEvidence, TriggerEvidenceV2 } from "@mx2/rules";
@@ -33,8 +37,10 @@ import type { StrategyDefinition, TriggerEvidence, TriggerEvidenceV2 } from "@mx
  *       lifetime total (conditional_rules.total_notional_executed),
  *       repeat count (evidence.triggerNumber vs maxRepeats — belt+braces,
  *       the state machine already enforces it)
- *  9. balance pre-check (deposit-wallet USDC must cover the order)
- * 10. relayer order path (W4 — still pending; hard skip until wired)
+ *  9. deposit-wallet account + decryptable CLOB credentials (W4 prerequisites)
+ * 10. balance pre-check (deposit-wallet pUSD must cover the order)
+ * 11. build + POLY_1271-sign + submit via the shared submit1271Order path
+ *     (maker = signer = funder = deposit wallet, sigType 3 — INTEGRATION §12a)
  *
  * Idempotency: deterministic key `auto:<ruleId>:<triggerId>` — no double-submit
  * across worker restarts. Signing goes through the TradingSigner seam (the raw
@@ -58,11 +64,16 @@ export interface AutoExecutorDeps {
   runtimeFlags: RuntimeFlagStore;
   orderIntents: OrderIntentStore;
   clobCredentials: ClobCredentialStore;
+  tradingAccounts: TradingAccountStore;
+  accountClobCredentials: TradingAccountClobCredentialStore;
   tradingClobClient: AuthenticatedClobClient;
   ruleStore: RuleStore;
   triggerStore: TriggerStore;
   auditStore: AuditStore;
-  /** On-chain USDC balance reader (null when no Polygon RPC is configured). */
+  /**
+   * On-chain collateral balance reader in USD (null when no Polygon RPC is
+   * configured). W4: reads the deposit wallet's pUSD (INTEGRATION §23).
+   */
   balanceOfUsdc?: ((owner: string) => Promise<number>) | null;
 }
 
@@ -124,7 +135,8 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       }
 
       // ── 4–5. Master key + wallet readiness. ──
-      if (!deps.config.encryptionMasterKey) return skip(rule, triggerId, "no_master_key");
+      const masterKey = deps.config.encryptionMasterKey;
+      if (!masterKey) return skip(rule, triggerId, "no_master_key");
       const pw = await deps.privyWallets.find(wallet);
       if (!pw) return skip(rule, triggerId, "wallet_not_provisioned");
       if (!pw.allowancesBootstrappedAt) return skip(rule, triggerId, "allowances_missing");
@@ -198,13 +210,42 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
         });
       }
 
-      // ── 9. Balance pre-check: the funding wallet must cover the order. ──
+      // ── 9. Deposit-wallet account + CLOB credentials (W4 prerequisites). ──
+      // Fail-closed skip reasons are surfaced to the user via the audit trail.
+      if (!deps.config.features.privySigning) {
+        return skip(rule, triggerId, "privy_signing_disabled");
+      }
+      const accounts = await deps.tradingAccounts.listByOwner(wallet);
+      const account = accounts.find(
+        (a) =>
+          a.kind === "internal_privy" &&
+          a.archivedAt === null &&
+          a.privyWalletId !== null &&
+          a.depositWalletAddress !== null &&
+          a.signerAddress.toLowerCase() === pw.embeddedAddress.toLowerCase(),
+      );
+      if (!account?.depositWalletAddress || !account.privyWalletId) {
+        return skip(rule, triggerId, "deposit_wallet_required");
+      }
+      const credsRow = await deps.accountClobCredentials.find(account.id);
+      if (!credsRow) return skip(rule, triggerId, "clob_credentials_missing");
+      let creds: L2Credentials;
+      try {
+        creds = decryptCredentials<L2Credentials>(
+          credsRow.encryptedCreds as Parameters<typeof decryptCredentials>[0],
+          masterKey,
+        );
+      } catch (e) {
+        return skip(rule, triggerId, "clob_credentials_unreadable", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+
+      // ── 10. Balance pre-check: the DEPOSIT wallet's pUSD must cover the
+      // order (deposit wallets hold pUSD — INTEGRATION §23). ──
       if (deps.balanceOfUsdc) {
-        const account = row; // funding address comes from the trading account (W4);
-        void account; //        until then, check the deposit wallet when known.
         try {
-          const funder = pw.embeddedAddress; // W4 will switch this to the deposit wallet
-          const balance = await deps.balanceOfUsdc(funder);
+          const balance = await deps.balanceOfUsdc(account.depositWalletAddress);
           if (balance < orderNotional) {
             return skip(rule, triggerId, "insufficient_balance", {
               balance,
@@ -218,10 +259,144 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
         }
       }
 
-      // ── 10. Relayer order path (W4). Polymarket live CLOB rejects bare Privy
-      // EOA makers; until the deposit-wallet relayer submit is wired and
-      // staging-verified, unattended execution degrades to manual. ──
-      return skip(rule, triggerId, "deposit_wallet_relayer_required");
+      // ── 11. Build + POLY_1271-sign + submit (W4, shared path with the
+      // manual route). Deterministic idempotency key — restart-safe. ──
+      const idempotencyKey = `auto:${rule.id}:${triggerId}`;
+      const existingIntent = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
+      if (existingIntent) {
+        deps.logger.info(
+          { ruleId: rule.id, triggerId, intentId: existingIntent.id },
+          "Auto-execution intent already exists — not re-submitting",
+        );
+        return;
+      }
+
+      // Once-rules: claim the rule via compare-and-set before committing
+      // funds. If the user confirmed/dismissed concurrently, the CAS loses and
+      // the user's action wins. Repeat rules stay ACTIVE between repetitions —
+      // no rule-status claim applies (the trigger row is the unit of work).
+      const isOnce = rule.def.recurrence.kind === "once";
+      if (isOnce) {
+        const claimed = await deps.ruleStore.markExecuting(rule.id);
+        if (!claimed) return skip(rule, triggerId, "rule_claim_lost");
+      }
+
+      const intent = await deps.orderIntents.create({
+        walletAddress: wallet,
+        tradingAccountId: account.id,
+        idempotencyKey,
+        conditionId: action.market.conditionId,
+        tokenId: action.market.tokenId || rule.tokenId,
+        side: action.side,
+        price: String(action.price),
+        size: String(action.size),
+        orderType: action.orderType,
+        funder: account.depositWalletAddress,
+        signer: account.signerAddress,
+        signatureType: 3,
+        signingMode: "server",
+        metadata: { ruleId: rule.id, triggerId, auto: true },
+      });
+      await deps.auditStore.emit({
+        actor: wallet,
+        action: "order.intent",
+        subject: `intent:${intent.id}`,
+        metadata: {
+          ruleId: rule.id,
+          triggerId,
+          tokenId: action.market.tokenId || rule.tokenId,
+          side: action.side,
+          price: action.price,
+          size: action.size,
+          orderType: action.orderType,
+          funder: account.depositWalletAddress,
+          auto: true,
+        },
+      });
+
+      const walletRef = { walletId: account.privyWalletId, address: account.signerAddress };
+      const submitResult = await submit1271Order(deps.tradingClobClient, {
+        signerAddress: account.signerAddress,
+        depositWalletAddress: account.depositWalletAddress,
+        sign: async (payload) => {
+          const r = await deps.tradingSigner.signOrder({ wallet: walletRef, typedData: payload });
+          if (!r.ok) throw new Error(`${r.error.code}: ${r.error.message}`);
+          return r.value.signature;
+        },
+        params: {
+          tokenId: action.market.tokenId || rule.tokenId,
+          side: action.side,
+          price: action.price,
+          size: action.size,
+          tickSize: action.tickSize ?? "0.01",
+          negRisk: action.negRisk ?? false,
+          orderType: action.orderType,
+          ...(action.postOnly !== undefined ? { postOnly: action.postOnly } : {}),
+          ...(action.orderType === "GTD" && action.expiresAfterMs !== undefined
+            ? // Wire expiration compensates Polymarket's ~1-min early expiry (ADR-0013).
+              { expiresAtSec: Math.floor((nowMs + action.expiresAfterMs) / 1000) + 60 }
+            : {}),
+        },
+        creds,
+        idempotencyKey,
+      });
+
+      if (!submitResult.ok) {
+        // Fail closed: a submit error after signing may still have registered
+        // upstream — never degrade to manual re-submission. The intent is
+        // failed, once-rules go terminal EXECUTION_FAILED, everything audited.
+        await deps.orderIntents.updateStatus(intent.id, "failed", {
+          errorMessage: submitResult.error.message,
+        });
+        if (isOnce) await deps.ruleStore.markExecutionFailed(rule.id, submitResult.error.message);
+        await deps.auditStore.emit({
+          actor: wallet,
+          action: "rule.execution.failed",
+          subject: `rule:${rule.id}`,
+          metadata: {
+            triggerId,
+            intentId: intent.id,
+            error: submitResult.error.code,
+            message: submitResult.error.message,
+          },
+        });
+        deps.logger.warn(
+          { ruleId: rule.id, triggerId, intentId: intent.id, error: submitResult.error },
+          "Auto-execution order submit failed",
+        );
+        return;
+      }
+
+      const clobOrderId = submitResult.value.ack.orderID;
+      await deps.orderIntents.updateStatus(intent.id, "submitted", { clobOrderId });
+      await deps.ruleStore.addExecutedNotional(rule.id, orderNotional);
+      await deps.triggerStore.updateStatus(triggerId, "confirmed", { orderIntentId: intent.id });
+      if (isOnce) await deps.ruleStore.markAutoExecuted(rule.id);
+      await deps.auditStore.emit({
+        actor: wallet,
+        action: "order.submitted",
+        subject: `intent:${intent.id}`,
+        metadata: { clobOrderId, status: submitResult.value.ack.status, auto: true },
+      });
+      await deps.auditStore.emit({
+        actor: wallet,
+        action: "rule.executed_auto",
+        subject: `rule:${rule.id}`,
+        metadata: {
+          triggerId,
+          intentId: intent.id,
+          clobOrderId,
+          orderNotional,
+          tokenId: action.market.tokenId || rule.tokenId,
+          side: action.side,
+          price: action.price,
+          size: action.size,
+        },
+      });
+      deps.logger.info(
+        { ruleId: rule.id, triggerId, intentId: intent.id, clobOrderId },
+        "Auto-execution order submitted (POLY_1271 deposit-wallet path)",
+      );
     },
   };
 };

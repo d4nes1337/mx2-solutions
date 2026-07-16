@@ -38,6 +38,8 @@ import type {
   TradingWalletBalanceResponse,
   TradingWalletProvisionResponse,
   TradingWalletReissueResponse,
+  WalletWithdrawalItem,
+  WithdrawResponse,
   TradingWalletStatusResponse,
   TradeStatus,
   TriggerDetailResponse,
@@ -376,6 +378,29 @@ export function useReissueTradingWallet() {
       void qc.invalidateQueries({ queryKey: ["trading-wallet-health"] });
       void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
     },
+  });
+}
+
+/** Owner-only withdrawal: destination is always the session login wallet. */
+export function useWithdraw() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { amountUsd: number; idempotencyKey: string }) =>
+      api.post<WithdrawResponse>("/api/trading-wallet/withdraw", input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
+      void qc.invalidateQueries({ queryKey: ["withdrawals"] });
+    },
+  });
+}
+
+export function useWithdrawals(enabled = true) {
+  return useQuery({
+    queryKey: ["withdrawals"],
+    queryFn: () =>
+      api.get<{ withdrawals: WalletWithdrawalItem[] }>("/api/trading-wallet/withdrawals"),
+    enabled,
+    staleTime: 15_000,
   });
 }
 

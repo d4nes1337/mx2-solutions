@@ -14,6 +14,8 @@ import type {
   TriggerStore,
   PrivyWalletRow,
   OrderIntentRow,
+  TradingAccountStore,
+  TradingAccountClobCredentialStore,
 } from "@mx2/db";
 import type { AuthenticatedClobClient } from "@mx2/polymarket-client";
 import { normalizeDefinition, type RuleDefinition, type TriggerEvidence } from "@mx2/rules";
@@ -116,6 +118,8 @@ const makeHarness = (
     casLoses?: boolean;
     existingIntent?: boolean;
     submitOk?: boolean;
+    noDepositAccount?: boolean;
+    noAccountCreds?: boolean;
   } = {},
 ): Harness => {
   const audits: string[] = [];
@@ -218,6 +222,40 @@ const makeHarness = (
 
   const triggerStore = { updateStatus: async () => {} } as unknown as TriggerStore;
 
+  // W4: the deposit-wallet account + per-account CLOB creds the live order
+  // path requires. Present by default so the base harness is fully armed.
+  const tradingAccounts = {
+    listByOwner: async () =>
+      over.noDepositAccount
+        ? []
+        : [
+            {
+              id: "acct-1",
+              kind: "internal_privy",
+              archivedAt: null,
+              privyWalletId: "pw-1",
+              depositWalletAddress: "0x9999999999999999999999999999999999999999",
+              signerAddress: EMBEDDED,
+            } as never,
+          ],
+  } as unknown as TradingAccountStore;
+
+  const accountClobCredentials = {
+    find: async () =>
+      over.noAccountCreds
+        ? null
+        : ({
+            tradingAccountId: "acct-1",
+            ownerWalletAddress: WALLET,
+            encryptedCreds: encryptCredentials(
+              { apiKey: "ak", secret: Buffer.from("s").toString("base64"), passphrase: "p" },
+              KEY,
+            ),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          } as never),
+  } as unknown as TradingAccountClobCredentialStore;
+
   return {
     deps: {
       logger,
@@ -228,6 +266,8 @@ const makeHarness = (
       runtimeFlags,
       orderIntents,
       clobCredentials,
+      tradingAccounts,
+      accountClobCredentials,
       tradingClobClient,
       ruleStore,
       triggerStore,
@@ -246,11 +286,28 @@ const run = async (h: Harness) => {
 };
 
 describe("auto-executor", () => {
-  it("degrades to manual until the deposit-wallet relayer path is enabled", async () => {
+  it("submits a POLY_1271 order through the full guard chain (W4 happy path)", async () => {
     const h = makeHarness();
     await run(h);
+    expect(h.submitted()).toBe(true);
+    expect(h.ruleStatus()).toBe("EXECUTED_AUTO");
+    expect(h.audits).toContain("order.intent");
+    expect(h.audits).toContain("order.submitted");
+    expect(h.audits).toContain("rule.executed_auto");
+    expect(h.audits).not.toContain("rule.execution.skipped");
+  });
+
+  it("skips (deposit_wallet_required) when no internal deposit-wallet account exists", async () => {
+    const h = makeHarness({ noDepositAccount: true });
+    await run(h);
     expect(h.submitted()).toBe(false);
-    expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
+    expect(h.audits).toContain("rule.execution.skipped");
+  });
+
+  it("skips (clob_credentials_missing) when the account has no CLOB creds", async () => {
+    const h = makeHarness({ noAccountCreds: true });
+    await run(h);
+    expect(h.submitted()).toBe(false);
     expect(h.audits).toContain("rule.execution.skipped");
   });
 
@@ -295,15 +352,15 @@ describe("auto-executor", () => {
     await run(h);
     expect(h.submitted()).toBe(false);
     expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
-    expect(h.audits).toContain("rule.execution.skipped");
   });
 
-  it("does not reach CLOB submission while the relayer path is missing", async () => {
+  it("marks EXECUTION_FAILED (never degrades to re-submission) when the CLOB rejects", async () => {
     const h = makeHarness({ submitOk: false });
     await run(h);
-    expect(h.submitted()).toBe(false);
-    expect(h.ruleStatus()).toBe("TRIGGERED_AWAITING_USER");
-    expect(h.audits).toContain("rule.execution.skipped");
+    expect(h.submitted()).toBe(true);
+    expect(h.ruleStatus()).toBe("EXECUTION_FAILED:rejected");
+    expect(h.audits).toContain("rule.execution.failed");
+    expect(h.audits).not.toContain("rule.executed_auto");
   });
 
   // ── W5–W8 guard chain ──────────────────────────────────────────────────────

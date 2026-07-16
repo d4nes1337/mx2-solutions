@@ -7,3 +7,4 @@ export * from "./trading-store.js";
 export * from "./privy-store.js";
 export * from "./conditional-store.js";
 export * from "./quoter-store.js";
+export * from "./withdrawal-store.js";

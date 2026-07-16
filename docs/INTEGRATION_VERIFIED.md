@@ -205,6 +205,43 @@ class, so `apps/api` pins `@polymarket/builder-signing-sdk@0.0.8` until the rela
 - **Compliance:** trading preview/submit/account/cancel routes must enforce Polymarket geoblock
   fail-closed. Read-only routes remain globally accessible per D-004.
 
+### 12a. POLY_1271 signing — R-009 spike RESOLVED at code level (verified 2026-07-16 against installed `@polymarket/clob-client-v2@1.0.6` source)
+
+- **Signer seam:** the SDK duck-types signers; a viem-style object exposing `account.address` +
+  `signTypedData({account, domain, types, primaryType, message})` is accepted everywhere
+  (`dist/signing/signer.js`). Our existing Privy typed-data bridge shape works AS-IS — no raw key,
+  no `signMessage`, no transactions.
+- **ERC-7739 wrap (order signatures, `SignatureTypeV2.POLY_1271 = 3`)** — implemented entirely in
+  `ExchangeOrderBuilderV2.buildOrderSignature`: the EOA signs a `TypedDataSign` EIP-712 envelope
+  over the CTF Exchange V2 domain whose message nests the Order under the deposit wallet's
+  ERC-1271 domain (`name: "DepositWallet"`, `version: "1"`, `verifyingContract: <deposit wallet>`,
+  `salt: 0x0`); the wire signature is `innerSig ‖ appDomainSeparator ‖ contentsHash ‖
+hex("Order(...)" type string) ‖ 0x00ba` (length 186). **Plain typed-data signing end-to-end** —
+  the incompatibility with normal EIP-712 order signing is only in the envelope, not the signer.
+- **V2 order struct:** `salt, maker, signer, tokenId, makerAmount, takerAmount, side,
+signatureType, timestamp, metadata, builder` over the `Polymarket CTF Exchange` **version "2"**
+  domain; `builder` carries the builder code as bytes32. For POLY_1271:
+  `maker = signer = funder = deposit wallet` (SDK `createOrder`: `signerForOrder = maker` when
+  type 3; the signer-vs-EOA equality check is skipped).
+- **ClobAuth / L1 / L2 identity:** the API key belongs to the **signer EOA** — `createL1Headers`
+  and `createL2Headers` default `POLY_ADDRESS` to the signer address (an explicit `address`
+  override parameter exists on L1). ClobAuth is a plain EIP-712 `ClobAuth` struct (NOT
+  7739-wrapped). Orders reference the deposit wallet via maker/signer/funder; auth references the
+  EOA. **Staging checkpoint:** first accepted POLY_1271 order confirms end-to-end (RFC-0003
+  checkpoint 3); until then this section reflects SDK source, not a live acceptance.
+- **Submission:** SDK `ClobClient.postOrder(order, orderType, postOnly, deferExec)` handles the V2
+  wire shape (`orderToJsonV2`) + L2 HMAC headers; `postOnly` rejected for FOK/FAK client-side.
+- **V2 exchange contracts (Polygon 137, from SDK `getContractConfig`)** — NOT the §10 legacy
+  addresses: `exchangeV2 = 0xE111180000d2663C0091e4f400237545B87B996B`,
+  `negRiskExchangeV2 = 0xe2222d279d744050d28e00520010520000310F59`, CTF
+  `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`, collateral (USDC.e)
+  `0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB` (SDK "collateral" — note the app's allowance
+  bootstrap uses bridged USDC.e `0x2791…4174`; reconcile at W2: deposit-wallet allowances must
+  approve the V2 exchange addresses as spenders, resolved from the SDK config, not hand-pinned).
+- **Contract tests:** `packages/polymarket-client/src/clob/clob-v2-session.test.ts` pins the
+  struct invariants and the full 7739 envelope (domain separator + contents hash recomputed
+  independently; inner signature recovered to the EOA). R-009 is resolved at code level.
+
 ## 13. Profile / portfolio PnL endpoints (verified 2026-07-01; D-018)
 
 Sources checked: official Polymarket API reference pages for Data API profile endpoints and Gamma
@@ -347,3 +384,26 @@ Source: docs.polymarket.com/trading/fees.
   wash-trading rules target **self-dealing**, not two-sided quoting on complementary
   outcomes. This is the basis of the maker loop's delta-neutral quote shape
   (ADR-0014, RFC-0003 §1).
+
+## 23. pUSD is the V2 collateral; deposit wallets hold pUSD (verified ON-CHAIN 2026-07-16)
+
+- **Both V2 exchanges use pUSD as collateral, not USDC.e.** `getCollateral()` on
+  `0xE111180000d2663C0091e4f400237545B87B996B` (CTF Exchange V2) and
+  `0xe2222d279d744050d28e00520010520000310F59` (Neg-Risk Exchange V2) both return
+  **`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`** — symbol `pUSD`, **6 decimals**,
+  EIP-1967 upgradeable proxy (impl `0x6bbcef9f…925f`). `getCtf()` on both returns the
+  unchanged CTF `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`. Matches the SDK's
+  `getContractConfig(137).collateral`.
+- **Deposit wallets hold pUSD.** Verified against the owner's real deposit wallet
+  `0x997C95D8…1434`: pUSD balance ≈ $103.76, USDC.e balance **zero**. Polymarket
+  converts inbound deposits to pUSD; raw USDC.e in a deposit wallet means conversion
+  is still pending (surfaced as "unconverted" in `GET /api/trading-wallet/balance`).
+- **pUSD transfers to arbitrary EOAs succeed** — simulated (`eth_call` with `from` =
+  the real deposit wallet) `pUSD.transfer(ownerEOA, 1e6)` → returns `true`. The
+  withdrawal path therefore sends **pUSD** to the owner's login wallet
+  (`buildPusdTransfer`); redemption pUSD→USDC happens on Polymarket's side.
+- **Consequences wired in code:** W2 allowances approve **pUSD** (not USDC.e) +
+  CTF to the V2 exchanges/adapters (`apps/api/src/trade/deposit-wallet-allowances.ts`);
+  withdrawal balance checks and transfers use `PUSD_ADDRESS`
+  (`packages/polymarket-client/src/chain/usdc.ts`). USDC.e remains relevant only as
+  the _inbound_ deposit token and for legacy signer-EOA dust.

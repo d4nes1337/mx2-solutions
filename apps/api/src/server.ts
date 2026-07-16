@@ -15,6 +15,7 @@ import {
   createRuntimeFlagStore,
   createRuleStore,
   createQuoterStore,
+  createWithdrawalStore,
   createTriggerStore,
   createPrivyWalletStore,
   createDelegationStore,
@@ -54,6 +55,7 @@ const main = async (): Promise<void> => {
   const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
   const ruleStore = createRuleStore(dbHandle.db);
   const quoterStore = createQuoterStore(dbHandle.db);
+  const withdrawals = createWithdrawalStore(dbHandle.db);
   const triggerStore = createTriggerStore(dbHandle.db);
   const privyWallets = createPrivyWalletStore(dbHandle.db);
   const delegations = createDelegationStore(dbHandle.db);
@@ -92,6 +94,7 @@ const main = async (): Promise<void> => {
     runtimeFlags,
     ruleStore,
     quoterStore,
+    withdrawals,
     triggerStore,
     privyWallets,
     delegations,

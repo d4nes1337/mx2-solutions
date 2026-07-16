@@ -50,6 +50,27 @@ describe("useBuilderStore: groups and nesting", () => {
     const condId = useBuilderStore.getState().addCondition(priceCondition, "nope");
     expect(useBuilderStore.getState().doc.expr.children.map((n) => n.id)).toContain(condId);
   });
+
+  it("moveNode reparents with revision bump; refusals don't bump", () => {
+    const store = useBuilderStore.getState();
+    const groupId = store.addGroup("or");
+    const condId = useBuilderStore.getState().addCondition(priceCondition);
+    useBuilderStore.getState().setPosition(condId, { x: 7, y: 8 });
+    const before = useBuilderStore.getState().revision;
+
+    useBuilderStore.getState().moveNode(condId, groupId);
+    let s = useBuilderStore.getState();
+    expect(s.revision).toBe(before + 1);
+    const g = s.doc.expr.children.find((n) => n.id === groupId);
+    expect(g?.type === "group" && g.children.some((c) => c.id === condId)).toBe(true);
+    // Identity preserved → the node keeps its persisted position.
+    expect(s.doc.positions[condId]).toEqual({ x: 7, y: 8 });
+
+    // Refused move (into itself) → no revision bump.
+    useBuilderStore.getState().moveNode(groupId, groupId);
+    s = useBuilderStore.getState();
+    expect(s.revision).toBe(before + 1);
+  });
 });
 
 describe("useBuilderStore: editor-only state", () => {

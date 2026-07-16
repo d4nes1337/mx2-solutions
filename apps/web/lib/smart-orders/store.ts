@@ -13,6 +13,7 @@ import {
   findNode,
   isBound,
   isTokenReferenced,
+  moveNodeInTree,
   removeNodeFromTree,
   replaceNodeInTree,
   toggleNotInTree,
@@ -53,6 +54,8 @@ export interface BuilderState {
   updateCondition: (id: string, condition: ConditionV2) => void;
   removeNode: (id: string) => void;
   toggleNot: (id: string) => void;
+  /** Reparent a condition/group (canvas edge gestures). No-op when refused. */
+  moveNode: (id: string, newParentId: string) => void;
   bindMarket: (nodeId: string | "action", ref: MarketRef, meta?: MarketMeta) => void;
   /** Add a market node to the canvas without binding anything to it yet. */
   addWatchedMarket: (ref: MarketRef, meta?: MarketMeta) => void;
@@ -148,6 +151,12 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     ),
 
   toggleNot: (id) => set((s) => bump({ ...s.doc, expr: toggleNotInTree(s.doc.expr, id) }, s)),
+
+  moveNode: (id, newParentId) =>
+    set((s) => {
+      const expr = moveNodeInTree(s.doc.expr, id, newParentId);
+      return expr === s.doc.expr ? s : bump({ ...s.doc, expr }, s);
+    }),
 
   bindMarket: (nodeId, ref, meta) =>
     set((s) => {

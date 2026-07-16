@@ -1,10 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppConfig } from "@mx2/config";
-import type { AuditStore, QuoterStore, RuleStore, SessionStore } from "@mx2/db";
-import type { ClobClient, GammaClient } from "@mx2/polymarket-client";
+import type {
+  AuditStore,
+  PrivyWalletStore,
+  QuoterStore,
+  RuleStore,
+  SessionStore,
+  TradingAccountStore,
+  TradingAccountClobCredentialStore,
+} from "@mx2/db";
+import type { ClobClient, GammaClient, GeoblockClient } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
+import { makeGeoblockCheck } from "../middleware/geoblock.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
+import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { depositWalletSpenders, findMissingGrants } from "../trade/deposit-wallet-allowances.js";
 
 export interface QuoterRoutesDeps {
   config: AppConfig;
@@ -14,6 +25,13 @@ export interface QuoterRoutesDeps {
   auditStore: AuditStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
+  geoblockClient: GeoblockClient;
+  /** Readiness-panel inputs (optional so light test apps stay light). */
+  privyWallets?: PrivyWalletStore;
+  tradingAccounts?: TradingAccountStore;
+  accountClobCredentials?: TradingAccountClobCredentialStore;
+  allowanceReader?: AllowanceReader | null;
+  relayerEnabled?: boolean;
 }
 
 // ── Farmability scanner (15-min cache) ──────────────────────────────────────
@@ -113,6 +131,12 @@ const ModeSchema = z.object({ mode: z.enum(["shadow", "confirm", "live"]) });
  */
 export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDeps): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
+  // Geoblock applies wherever real orders can start flowing: on escalation
+  // out of shadow and on every confirm-mode approval (RFC-0003 §6.5).
+  const geoblockCheck = makeGeoblockCheck({
+    geoblockClient: deps.geoblockClient,
+    auditStore: deps.auditStore,
+  });
 
   const requireEnabled = async (_req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!deps.config.features.makerLoop) {
@@ -144,6 +168,80 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
       return value;
     },
   );
+
+  // ── GET /api/quoter/readiness ──────────────────────────────────────────────
+  // The live-farming ladder as PRESENCE/STATE BOOLEANS ONLY — flag states,
+  // configured-or-not, on-chain grant status. Never a credential value, never
+  // an address that isn't already public to the signed-in owner.
+  app.get("/api/quoter/readiness", guard, async (req) => {
+    const user = req.user!;
+    const cfg = deps.config;
+
+    const wallet = deps.privyWallets ? await deps.privyWallets.find(user.walletAddress) : null;
+    const account =
+      wallet && deps.tradingAccounts
+        ? (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
+            (a) =>
+              a.kind === "internal_privy" &&
+              a.archivedAt === null &&
+              a.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase(),
+          )
+        : null;
+    const credsRow =
+      account && deps.accountClobCredentials
+        ? await deps.accountClobCredentials.find(account.id)
+        : null;
+
+    // On-chain allowance status per spender (chain = source of truth).
+    let allowances: { label: string; kind: string; granted: boolean }[] | null = null;
+    if (deps.allowanceReader && account?.depositWalletAddress) {
+      const spenders = depositWalletSpenders(cfg);
+      const missing = await findMissingGrants(
+        deps.allowanceReader,
+        account.depositWalletAddress,
+        spenders,
+      );
+      const missingKeys = new Set(missing.map((m) => `${m.spender.label}:${m.kind}`));
+      allowances = spenders.flatMap((s) =>
+        (["collateral", "ctf"] as const)
+          .filter((kind) => s[kind])
+          .map((kind) => ({
+            label: s.label,
+            kind,
+            granted: !missingKeys.has(`${s.label}:${kind}`),
+          })),
+      );
+    }
+
+    const ip =
+      (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.ip;
+    const geo = await deps.geoblockClient.check(ip);
+
+    return {
+      flags: {
+        makerLoop: cfg.features.makerLoop,
+        makerLoopLive: cfg.features.makerLoopLive,
+        liveTrading: cfg.features.liveTrading,
+        privySigning: cfg.features.privySigning,
+        relayer: cfg.features.relayer,
+      },
+      relayerEnabled: deps.relayerEnabled ?? false,
+      rpcConfigured: Boolean(deps.allowanceReader),
+      adapters: {
+        ctfConfigured: Boolean(cfg.ctf.adapterAddress),
+        negRiskConfigured: Boolean(cfg.ctf.negRiskAdapterAddress),
+      },
+      wallet: {
+        provisioned: wallet !== null,
+        depositWalletActive: Boolean(account?.depositWalletAddress),
+        clobCredentials: credsRow !== null,
+      },
+      allowances,
+      geoblock: geo.ok
+        ? { status: geo.value.status, country: geo.value.country }
+        : { status: "unknown" },
+    };
+  });
 
   const ownedSession = async (req: FastifyRequest, reply: FastifyReply) => {
     const user = req.user!;
@@ -193,13 +291,27 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
       return { error: "INVALID_REQUEST", message: "mode must be shadow | confirm | live" };
     }
     const mode = parsed.data.mode;
-    if (mode !== "shadow" && !deps.config.features.makerLoopLive) {
-      reply.code(503);
+    if (mode === "shadow" && session.mode !== "shadow" && session.status !== "halted") {
+      // De-escalation guard: a shadow executor cannot manage (or cancel) real
+      // resting orders. Halt first — that cancels everything — then switch.
+      reply.code(409);
       return {
-        error: "MAKER_LOOP_LIVE_DISABLED",
-        message:
-          "Confirm/live modes require FEATURE_MAKER_LOOP_LIVE (relayer, signer and verified CTF adapters) — see RFC-0003.",
+        error: "HALT_BEFORE_SHADOW",
+        message: "Halt the session first — live orders must be cancelled before shadow mode.",
       };
+    }
+    if (mode !== "shadow") {
+      if (!deps.config.features.makerLoopLive) {
+        reply.code(503);
+        return {
+          error: "MAKER_LOOP_LIVE_DISABLED",
+          message:
+            "Confirm/live modes require FEATURE_MAKER_LOOP_LIVE (relayer, signer and verified CTF adapters) — see RFC-0003.",
+        };
+      }
+      // Escalation out of shadow = real orders may start. Geoblock, fail-closed.
+      await geoblockCheck(req, reply);
+      if (reply.sent) return reply;
     }
     const updated = await deps.quoterStore.setMode(session.id, mode);
     await deps.auditStore.emit({
@@ -207,6 +319,49 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
       action: "quoter.mode_changed",
       subject: `rule:${(req.params as { ruleId: string }).ruleId}`,
       metadata: { from: session.mode, to: mode },
+    });
+    return { session: updated };
+  });
+
+  // ── POST /api/quoter/sessions/:ruleId/confirm ──────────────────────────────
+  // Confirm-mode approval (RFC-0003 checkpoint 3). The client approves the
+  // EXACT pending batch by hash; the store's WHERE guard rejects anything but
+  // the current proposal (409 BATCH_STALE → refetch, prices moved). The worker
+  // then executes only if the hash it recomputes from the live book still
+  // matches — a stale approval is structurally inert.
+  app.post("/api/quoter/sessions/:ruleId/confirm", guard, async (req, reply) => {
+    const session = await ownedSession(req, reply);
+    if (!session) return reply;
+    const parsed = z.object({ batchHash: z.string().min(16).max(128) }).safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", message: "batchHash is required" };
+    }
+    if (session.mode !== "confirm") {
+      reply.code(409);
+      return {
+        error: "WRONG_MODE",
+        message: "Batch approval only applies to sessions in confirm mode.",
+      };
+    }
+    // Every approval green-lights real orders — geoblock each one.
+    await geoblockCheck(req, reply);
+    if (reply.sent) return reply;
+
+    const updated = await deps.quoterStore.approveBatch(session.id, parsed.data.batchHash);
+    if (!updated) {
+      reply.code(409);
+      return {
+        error: "BATCH_STALE",
+        message:
+          "The market moved and the proposed batch changed — review the new proposal and approve again.",
+      };
+    }
+    await deps.auditStore.emit({
+      actor: req.user!.walletAddress,
+      action: "quoter.batch_approved",
+      subject: `rule:${(req.params as { ruleId: string }).ruleId}`,
+      metadata: { batchHash: parsed.data.batchHash },
     });
     return { session: updated };
   });

@@ -28,6 +28,11 @@ export interface ScannerResponse {
   fetchedAt: string;
 }
 
+export interface PendingBatch {
+  places: { tokenId: string; side: "BUY"; price: number; size: number }[];
+  mergePairs: number;
+}
+
 export interface QuoteSession {
   id: string;
   ruleId: string;
@@ -41,9 +46,30 @@ export interface QuoteSession {
   realizedPnlUsd: string;
   dailyLossUsd: string;
   rewardsAccruedUsd: string;
+  /** Confirm-mode batch protocol (null outside confirm / when nothing pends). */
+  pendingBatch: PendingBatch | null;
+  pendingBatchHash: string | null;
+  pendingBatchAt: string | null;
+  approvedBatchHash: string | null;
   lastCycleAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface QuoterReadiness {
+  flags: {
+    makerLoop: boolean;
+    makerLoopLive: boolean;
+    liveTrading: boolean;
+    privySigning: boolean;
+    relayer: boolean;
+  };
+  relayerEnabled: boolean;
+  rpcConfigured: boolean;
+  adapters: { ctfConfigured: boolean; negRiskConfigured: boolean };
+  wallet: { provisioned: boolean; depositWalletActive: boolean; clobCredentials: boolean };
+  allowances: { label: string; kind: string; granted: boolean }[] | null;
+  geoblock: { status: string; country?: string };
 }
 
 export interface QuoteEvent {
@@ -87,5 +113,27 @@ export function useQuoterControl(ruleId: string) {
           })
         : api.post(`/api/quoter/sessions/${encodeURIComponent(ruleId)}/${input.action}`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["quoter-session", ruleId] }),
+  });
+}
+
+export function useQuoterReadiness(enabled = true) {
+  return useQuery({
+    queryKey: ["quoter-readiness"],
+    queryFn: () => api.get<QuoterReadiness>("/api/quoter/readiness"),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Confirm-mode batch approval. A 409 BATCH_STALE means the market moved and
+ * the worker re-proposed — the session refetch surfaces the new batch.
+ */
+export function useApproveBatch(ruleId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (batchHash: string) =>
+      api.post(`/api/quoter/sessions/${encodeURIComponent(ruleId)}/confirm`, { batchHash }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["quoter-session", ruleId] }),
   });
 }

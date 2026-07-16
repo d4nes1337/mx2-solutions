@@ -8,10 +8,13 @@
  */
 import { use } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, OctagonX } from "lucide-react";
 import { Badge, Button, ErrorNote, Segmented, Skeleton } from "@/components/ui";
 import { useFeatureFlags } from "@/lib/queries";
 import { useQuoterControl, useQuoterSession } from "@/lib/farming/queries";
+import { compactEvents, humanizeEvent } from "@/lib/farming/humanize";
+import { ReadinessPanel } from "@/components/farming/ReadinessPanel";
+import { ConfirmInbox } from "@/components/farming/ConfirmInbox";
 
 const money = (v: string | number) => `$${Number(v).toFixed(2)}`;
 
@@ -92,6 +95,28 @@ export default function FarmingSessionPage({ params }: { params: Promise<{ ruleI
         </p>
       ) : null}
 
+      <ReadinessPanel />
+
+      <ConfirmInbox session={session} />
+
+      {session.mode !== "shadow" && session.status !== "halted" ? (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-neg/30 bg-surface-2/60 px-4 py-2.5">
+          <div className="text-[12px] leading-snug text-muted">
+            <span className="font-semibold text-fg">Kill-switch drill:</span> halt now and verify
+            the session cancels everything — status flips to halted and capital committed reads
+            $0.00 within one cycle (~2s). Resume when done.
+          </div>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => control.mutate({ action: "halt" })}
+            disabled={control.isPending}
+          >
+            <OctagonX size={13} aria-hidden /> Drill: halt
+          </Button>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
         <Stat label="YES inventory" value={Number(session.inventoryYes).toFixed(0)} />
         <Stat label="NO inventory" value={Number(session.inventoryNo).toFixed(0)} />
@@ -118,7 +143,7 @@ export default function FarmingSessionPage({ params }: { params: Promise<{ ruleI
           </p>
         ) : (
           <ul className="max-h-[420px] divide-y divide-border/60 overflow-y-auto">
-            {recentEvents.map((e) => (
+            {compactEvents(recentEvents).map((e) => (
               <li key={e.id} className="flex items-start gap-3 px-4 py-2 text-[12px]">
                 <span className="tabular shrink-0 text-faint">
                   {new Date(e.createdAt).toLocaleTimeString()}
@@ -127,18 +152,23 @@ export default function FarmingSessionPage({ params }: { params: Promise<{ ruleI
                   tone={
                     e.type === "halt"
                       ? "neg"
-                      : e.type === "quote_intent" || e.type === "order_placed"
+                      : e.type === "quote_intent" ||
+                          e.type === "order_placed" ||
+                          e.type === "batch_proposed"
                         ? "brand"
-                        : e.type.startsWith("merge")
+                        : e.type.startsWith("merge") || e.type === "fill"
                           ? "pos"
                           : "neutral"
                   }
                 >
-                  {e.type}
+                  {e.type.replace(/_/g, " ")}
                 </Badge>
-                <code className="min-w-0 flex-1 truncate text-[11px] text-muted">
-                  {JSON.stringify(e.payload)}
-                </code>
+                <span
+                  className="min-w-0 flex-1 truncate text-[12px] text-muted"
+                  title={JSON.stringify(e.payload)}
+                >
+                  {humanizeEvent(e)}
+                </span>
               </li>
             ))}
           </ul>

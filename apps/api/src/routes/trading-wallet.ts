@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppConfig } from "@mx2/config";
 import type {
@@ -6,11 +7,18 @@ import type {
   PrivyWalletStore,
   DelegationStore,
   TradingAccountStore,
+  WithdrawalStore,
 } from "@mx2/db";
-import { isDepositWalletConfirmed, type DepositWalletRelayer } from "@mx2/polymarket-client";
+import {
+  PUSD_ADDRESS,
+  buildPusdTransfer,
+  isDepositWalletConfirmed,
+  type DepositWalletRelayer,
+} from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { USDC_ADDRESS, type AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { ensureDepositWalletAllowances } from "../trade/deposit-wallet-allowances.js";
 import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
 
 export interface TradingWalletRoutesDeps {
@@ -22,9 +30,22 @@ export interface TradingWalletRoutesDeps {
   tradingAccounts: TradingAccountStore;
   delegations: DelegationStore;
   depositWalletRelayer: DepositWalletRelayer;
+  withdrawals: WithdrawalStore;
   /** null when POLYGON_RPC_URL is not configured (allowance bootstrap unavailable). */
   allowanceReader: AllowanceReader | null;
 }
+
+/**
+ * Withdrawal body — deliberately STRICT: a smuggled `destination` (or any
+ * other key) is a 400. The destination is ALWAYS the session user's login
+ * wallet, resolved server-side. That is the entire security model (R-031).
+ */
+const WithdrawSchema = z
+  .object({
+    amountUsd: z.number().positive().min(1).max(1_000_000),
+    idempotencyKey: z.string().min(8).max(128),
+  })
+  .strict();
 
 /**
  * Onboarding for server-side ("sign once") trading. The user:
@@ -397,10 +418,209 @@ export const registerTradingWalletRoutes = (
     };
   });
 
+  // ── POST /api/trading-wallet/withdraw ─────────────────────────────────────
+  // Owner-only withdrawal: USDC.e moves from the deposit wallet to the SESSION
+  // user's login wallet, gaslessly, via the relayer batch. The destination is
+  // never client input; the flag chain is fail-closed (withdraw → relayer →
+  // privy signing + builder creds); every state change is audited.
+  app.post("/api/trading-wallet/withdraw", { preHandler: requireAuth }, async (req, reply) => {
+    const user = req.user!;
+    if (!deps.config.features.walletWithdraw) {
+      reply.code(503);
+      return {
+        error: "WALLET_WITHDRAW_DISABLED",
+        message: "Withdrawals are not enabled on this build.",
+      };
+    }
+    if (!ensureRelayerEnabled(reply)) return reply;
+    if (!deps.allowanceReader) {
+      reply.code(503);
+      return {
+        error: "BALANCE_UNAVAILABLE",
+        message: "No Polygon RPC configured — cannot verify the withdrawable balance.",
+      };
+    }
+
+    const parsed = WithdrawSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "INVALID_REQUEST",
+        message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      };
+    }
+    const { amountUsd, idempotencyKey } = parsed.data;
+
+    const wallet = await deps.privyWallets.find(user.walletAddress);
+    if (!wallet) {
+      reply.code(400);
+      return {
+        error: "TRADING_WALLET_NOT_PROVISIONED",
+        message: "No trading wallet exists for this account.",
+      };
+    }
+    const accounts = await deps.tradingAccounts.listByOwner(user.walletAddress);
+    const internal = accounts.find(
+      (a) =>
+        a.kind === "internal_privy" &&
+        a.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
+        a.depositWalletAddress,
+    );
+    if (!internal?.depositWalletAddress) {
+      reply.code(409);
+      return {
+        error: "DEPOSIT_WALLET_REQUIRED",
+        message: "Activate the deposit wallet before withdrawing.",
+      };
+    }
+    const owner = { ownerAddress: wallet.embeddedAddress, ownerWalletId: wallet.privyWalletId };
+    const deployment = await deps.depositWalletRelayer.getDeploymentStatus(owner);
+    if (!deployment.ok || !deployment.value.deployed) {
+      reply.code(409);
+      return {
+        error: "DEPOSIT_WALLET_REQUIRED",
+        message: "The deposit wallet is not confirmed on-chain yet.",
+      };
+    }
+
+    // Destination: the session login wallet. Never a request parameter.
+    const destination = user.walletAddress;
+
+    // Deposit wallets hold pUSD, not USDC.e (INTEGRATION_VERIFIED §23).
+    const balanceRaw = await deps.allowanceReader.erc20Balance(
+      PUSD_ADDRESS,
+      internal.depositWalletAddress,
+    );
+    const availableUsd = Number(balanceRaw) / 1e6;
+    if (amountUsd > availableUsd) {
+      reply.code(400);
+      return {
+        error: "INSUFFICIENT_BALANCE",
+        message: `Withdrawal exceeds the deposit wallet's balance.`,
+        availableUsd,
+      };
+    }
+
+    const row = await deps.withdrawals.create({
+      walletAddress: user.walletAddress,
+      depositWalletAddress: internal.depositWalletAddress,
+      destinationAddress: destination,
+      amountUsd,
+      idempotencyKey,
+    });
+    if (!row) {
+      // Same idempotency key seen before — report the existing state, never
+      // re-submit to the relayer.
+      const existing = await deps.withdrawals.findByIdempotencyKey(
+        user.walletAddress,
+        idempotencyKey,
+      );
+      return { ok: true, alreadySubmitted: true, withdrawal: existing };
+    }
+
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "wallet.withdraw.requested",
+      subject: `withdrawal:${row.id}`,
+      metadata: {
+        amountUsd,
+        destination,
+        depositWalletAddress: internal.depositWalletAddress,
+      },
+    });
+
+    const batch = await deps.depositWalletRelayer.executeBatch(owner, [
+      buildPusdTransfer({ to: destination, amountUsd }),
+    ]);
+    if (!batch.ok) {
+      await deps.withdrawals.updateState(row.id, { state: "failed", error: batch.error.code });
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "wallet.withdraw.failed",
+        subject: `withdrawal:${row.id}`,
+        metadata: { amountUsd, destination, error: batch.error.code },
+      });
+      reply.code(502);
+      return { error: batch.error.code, message: batch.error.message };
+    }
+
+    await deps.withdrawals.updateState(row.id, {
+      state: isDepositWalletConfirmed(batch.value.state) ? "confirmed" : "submitted",
+      relayerTransactionId: batch.value.transactionId,
+      ...(batch.value.transactionHash ? { transactionHash: batch.value.transactionHash } : {}),
+    });
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "wallet.withdraw.submitted",
+      subject: `withdrawal:${row.id}`,
+      metadata: {
+        amountUsd,
+        destination,
+        relayerTransactionId: batch.value.transactionId,
+        state: batch.value.state,
+      },
+    });
+
+    return {
+      ok: true,
+      withdrawalId: row.id,
+      destination,
+      amountUsd,
+      relayer: {
+        transactionId: batch.value.transactionId,
+        state: batch.value.state,
+        ...(batch.value.transactionHash ? { transactionHash: batch.value.transactionHash } : {}),
+      },
+    };
+  });
+
+  // ── GET /api/trading-wallet/withdrawals ───────────────────────────────────
+  // Withdrawal history for the Funds sheet. Best-effort: refreshes the state
+  // of still-pending rows from the relayer (failures keep the stored state).
+  app.get("/api/trading-wallet/withdrawals", { preHandler: requireAuth }, async (req) => {
+    const user = req.user!;
+    const rows = await deps.withdrawals.listByWallet(user.walletAddress, 50);
+
+    const wallet = await deps.privyWallets.find(user.walletAddress);
+    if (wallet && deps.depositWalletRelayer.enabled) {
+      const owner = { ownerAddress: wallet.embeddedAddress, ownerWalletId: wallet.privyWalletId };
+      for (const row of rows) {
+        if (row.state !== "submitted" || !row.relayerTransactionId) continue;
+        const state = await deps.depositWalletRelayer.getTransactionState(
+          owner,
+          row.relayerTransactionId,
+        );
+        if (state.ok && isDepositWalletConfirmed(state.value.state)) {
+          await deps.withdrawals.updateState(row.id, {
+            state: "confirmed",
+            ...(state.value.transactionHash
+              ? { transactionHash: state.value.transactionHash }
+              : {}),
+          });
+          row.state = "confirmed";
+          if (state.value.transactionHash) row.transactionHash = state.value.transactionHash;
+        }
+      }
+    }
+
+    return {
+      withdrawals: rows.map((r) => ({
+        id: r.id,
+        amountUsd: Number(r.amountUsd),
+        destination: r.destinationAddress,
+        state: r.state,
+        transactionHash: r.transactionHash,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  });
+
   // ── GET /api/trading-wallet/balance ───────────────────────────────────────
-  // On-chain USDC.e balances for the top-up stepper: the deposit wallet (live
-  // CLOB funds) and the embedded signer EOA. Requires a Polygon RPC; without
-  // one the endpoint reports unavailable rather than guessing.
+  // On-chain balances for the Funds sheet. Deposit wallets hold pUSD (the V2
+  // exchanges' collateral, 1:1 USD — INTEGRATION_VERIFIED §23); raw USDC.e is
+  // reported separately as "unconverted" (Polymarket converts deposits, so a
+  // non-zero value means conversion is still pending). Requires a Polygon RPC;
+  // without one the endpoint reports unavailable rather than guessing.
   app.get("/api/trading-wallet/balance", { preHandler: requireAuth }, async (req, reply) => {
     const user = req.user!;
     if (!deps.allowanceReader) {
@@ -424,16 +644,22 @@ export const registerTradingWalletRoutes = (
         account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase(),
     );
     const depositWallet = internalAccount?.depositWalletAddress ?? null;
-    const toUsd = (raw: bigint) => Number(raw) / 1e6; // USDC.e has 6 decimals
-    const [embeddedRaw, depositRaw] = await Promise.all([
+    const toUsd = (raw: bigint) => Number(raw) / 1e6; // pUSD and USDC.e are both 6-decimal
+    const [embeddedRaw, depositPusdRaw, depositUsdcRaw] = await Promise.all([
       deps.allowanceReader.erc20Balance(USDC_ADDRESS, wallet.embeddedAddress),
+      depositWallet
+        ? deps.allowanceReader.erc20Balance(PUSD_ADDRESS, depositWallet)
+        : Promise.resolve<bigint | null>(null),
       depositWallet
         ? deps.allowanceReader.erc20Balance(USDC_ADDRESS, depositWallet)
         : Promise.resolve<bigint | null>(null),
     ]);
     return {
       depositWalletAddress: depositWallet,
-      depositWalletUsdc: depositRaw === null ? null : toUsd(depositRaw),
+      /** pUSD — the spendable/withdrawable Polymarket balance. */
+      depositWalletUsdc: depositPusdRaw === null ? null : toUsd(depositPusdRaw),
+      /** Raw USDC.e still sitting in the deposit wallet (conversion pending). */
+      depositWalletUnconvertedUsdc: depositUsdcRaw === null ? null : toUsd(depositUsdcRaw),
       embeddedAddress: wallet.embeddedAddress,
       embeddedUsdc: toUsd(embeddedRaw),
       asOf: new Date().toISOString(),
@@ -441,14 +667,24 @@ export const registerTradingWalletRoutes = (
   });
 
   // ── POST /api/trading-wallet/bootstrap-allowances ─────────────────────────
-  // One-time USDC + CTF approvals to the Polymarket exchanges (server-signed,
-  // idempotent). Fail-closed: orders are refused until this succeeds.
+  // pUSD + CTF approvals FROM the deposit wallet to the Polymarket V2
+  // exchanges/adapters, executed as one gasless relayer batch (W2). The chain
+  // is the source of truth: only missing grants are submitted, so re-running
+  // is always safe. Fail-closed: orders are refused until this reports clean.
   app.post(
     "/api/trading-wallet/bootstrap-allowances",
     { preHandler: requireAuth },
     async (req, reply) => {
       if (!ensureEnabled(reply)) return;
+      if (!ensureRelayerEnabled(reply)) return;
       const user = req.user!;
+      if (!deps.allowanceReader) {
+        reply.code(503);
+        return {
+          error: "ALLOWANCE_READS_UNAVAILABLE",
+          message: "No Polygon RPC configured — cannot verify on-chain allowances.",
+        };
+      }
       const wallet = await deps.privyWallets.find(user.walletAddress);
       if (!wallet) {
         reply.code(400);
@@ -457,11 +693,60 @@ export const registerTradingWalletRoutes = (
           message: "Provision a trading wallet first (POST /api/trading-wallet/provision).",
         };
       }
-      reply.code(409);
+      const internal = (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
+        (a) =>
+          a.kind === "internal_privy" &&
+          a.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
+          a.depositWalletAddress,
+      );
+      if (!internal?.depositWalletAddress) {
+        reply.code(409);
+        return {
+          error: "DEPOSIT_WALLET_REQUIRED",
+          message:
+            "Activate the deposit wallet first (POST /api/trading-wallet/activate-deposit-wallet). Allowances are granted from the deposit wallet, not the signer EOA.",
+        };
+      }
+
+      const result = await ensureDepositWalletAllowances(
+        {
+          config: deps.config,
+          reader: deps.allowanceReader,
+          depositWalletRelayer: deps.depositWalletRelayer,
+          auditStore: deps.auditStore,
+        },
+        {
+          userWalletAddress: user.walletAddress,
+          owner: { ownerAddress: wallet.embeddedAddress, ownerWalletId: wallet.privyWalletId },
+          depositWalletAddress: internal.depositWalletAddress,
+        },
+      );
+      if (!result.ok) {
+        reply.code(result.error.code === "RELAYER_DISABLED" ? 503 : 502);
+        return { error: result.error.code, message: result.error.message };
+      }
+
+      // The legacy flag exists for the UI ("allowancesBootstrapped"); the
+      // authoritative check stays on-chain. Mark it once the batch is away.
+      if (!wallet.allowancesBootstrappedAt) {
+        await deps.privyWallets.markAllowancesBootstrapped(user.walletAddress);
+      }
       return {
-        error: "DEPOSIT_WALLET_REQUIRED",
-        message:
-          "Allowance bootstrap must be executed from the Polymarket deposit wallet through the relayer. The embedded signer EOA is not a valid live CLOB maker.",
+        ok: true,
+        depositWalletAddress: internal.depositWalletAddress,
+        alreadyBootstrapped: result.value.alreadyBootstrapped,
+        submitted: result.value.submitted,
+        ...(result.value.relayerTransactionId
+          ? {
+              relayer: {
+                transactionId: result.value.relayerTransactionId,
+                state: result.value.state,
+                ...(result.value.transactionHash
+                  ? { transactionHash: result.value.transactionHash }
+                  : {}),
+              },
+            }
+          : {}),
       };
     },
   );
