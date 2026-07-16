@@ -1329,6 +1329,56 @@ describe("Trading wallet onboarding", () => {
     await app.close();
   });
 
+  it("POST /provision restores an app-archived account (Remove wallet → Create dead-end)", async () => {
+    // The user soft-deleted their trading account in the app while the Privy
+    // wallet stayed alive. Re-provisioning re-links into the archived row,
+    // which the store restores (wasArchived) — the route must audit it.
+    const { events, auditStore } = captureAudit();
+    let upsertCalls = 0;
+    const app = buildTestApp({
+      cfg: configPrivy,
+      sessions: mockSessionsAuthed,
+      auditStore,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingAccounts: {
+        ...mockTradingAccounts,
+        // Archived row is invisible to list paths…
+        listByOwner: async () => [makeTradingAccountRow()],
+        // …but the signer-keyed upsert finds and restores it.
+        upsertInternalPrivy: async (opts) => {
+          upsertCalls++;
+          return {
+            ...makeTradingAccountRow({
+              id: "acct-restored",
+              kind: "internal_privy",
+              signerAddress: opts.signerAddress,
+              privyWalletId: opts.privyWalletId,
+              status: opts.status,
+              archivedAt: null,
+            }),
+            wasArchived: true,
+          };
+        },
+      },
+      tradingSigner: signerWith({
+        getWalletStatus: async () => ({ ok: true, value: "active" as const }),
+      }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trading-wallet/provision",
+      headers: { cookie: "mx2_session=tok" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.alreadyProvisioned).toBe(true);
+    expect(body.reissued).toBe(false);
+    expect(body.tradingAccountId).toBe("acct-restored");
+    expect(upsertCalls).toBe(1);
+    expect(events).toContain("trading_account.unarchived");
+    await app.close();
+  });
+
   it("POST /reissue returns 401 without session and 409 when the wallet is still active", async () => {
     const noSession = buildTestApp({ cfg: configPrivy });
     const unauth = await noSession.inject({ method: "POST", url: "/api/trading-wallet/reissue" });

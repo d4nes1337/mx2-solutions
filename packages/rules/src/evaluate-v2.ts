@@ -25,14 +25,41 @@ import type {
   ExprNode,
   ExprResultNode,
   StrategyDefinition,
+  TrailingWatermark,
   ViewsByToken,
+  WatermarksByNode,
 } from "./types-v2.js";
+
+/**
+ * Mutable collector for the NEXT watermark map, threaded through one
+ * evaluation pass. The evaluator stays pure from the outside: `prev` is never
+ * mutated and `next` is a fresh object per call.
+ */
+interface WatermarkPass {
+  readonly prev: WatermarksByNode;
+  readonly next: Record<string, TrailingWatermark>;
+}
+
+/** Effective trigger level for a trailing condition at a given watermark. */
+const watermarkTrigger = (
+  c: Extract<ConditionV2, { kind: "trailing" }>,
+  watermark: number,
+): number => (c.mode === "stop" ? watermark - c.offset : watermark + c.offset);
+
+/**
+ * Float tolerance for trigger-level comparisons: `watermark ± offset` is
+ * computed (0.6 − 0.05 = 0.549999…), so an exact-boundary tick must still
+ * count. Minimum price tick is 0.0001 — 1e-9 can never flip a real level.
+ */
+export const TRAILING_EPS = 1e-9;
 
 const evalCondition = (
   c: ConditionV2,
+  nodeId: string,
   views: ViewsByToken,
   nowMs: number,
   maxDataAgeMs: number,
+  wm: WatermarkPass,
 ): ConditionResultV2 => {
   if (c.kind === "time_window") {
     const satisfied =
@@ -60,6 +87,49 @@ const evalCondition = (
     tokenId: c.market.tokenId,
     stale: true,
   });
+
+  if (c.kind === "trailing") {
+    const prior = wm.prev[nodeId];
+    // Fail-closed AND frozen: stale/missing data can neither satisfy the
+    // condition nor move the watermark — but it must not erase it either.
+    if (prior !== undefined) wm.next[nodeId] = prior;
+    const ref = view ? (c.source === "ask" ? bestAsk(view) : bestBid(view)) : null;
+    if (!view || stale || ref === null) {
+      // threshold 0 = "no trigger level yet" (NaN would break JSON round-trips).
+      return {
+        ...fail("trailing", prior !== undefined ? watermarkTrigger(c, prior.value) : 0),
+        watermark: prior?.value ?? null,
+      };
+    }
+    // Update-then-check: the observation first ratchets the watermark, then
+    // the trigger level is measured against the SAME observation.
+    const value =
+      prior === undefined
+        ? ref
+        : c.mode === "stop"
+          ? Math.max(prior.value, ref)
+          : Math.min(prior.value, ref);
+    wm.next[nodeId] = {
+      value,
+      armedAtMs: prior?.armedAtMs ?? nowMs,
+      updatedAtMs: prior === undefined || value !== prior.value ? nowMs : prior.updatedAtMs,
+    };
+    const trigger = watermarkTrigger(c, value);
+    // The arming observation never satisfies (offset > 0 by validation).
+    const satisfied =
+      prior !== undefined &&
+      (c.mode === "stop" ? ref <= trigger + TRAILING_EPS : ref >= trigger - TRAILING_EPS);
+    return {
+      kind: "trailing",
+      satisfied,
+      actual: ref,
+      threshold: trigger,
+      reason: prior === undefined ? "TRAILING_ARMING" : satisfied ? "TRAILING_OK" : "TRAILING_FAIL",
+      tokenId: c.market.tokenId,
+      stale: false,
+      watermark: value,
+    };
+  }
 
   switch (c.kind) {
     case "price": {
@@ -166,12 +236,13 @@ const evalNode = (
   views: ViewsByToken,
   nowMs: number,
   maxDataAgeMs: number,
+  wm: WatermarkPass,
 ): ExprResultNode => {
   if (node.type === "condition") {
-    const result = evalCondition(node.condition, views, nowMs, maxDataAgeMs);
+    const result = evalCondition(node.condition, node.id, views, nowMs, maxDataAgeMs, wm);
     return { type: "condition", id: node.id, satisfied: result.satisfied, result };
   }
-  const children = node.children.map((c) => evalNode(c, views, nowMs, maxDataAgeMs));
+  const children = node.children.map((c) => evalNode(c, views, nowMs, maxDataAgeMs, wm));
   let satisfied: boolean;
   switch (node.op) {
     case "and":
@@ -194,13 +265,21 @@ const collectResults = (node: ExprResultNode): readonly ConditionResultV2[] =>
  * Evaluate the strategy's expression against the views available at `nowMs`.
  * Root satisfaction is fail-closed on staleness: any referenced market with
  * missing/stale data forces `satisfied: false` regardless of tree shape.
+ *
+ * `watermarksIn` carries trailing-condition state from the previous
+ * observation (StrategyRuntime.watermarks); the returned `watermarks` map is
+ * the updated state to persist. The input is never mutated. Callers that
+ * evaluate statelessly (draft evaluation) omit it — trailing conditions then
+ * report "arming" on every pass, which is the honest stateless answer.
  */
 export const evaluateExpression = (
   def: StrategyDefinition,
   views: ViewsByToken,
   nowMs: number,
+  watermarksIn: WatermarksByNode = {},
 ): EvaluationV2 => {
-  const root = evalNode(def.expr, views, nowMs, def.maxDataAgeMs);
+  const wm: WatermarkPass = { prev: watermarksIn, next: {} };
+  const root = evalNode(def.expr, views, nowMs, def.maxDataAgeMs, wm);
   const results = collectResults(root);
 
   const staleTokenIds = [
@@ -214,5 +293,5 @@ export const evaluateExpression = (
   const reasonCodes: ReasonCode[] = results.map((r) => r.reason);
   if (anyStale && !reasonCodes.includes("DATA_STALE")) reasonCodes.push("DATA_STALE");
 
-  return { satisfied, root, reasonCodes, staleTokenIds };
+  return { satisfied, root, reasonCodes, staleTokenIds, watermarks: wm.next };
 };

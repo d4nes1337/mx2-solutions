@@ -75,9 +75,7 @@ const buildScanner = async (
         const bestBid = Number(m.bestBid) > 0 ? Number(m.bestBid) : null;
         const bestAsk = Number(m.bestAsk) > 0 ? Number(m.bestAsk) : null;
         const spreadCents =
-          bestBid !== null && bestAsk !== null
-            ? Math.round((bestAsk - bestBid) * 1000) / 10
-            : null;
+          bestBid !== null && bestAsk !== null ? Math.round((bestAsk - bestBid) * 1000) / 10 : null;
         const maxSpreadCents = row.rewards_max_spread ?? m.rewardsMaxSpread ?? null;
         return {
           conditionId,
@@ -161,7 +159,8 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
       reply.code(404);
       await reply.send({
         error: "NO_SESSION",
-        message: "No quoting session yet — the worker attaches armed maker loops within a few seconds.",
+        message:
+          "No quoting session yet — the worker attaches armed maker loops within a few seconds.",
       });
       return null;
     }

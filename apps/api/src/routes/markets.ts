@@ -14,6 +14,8 @@ export interface MarketsRoutesDeps {
   clobClient: ClobClient;
   dataClient: DataClient;
   marketSnapshots: MarketSnapshotStore;
+  /** Routes the scenarios' farm_rewards card to the cockpit when on. */
+  makerLoopEnabled?: boolean;
 }
 
 // CLOB token ids are uint256 rendered as decimal strings.
@@ -57,10 +59,11 @@ const getMarketEconomics = async (
   const [clobInfo, rewardsRes, gammaRes] = await Promise.all([
     deps.clobClient.getClobMarket(conditionId),
     deps.clobClient.getRewardsMarket(conditionId),
-    deps.gammaClient.getMarket(conditionId),
+    // Gamma /markets/{id} only accepts numeric ids — a conditionId 422s there.
+    deps.gammaClient.findMarket({ conditionId }),
   ]);
 
-  const gamma = gammaRes.ok ? gammaRes.value : null;
+  const gamma = gammaRes.ok ? gammaRes.value : null; // null also when not found
   const fd = clobInfo.ok ? clobInfo.value.fd : null;
   const gammaFee = gamma?.feeSchedule ?? null;
   const feeSchedule =
@@ -135,6 +138,63 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
         return { error: histResult.error.code, message: histResult.error.message };
       }
       return { tokenId, history: histResult.value };
+    },
+  );
+
+  // PUBLIC, rate-limited: orderbook keyed DIRECTLY by CLOB token id. The
+  // builder's Market tab and cost preview only know tokenIds — the /:id variant
+  // below needs a numeric Gamma id (a conditionId 422s at Gamma), which the
+  // builder never has. Registered before /:id (static wins). Snapshot-first,
+  // CLOB REST fallback, stale snapshot surfaced with the flag set.
+  app.get(
+    "/api/markets/orderbook",
+    { preHandler: [makeRateLimit({ scope: "orderbook-token", limit: 120, windowMs: 60_000 })] },
+    async (req, reply) => {
+      const q = req.query as Record<string, string>;
+      const tokenId = q["tokenId"];
+      if (!tokenId || !TOKEN_ID_RE.test(tokenId)) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "valid tokenId required (?tokenId=...)" };
+      }
+
+      const snapshot = await deps.marketSnapshots.findByTokenId(tokenId);
+      if (snapshot !== null && !snapshot.isStale) {
+        return {
+          tokenId,
+          bids: snapshot.bids,
+          asks: snapshot.asks,
+          isStale: false,
+          source: snapshot.source,
+          receivedAt: snapshot.receivedAt,
+        };
+      }
+
+      const obResult = await deps.clobClient.getOrderbook(tokenId);
+      if (obResult.ok) {
+        return {
+          tokenId,
+          bids: obResult.value.bids,
+          asks: obResult.value.asks,
+          isStale: false,
+          source: "rest",
+          receivedAt: new Date().toISOString(),
+        };
+      }
+
+      if (snapshot !== null) {
+        // Stale WS snapshot is better than nothing — surface it with the flag.
+        return {
+          tokenId,
+          bids: snapshot.bids,
+          asks: snapshot.asks,
+          isStale: true,
+          source: snapshot.source,
+          receivedAt: snapshot.receivedAt,
+        };
+      }
+
+      reply.code(502);
+      return { error: obResult.error.code, message: obResult.error.message };
     },
   );
 
@@ -433,7 +493,17 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
 
       try {
         return await getMarketScenarios(
-          { clobClient: deps.clobClient },
+          {
+            clobClient: deps.clobClient,
+            // Reuses the 5-min economics cache; a miss only drops the farm card.
+            getRewards: async (conditionId) => {
+              const eco = await getMarketEconomics(deps, conditionId);
+              return eco.rewards
+                ? { ratePerDayUsd: eco.rewards.ratePerDayUsd, minSize: eco.rewards.minSize }
+                : null;
+            },
+            makerLoopEnabled: deps.makerLoopEnabled ?? false,
+          },
           {
             conditionId: market.conditionId,
             tokenId,

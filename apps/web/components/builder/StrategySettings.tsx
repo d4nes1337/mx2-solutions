@@ -7,7 +7,7 @@
  */
 import { Segmented } from "@/components/ui";
 import { useBuilderStore } from "@/lib/smart-orders/store";
-import { Field, NumberInput } from "./inline/fields";
+import { Field, NumberInput } from "./editors/fields";
 
 const HOLD_OPTIONS = [
   { value: "0", label: "instant" },
@@ -44,6 +44,7 @@ export function StrategySettings() {
           value={doc.expr.op === "or" ? "or" : "and"}
           onChange={(op) => setRootOp(op)}
           size="md"
+          grow
         />
       </Field>
       <Field label="Conditions must hold for">
@@ -52,6 +53,7 @@ export function StrategySettings() {
           value={String(doc.holdsForMs)}
           onChange={(v) => setHoldsFor(Number(v))}
           size="md"
+          grow={3}
         />
       </Field>
       <Field label="How often">
@@ -69,6 +71,7 @@ export function StrategySettings() {
             )
           }
           size="md"
+          grow
         />
       </Field>
       {doc.recurrence.kind === "repeat" ? (
@@ -103,6 +106,7 @@ export function StrategySettings() {
               }
               suffix="min"
               min={0}
+              max={1440}
             />
           </Field>
         </div>
@@ -116,6 +120,7 @@ export function StrategySettings() {
               value={String(doc.maxDataAgeMs)}
               onChange={(v) => setMaxDataAge(Number(v))}
               size="md"
+              grow
             />
           </Field>
           <p className="text-[11px] leading-snug text-muted">

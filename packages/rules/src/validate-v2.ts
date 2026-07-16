@@ -38,7 +38,9 @@ export interface ValidationIssue {
     | "GTD_REQUIRES_EXPIRY"
     | "QUOTE_LOOP_PARAMS_INVALID"
     | "QUOTE_LOOP_NO_HOLD"
-    | "QUOTE_LOOP_RECURRENCE";
+    | "QUOTE_LOOP_RECURRENCE"
+    | "TRAILING_OFFSET_OUT_OF_RANGE"
+    | "QUOTE_LOOP_TRAILING_GATE";
   readonly message: string;
   /** Node id the issue anchors to, when it concerns a specific node. */
   readonly nodeId: string | null;
@@ -56,6 +58,10 @@ export const PRICE_MOVE_WINDOW_MAX_MS = 3_600_000;
 // effective ~3 min floor (ADR-0013) — entry windows below this must use FAK.
 export const GTD_MIN_EXPIRES_AFTER_MS = 180_000;
 export const GTD_MAX_EXPIRES_AFTER_MS = 86_400_000;
+// Trailing offset bounds: below 1¢ is noise (every tick fires), above 50¢ can
+// never fire on a 0–1 probability market you'd realistically trail.
+export const TRAILING_OFFSET_MIN = 0.01;
+export const TRAILING_OFFSET_MAX = 0.5;
 
 const depthOf = (node: ExprNode): number =>
   node.type === "condition" ? 1 : 1 + Math.max(0, ...node.children.map(depthOf));
@@ -126,6 +132,16 @@ export const validateStrategyDefinition = (
       case "time_window":
         if (c.startMs !== null && c.endMs !== null && c.startMs >= c.endMs)
           push("TIME_WINDOW_INVERTED", "The time window ends before it starts.", id);
+        break;
+      case "trailing":
+        if (!(c.offset >= TRAILING_OFFSET_MIN && c.offset <= TRAILING_OFFSET_MAX))
+          push("TRAILING_OFFSET_OUT_OF_RANGE", "Trailing distance must be between 1¢ and 50¢.", id);
+        if (def.action.kind === "quote_loop")
+          push(
+            "QUOTE_LOOP_TRAILING_GATE",
+            "Trailing conditions can't gate a maker loop (the gate is evaluated statelessly).",
+            id,
+          );
         break;
       case "price_move":
         if (!(c.deltaThreshold > 0 && c.deltaThreshold < 1))

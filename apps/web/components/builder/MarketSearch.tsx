@@ -13,10 +13,17 @@ import type { MarketMeta } from "@/lib/smart-orders/doc";
 
 export function MarketSearch({
   onPick,
+  onPickResult,
   autoFocus,
   placeholder = "Search markets — e.g. @election…",
 }: {
-  onPick: (ref: MarketRef, meta: MarketMeta) => void;
+  /** Per-outcome pick: binds one MarketRef (YES or NO button). */
+  onPick?: (ref: MarketRef, meta: MarketMeta) => void;
+  /**
+   * Whole-market pick: one "Use market" button returning the raw result
+   * (both token ids) — for consumers that need the YES+NO pair (quote_loop).
+   */
+  onPickResult?: (result: MarketSearchResult) => void;
   autoFocus?: boolean;
   placeholder?: string;
 }) {
@@ -26,7 +33,7 @@ export function MarketSearch({
   const pick = (r: MarketSearchResult, outcomeIdx: number) => {
     const tokenId = r.tokenIds[outcomeIdx];
     if (!tokenId) return;
-    onPick(
+    onPick?.(
       {
         conditionId: r.conditionId,
         tokenId,
@@ -41,6 +48,11 @@ export function MarketSearch({
         rewardsMaxSpread: r.rewardsMaxSpread,
       },
     );
+    setQ("");
+  };
+
+  const pickWhole = (r: MarketSearchResult) => {
+    onPickResult?.(r);
     setQ("");
   };
 
@@ -90,24 +102,34 @@ export function MarketSearch({
                   </div>
                 </div>
                 <div className="mt-1.5 flex gap-1.5">
-                  {r.outcomes.slice(0, 2).map((o, i) => (
+                  {onPickResult ? (
                     <button
-                      key={o}
                       type="button"
-                      onClick={() => pick(r, i)}
-                      className={cn(
-                        "flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
-                        i === 0
-                          ? "border-pos/30 bg-pos/10 text-pos hover:bg-pos/20"
-                          : "border-neg/30 bg-neg/10 text-neg hover:bg-neg/20",
-                      )}
+                      onClick={() => pickWhole(r)}
+                      className="flex-1 rounded-md border border-brand/40 bg-brand-soft px-2 py-1 text-[11px] font-semibold text-accent transition-colors hover:bg-brand-soft/70"
                     >
-                      {o}{" "}
-                      {r.outcomePrices[i]
-                        ? `· ${Math.round(Number(r.outcomePrices[i]) * 100)}¢`
-                        : ""}
+                      Use market (YES + NO)
                     </button>
-                  ))}
+                  ) : (
+                    r.outcomes.slice(0, 2).map((o, i) => (
+                      <button
+                        key={o}
+                        type="button"
+                        onClick={() => pick(r, i)}
+                        className={cn(
+                          "flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
+                          i === 0
+                            ? "border-pos/30 bg-pos/10 text-pos hover:bg-pos/20"
+                            : "border-neg/30 bg-neg/10 text-neg hover:bg-neg/20",
+                        )}
+                      >
+                        {o}{" "}
+                        {r.outcomePrices[i]
+                          ? `· ${Math.round(Number(r.outcomePrices[i]) * 100)}¢`
+                          : ""}
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             ))

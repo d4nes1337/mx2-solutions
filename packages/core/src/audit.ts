@@ -41,6 +41,7 @@ export const AUDIT_ACTIONS = [
   "trading_account.external_upserted",
   "trading_account.primary_set",
   "trading_account.archived",
+  "trading_account.unarchived",
   "trading_wallet.provisioned",
   "trading_wallet.ghost_detected",
   "trading_wallet.reissued",

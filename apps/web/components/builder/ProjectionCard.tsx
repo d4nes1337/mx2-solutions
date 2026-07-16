@@ -15,7 +15,7 @@ import { AreaChart } from "@/components/charts/AreaChart";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
 import { backtestTokenId, simulateTriggers } from "@mx2/rules";
-import { marketLabel } from "@/lib/smart-orders/doc";
+import { docMarketRefs, marketLabel, type StrategyDoc } from "@/lib/smart-orders/doc";
 import { cents, signedUsd, usd } from "@/lib/format";
 import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
@@ -31,6 +31,12 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 const signedClass = (v: number) => (v >= 0 ? "text-pos" : "text-neg");
+
+/** Label for the backtested market; falls back to a token snippet. */
+const backtestMarketLabel = (doc: StrategyDoc, tokenId: string): string => {
+  const ref = docMarketRefs(doc).find((m) => m.tokenId === tokenId);
+  return ref ? marketLabel(doc, ref) : `${tokenId.slice(0, 6)}…`;
+};
 
 export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | undefined }) {
   const doc = useBuilderStore((s) => s.doc);
@@ -50,9 +56,7 @@ export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | u
 
   const payoff = useMemo(
     () =>
-      input
-        ? computePayoff({ ...input, feeSchedule: economics.data?.feeSchedule ?? null })
-        : null,
+      input ? computePayoff({ ...input, feeSchedule: economics.data?.feeSchedule ?? null }) : null,
     [input, economics.data],
   );
 
@@ -135,7 +139,7 @@ export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | u
       {backtest?.supported && btTokenId ? (
         <div className="space-y-1 border-t border-border pt-2">
           <div className="text-[11px] text-muted">
-            Last 30 days on {marketLabel(doc, { conditionId: "x", tokenId: btTokenId, outcome })}
+            Last 30 days on {backtestMarketLabel(doc, btTokenId)}
           </div>
           {backtest.triggers.length > 0 ? (
             <>

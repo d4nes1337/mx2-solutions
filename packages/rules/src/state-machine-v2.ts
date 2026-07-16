@@ -17,7 +17,7 @@
  */
 import { evaluateExpression } from "./evaluate-v2.js";
 import { buildEvidenceV2 } from "./evidence-v2.js";
-import { referencedTokenIds } from "./compat.js";
+import { conditionLeaves, referencedTokenIds } from "./compat.js";
 import { isTerminal } from "./state-machine.js";
 import type { ReasonCode, StateTransition } from "./types.js";
 import type {
@@ -26,6 +26,7 @@ import type {
   StrategyRuntime,
   TransitionResultV2,
   ViewsByToken,
+  WatermarksByNode,
 } from "./types-v2.js";
 
 export const initialRuntimeV2 = (): StrategyRuntime => ({
@@ -34,7 +35,26 @@ export const initialRuntimeV2 = (): StrategyRuntime => ({
   lastEventTimeMs: null,
   triggerCount: 0,
   cooldownUntilMs: null,
+  watermarks: {},
 });
+
+/**
+ * Drop trailing-node watermarks after a repeat trigger: each repetition
+ * trails from scratch (re-arms at the first fresh observation after the
+ * cooldown). Non-trailing entries can't exist, but filter defensively.
+ */
+const clearTrailingWatermarks = (
+  watermarks: WatermarksByNode,
+  def: StrategyDefinition,
+): WatermarksByNode => {
+  const trailingIds = new Set(
+    conditionLeaves(def.expr)
+      .filter((n) => n.condition.kind === "trailing")
+      .map((n) => n.id),
+  );
+  const kept = Object.entries(watermarks).filter(([id]) => !trailingIds.has(id));
+  return Object.fromEntries(kept);
+};
 
 const mk = (
   prev: StrategyRuntime,
@@ -49,10 +69,24 @@ const mk = (
   return { runtime: next, transition, trigger };
 };
 
-const reset = (prev: StrategyRuntime, reason: ReasonCode, atMs: number): TransitionResultV2 =>
+const reset = (
+  prev: StrategyRuntime,
+  reason: ReasonCode,
+  atMs: number,
+  watermarks?: WatermarksByNode,
+): TransitionResultV2 =>
   mk(
     prev,
-    { ...prev, status: "ACTIVE_WAITING", trueSinceMs: null, lastEventTimeMs: atMs },
+    {
+      ...prev,
+      status: "ACTIVE_WAITING",
+      trueSinceMs: null,
+      lastEventTimeMs: atMs,
+      // Hold-window resets never reset trailing state: the watermark is a
+      // high-water mark, not continuity-dependent data. Callers that just
+      // evaluated pass the updated map; event-driven resets keep prev's.
+      ...(watermarks !== undefined ? { watermarks } : {}),
+    },
     reason,
     atMs,
   );
@@ -95,16 +129,23 @@ const observe = (
   const cleared: StrategyRuntime =
     prev.cooldownUntilMs !== null ? { ...prev, cooldownUntilMs: null } : prev;
 
-  const evalResult = evaluateExpression(def, views, nowMs);
+  const evalResult = evaluateExpression(def, views, nowMs, prev.watermarks ?? {});
   if (!evalResult.satisfied) {
     const isStale = evalResult.staleTokenIds.length > 0;
     if (cleared.status === "ACTIVE_ACCUMULATING") {
       const reason: ReasonCode = isStale
         ? "DATA_STALE"
         : (evalResult.reasonCodes.find((r) => r.endsWith("FAIL")) ?? "PRICE_FAIL");
-      return reset(cleared, reason, nowMs);
+      return reset(cleared, reason, nowMs, evalResult.watermarks);
     }
-    return mk(prev, { ...cleared, trueSinceMs: null, lastEventTimeMs: nowMs }, null, nowMs);
+    // Watermark updates while unsatisfied are the whole point of trailing —
+    // the peak ratchets long before the drop that satisfies the condition.
+    return mk(
+      prev,
+      { ...cleared, trueSinceMs: null, lastEventTimeMs: nowMs, watermarks: evalResult.watermarks },
+      null,
+      nowMs,
+    );
   }
 
   // Expression satisfied on fresh data — accumulate toward the hold window.
@@ -122,6 +163,7 @@ const observe = (
       triggeredAtMs: nowMs,
       reasonCodes: [...evalResult.reasonCodes, "WINDOW_COMPLETE"],
       triggerNumber,
+      watermarks: evalResult.watermarks,
     });
 
     const repeatsRemaining =
@@ -138,6 +180,8 @@ const observe = (
           lastEventTimeMs: nowMs,
           triggerCount: triggerNumber,
           cooldownUntilMs,
+          // Each repetition trails from scratch: re-arm after the cooldown.
+          watermarks: clearTrailingWatermarks(evalResult.watermarks, def),
         },
         "WINDOW_COMPLETE",
         nowMs,
@@ -157,6 +201,7 @@ const observe = (
         lastEventTimeMs: nowMs,
         triggerCount: triggerNumber,
         cooldownUntilMs: null,
+        watermarks: evalResult.watermarks,
       },
       finalReason,
       nowMs,
@@ -169,6 +214,7 @@ const observe = (
     status: "ACTIVE_ACCUMULATING",
     trueSinceMs,
     lastEventTimeMs: nowMs,
+    watermarks: evalResult.watermarks,
   };
   const reason: ReasonCode | null =
     cleared.status !== "ACTIVE_ACCUMULATING" ? "WINDOW_STARTED" : null;

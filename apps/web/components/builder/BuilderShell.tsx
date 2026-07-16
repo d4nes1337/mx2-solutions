@@ -34,13 +34,12 @@ import {
 import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
 import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
+import { AddPalette } from "./AddPalette";
 import { CanvasToolbar } from "./CanvasToolbar";
+import { CANVAS_HEIGHT_CLASS } from "./layout-constants";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { SentenceBar } from "./SentenceBar";
 import { WorkspacePanel } from "./WorkspacePanel";
-
-/** Canvas fills the viewport below the fixed chrome on desktop; fixed on mobile. */
-export const CANVAS_HEIGHT_CLASS = "h-[480px] lg:h-[max(420px,calc(100vh-360px))]";
 
 const BuilderCanvas = dynamic(() => import("./BuilderCanvas"), {
   ssr: false,
@@ -196,7 +195,14 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           }
         : undefined;
     const meta = params.get("title") ? { title: params.get("title")! } : undefined;
-    reset(template.build(market, meta));
+    const doc = template.build(market, meta);
+    // ?size= (portfolio "Protect this position"): size the prepared order to
+    // the caller's actual position instead of the template default.
+    const sizeParam = Number(params.get("size"));
+    if (doc.action.kind === "order" && Number.isFinite(sizeParam) && sizeParam >= 1) {
+      doc.action = { ...doc.action, size: Math.round(sizeParam) };
+    }
+    reset(doc);
     setInitialized(true);
   }, [
     initialized,
@@ -242,7 +248,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // first ("how much can this make me?"). Estimates only; taker entries
   // subtract the market's taker fee when the schedule is known.
   const takerOrderConditionId =
-    doc.action.kind === "order" && (doc.action.orderType === "FOK" || doc.action.orderType === "FAK")
+    doc.action.kind === "order" &&
+    (doc.action.orderType === "FOK" || doc.action.orderType === "FAK")
       ? doc.action.market.conditionId
       : "";
   const headlineEconomics = useMarketEconomics(takerOrderConditionId);
@@ -323,8 +330,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       >
         <div className="min-w-0 space-y-2">
           <CanvasToolbar />
-          <div className={CANVAS_HEIGHT_CLASS}>
+          <div className={cn("relative", CANVAS_HEIGHT_CLASS)}>
             <BuilderCanvas evaluation={evaluation.data} issues={issues} />
+            <AddPalette />
           </div>
 
           {/* Validation checklist */}
@@ -382,8 +390,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
                   </>
                 ) : (
                   <p className="text-[12px] leading-snug text-muted">
-                    Your account isn&apos;t in the beta yet — you can build and simulate freely,
-                    and save once you have access.
+                    Your account isn&apos;t in the beta yet — you can build and simulate freely, and
+                    save once you have access.
                   </p>
                 )
               ) : (

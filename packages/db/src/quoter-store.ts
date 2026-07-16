@@ -77,10 +77,7 @@ export const createQuoterStore = (db: Database): QuoterStore => ({
       .where(eq(quoteSessions.ruleId, ruleId))
       .limit(1);
     if (existing[0]) return existing[0];
-    const inserted = await db
-      .insert(quoteSessions)
-      .values({ ruleId, walletAddress })
-      .returning();
+    const inserted = await db.insert(quoteSessions).values({ ruleId, walletAddress }).returning();
     return inserted[0]!;
   },
 
@@ -101,8 +98,7 @@ export const createQuoterStore = (db: Database): QuoterStore => ({
     if (update.inventoryNo !== undefined) set["inventoryNo"] = String(update.inventoryNo);
     if (update.capitalCommittedUsd !== undefined)
       set["capitalCommittedUsd"] = String(update.capitalCommittedUsd);
-    if (update.realizedPnlUsd !== undefined)
-      set["realizedPnlUsd"] = String(update.realizedPnlUsd);
+    if (update.realizedPnlUsd !== undefined) set["realizedPnlUsd"] = String(update.realizedPnlUsd);
     if (update.dailyLossUsd !== undefined) set["dailyLossUsd"] = String(update.dailyLossUsd);
     if (update.rewardsAccruedUsd !== undefined)
       set["rewardsAccruedUsd"] = String(update.rewardsAccruedUsd);

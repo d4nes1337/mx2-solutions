@@ -76,10 +76,7 @@ export const takerCrossCost = (
 
   const fillable = shares - remaining;
   const avgPrice = fillable > 0 ? notional / fillable : 0;
-  const impactUsd =
-    fillable > 0 && best !== null
-      ? Math.abs(avgPrice - best) * fillable
-      : 0;
+  const impactUsd = fillable > 0 && best !== null ? Math.abs(avgPrice - best) * fillable : 0;
 
   return {
     fillableShares: round6(fillable),

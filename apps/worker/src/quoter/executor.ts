@@ -20,7 +20,10 @@ export interface QuoterExecutor {
   place(intent: QuoteIntent, idempotencyKey: string): Promise<ExecResult<RestingQuote>>;
   cancel(quote: RestingQuote, idempotencyKey: string): Promise<ExecResult<void>>;
   /** Merge whole YES+NO pairs back to collateral (gasless via relayer). */
-  mergePairs(pairs: number, idempotencyKey: string): Promise<ExecResult<{ transactionId: string | null }>>;
+  mergePairs(
+    pairs: number,
+    idempotencyKey: string,
+  ): Promise<ExecResult<{ transactionId: string | null }>>;
 }
 
 /** Shadow: every action succeeds instantly and touches nothing external. */

@@ -234,7 +234,7 @@ export interface MarketHoldersResponse {
 
 export interface MarketScenario {
   id: string;
-  kind: "dip_buy" | "breakout" | "limit_entry";
+  kind: "dip_buy" | "breakout" | "limit_entry" | "trailing_dip" | "rescue_exit" | "farm_rewards";
   label: string;
   sentence: string;
   prompt: string;
@@ -246,8 +246,11 @@ export interface MarketScenario {
     hypotheticalPnlUsd?: number;
     triggerCount?: number;
     touches?: number;
+    rewardsPerDayUsd?: number;
   };
   triggers: { t: number; price: number }[];
+  /** Alternate destination (farming cockpit) instead of the builder deep-link. */
+  link?: { label: string; href: string };
 }
 
 export interface MarketScenariosResponse {

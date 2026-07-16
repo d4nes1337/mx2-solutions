@@ -7,19 +7,22 @@
  * away. On large screens the panel is viewport-height and its tab content
  * scrolls internally (the AI tab is a real full-height chat).
  */
-import { Activity, CandlestickChart, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Activity, CandlestickChart, PencilRuler, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
 import type { DraftEvaluation } from "@/lib/smart-orders/queries";
 import { useBuilderStore, type WorkspaceTab } from "@/lib/smart-orders/store";
+import { PANEL_HEIGHT_CLASS } from "./layout-constants";
 import { AiPanel } from "./AiPanel";
 import { MakerEstimator } from "./MakerEstimator";
 import { ProjectionCard } from "./ProjectionCard";
 import { StrategySettings } from "./StrategySettings";
+import { BlockTab } from "./tabs/BlockTab";
 import { MarketTab } from "./tabs/MarketTab";
 
 const TAB_META: { id: WorkspaceTab; label: string; icon: typeof Sparkles }[] = [
   { id: "ai", label: "AI", icon: Sparkles },
+  { id: "block", label: "Block", icon: PencilRuler },
   { id: "simulate", label: "Simulate", icon: Activity },
   { id: "market", label: "Market", icon: CandlestickChart },
   { id: "settings", label: "Settings", icon: SlidersHorizontal },
@@ -40,12 +43,11 @@ export function WorkspacePanel({
   const setActiveTab = useBuilderStore((s) => s.setActiveTab);
 
   const tabs = TAB_META.filter((t) => t.id !== "ai" || aiChatEnabled);
-  const effectiveTab: WorkspaceTab =
-    activeTab === "ai" && !aiChatEnabled ? "simulate" : activeTab;
+  const effectiveTab: WorkspaceTab = activeTab === "ai" && !aiChatEnabled ? "simulate" : activeTab;
 
   return (
     <aside
-      className="flex min-w-0 flex-col gap-2 lg:sticky lg:top-4 lg:h-[calc(100vh-96px)]"
+      className={cn("flex min-w-0 flex-col gap-2 lg:sticky lg:top-4", PANEL_HEIGHT_CLASS)}
       data-tour="builder-workspace"
     >
       <nav
@@ -88,6 +90,8 @@ export function WorkspacePanel({
             <ProjectionCard evaluation={evaluation} />
             <MakerEstimator evaluation={evaluation} />
           </div>
+        ) : effectiveTab === "block" ? (
+          <BlockTab />
         ) : effectiveTab === "market" ? (
           <MarketTab />
         ) : effectiveTab === "settings" ? (

@@ -55,9 +55,7 @@ export const createDisabledTransactionRelayer = (): TransactionRelayer => ({
   execute: async () => err(disabledError),
 });
 
-export const createTransactionRelayer = (
-  opts: TransactionRelayerOptions,
-): TransactionRelayer => ({
+export const createTransactionRelayer = (opts: TransactionRelayerOptions): TransactionRelayer => ({
   enabled: true,
   async execute(owner, txs, description) {
     try {

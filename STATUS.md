@@ -4,6 +4,56 @@ _Last updated: 2026-07-16_
 
 ## Recent
 
+- **Audit/polish round: canvas multitool, trailing engine, wallet restore, orderbook root-cause
+  (built; D-025).** Owner's senior-audit brief executed end-to-end:
+  - **Broken orderbook root-caused and fixed.** The builder passed a `conditionId` to
+    `GET /api/markets/:id/orderbook`, whose Gamma `getMarket(id)` accepts only numeric ids —
+    Gamma 422s (reproduced live; this WAS the "CLOB REST /book fallback 422s app-wide" note).
+    New token-keyed public `GET /api/markets/orderbook?tokenId=` (120/min, snapshot-first, REST
+    fallback, stale-flagged) mirrors prices-history; the web hook stops polling on persistent
+    error. Fix also revives the taker OrderCostPreview and the economics route's Gamma fallback
+    (same conditionId bug → now `findMarket`).
+  - **Wallet lifecycle dead-end fixed (the owner's own bug).** "Remove wallet" soft-archives the
+    row; re-provisioning re-linked into the archived row WITHOUT un-archiving → Create looped
+    forever. Now `upsertInternalPrivy` clears `archivedAt` (restore = same wallet, same funds),
+    promotes the restored account when the owner has no active primary, emits
+    `trading_account.unarchived`; the UI offers a proper empty-state with a Restore/Create
+    action gated on the surviving Privy mapping (`provisioned`), and the health check runs even
+    with zero visible accounts. Route test covers archive→provision→restored.
+  - **Trailing engine (`trailing` ConditionV2).** stop = fall-from-peak (protect a dying bet),
+    entry = rebound-off-low (patient dip entry); offset 1–50¢; update-then-check with a float
+    tolerance; arming tick never fires; **fail-closed AND frozen on stale data**; watermarks
+    persist per node in `conditional_rules.runtime_watermarks` (additive migration `0011`,
+    rollback = drop column) and survive restarts/reconnects by owner decision (D-025); cleared
+    per repetition. Wired through evaluate/state-machine/validate/evidence/simulate, worker
+    persistence (content-compare writes), API zod + live monitor watermarks, AI tool schema
+    (+`mode`/`offset`, still non-strict), prompt guidance and few-shots. 19 new engine tests.
+  - **Canvas as a real multitool (owner UX decisions).** Tap now opens the block's editor in a
+    new **Block tab** of the workspace panel (market blocks keep routing to the Market tab) —
+    the 2×-growth-on-tap is gone; every block is **resizable** (NodeResizer, sizes persisted as
+    editor-only state) and an expand chevron (or resizing past ~220px) reveals the SAME editor
+    inline on the node — one editor implementation, two surfaces. Big **"+" palette** on the
+    canvas adds all 7 condition kinds, markets, AND/OR groups (with add-into-group), and
+    presets: Protect position (trailing stop), Buy the dip (trailing entry), Farm rewards
+    (prefilled `quote_loop` when `FEATURE_MAKER_LOOP`, else routes to /farming). The action
+    editor now covers ALL FOUR action kinds — switching kinds asks before discarding (the old
+    execution toggle silently clobbered `quote_loop`/`stop_strategy` — data-loss bug, fixed).
+  - **Right-panel polish.** Panel height now bottom-aligns with the canvas (the AI chat no
+    longer overshoots by ~264px); `Segmented` gains a `grow` mode (no more Settings-tab
+    overflow at narrow widths); `NumberInput` can no longer write NaN/0 into the doc (clamped,
+    empty-safe); order-book rows are plain rows when read-only and prefill the order price in
+    the builder when clickable.
+  - **Scenarios/templates rework.** New templates `trailing-stop` ("Protect position") and
+    `trailing-entry` ("Trailing dip entry") with AI few-shots (all few-shots gained the new
+    nullable fields — sync tests enforce). Cockpit scenarios add `trailing_dip` (backtested,
+    positive-PnL bar per R-023), `rescue_exit` (**alert-framed trailing stop — no PnL claim
+    without position context**), and `farm_rewards` (only when a live rewards pool exists;
+    cockpit link when the maker loop is enabled); MAX_SCENARIOS 3→5. Portfolio positions get a
+    **"Protect"** action deep-linking the trailing-stop template sized to the position.
+  - Quality gates: format ✓, lint ✓, typecheck ✓, backend **390 pass / 3 skipped**, web
+    **109 pass**. Known follow-up (flagged, out of scope): the trading wallet still has **no
+    withdrawal path**.
+
 - **Round-4: workspace redesign + `price_move` + execution styles/fee engine + maker-loop shadow
   foundations (built; D-024, ADR-0013/0014, RFC-0003).** Owner's round-4 scope executed end-to-end:
   - **Workspace redesign.** Focus-ring fix + **paper is now the default theme**; the builder

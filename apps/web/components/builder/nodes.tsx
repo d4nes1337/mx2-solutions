@@ -1,30 +1,32 @@
 "use client";
 
 /**
- * Node bodies for the builder canvas. The canvas is the multitool: a selected
- * node expands in place into its parameter editor (see inline/), and blocks
- * carry their own delete affordance. Bodies stay free of React Flow state
- * logic beyond Handles, so the canvas library remains swappable (ADR-0010).
+ * Node bodies for the builder canvas — the multitool surface. Tapping a block
+ * selects it and opens its editor in the panel's Block tab (it does NOT grow);
+ * the ⌄ button at a block's bottom expands it in place to an editor-fit size,
+ * and manually resizing a block past the disclosure threshold reveals the same
+ * editor progressively (hybrid editing, owner decision D-025). Bodies stay
+ * free of React Flow state logic beyond Handles/NodeResizer, so the canvas
+ * library remains swappable (ADR-0010).
  */
 import { memo } from "react";
-import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
+import { Handle, NodeResizer, Position, type NodeProps, type Node } from "@xyflow/react";
 import {
   AlertCircle,
   Bell,
+  ChevronDown,
+  ChevronUp,
   CircleDollarSign,
   GitBranch,
   OctagonX,
+  Repeat2,
   TrendingUp,
   X,
 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { useBuilderStore } from "@/lib/smart-orders/store";
-import { ConditionInlineEditor } from "./inline/ConditionInlineEditor";
-import {
-  ActionInlineEditor,
-  GroupInlineEditor,
-  RootLogicInlineEditor,
-} from "./inline/ActionInlineEditor";
+import { ConditionEditor } from "./editors/ConditionEditor";
+import { ActionEditor, GroupEditor, RootLogicEditor } from "./editors/ActionEditor";
 
 export interface MarketNodeData extends Record<string, unknown> {
   title: string;
@@ -54,20 +56,45 @@ export interface LogicNodeData extends Record<string, unknown> {
 }
 
 export interface ActionNodeData extends Record<string, unknown> {
-  kind: "alert" | "order" | "stop_strategy";
+  kind: "alert" | "order" | "stop_strategy" | "quote_loop";
   summary: string;
   execution: "prepare" | "auto" | null;
   issue: string | null;
 }
 
+// ── Sizing / disclosure ──────────────────────────────────────────────────────
+
+/** Height at/above which a block reveals its editor (scrolling if needed). */
+export const DISCLOSE_EDITOR_H = 220;
+/** One-click expand targets — tall enough that nothing needs scrolling. */
+export const FIT_SIZE = {
+  condition: { w: 340, h: 500 },
+  action: { w: 360, h: 560 },
+  logic: { w: 300, h: 240 },
+} as const;
+/** Is the node's explicit height in editor-disclosure territory? */
+const disclosed = (height: number | undefined): boolean =>
+  height !== undefined && height >= DISCLOSE_EDITOR_H;
+
 // Transition only paint-cheap properties — `transition-all` made the browser
 // interpolate the large-blur shadow every frame while a node was dragged.
-const shell = (selected: boolean | undefined, issue?: boolean) =>
+// Tap/selection never changes a block's size (the old 2× growth): selected is
+// a border highlight; size comes only from resize or the expand toggle.
+const shell = (selected: boolean | undefined, sized: boolean, issue?: boolean) =>
   cn(
     "rounded-xl border bg-surface px-3.5 py-3 shadow-panel transition-[border-color,background-color,box-shadow]",
-    selected ? "w-[320px] border-brand shadow-elev" : "w-[260px]",
-    !selected && (issue ? "border-neg/60" : "border-border"),
+    sized ? "flex h-full w-full flex-col" : "w-[260px]",
+    selected ? "border-brand shadow-elev" : issue ? "border-neg/60" : "border-border",
   );
+
+const RESIZER_PROPS = {
+  minWidth: 220,
+  minHeight: 88,
+  maxWidth: 560,
+  maxHeight: 720,
+  lineClassName: "!border-brand/40",
+  handleClassName: "!h-2.5 !w-2.5 !rounded-sm !border-brand !bg-surface",
+} as const;
 
 /** Small in-card remove control (top-right). */
 function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void }) {
@@ -83,6 +110,50 @@ function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void
     >
       <X size={12} aria-hidden />
     </button>
+  );
+}
+
+/**
+ * The expand/collapse chevron at a block's bottom: one click resizes the node
+ * to its editor-fit size (or back to compact). The same editor also appears
+ * by dragging the resize handles past the disclosure threshold.
+ */
+function ExpandToggle({
+  id,
+  x,
+  y,
+  fit,
+  expanded,
+}: {
+  id: string;
+  x: number;
+  y: number;
+  fit: { w: number; h: number };
+  expanded: boolean;
+}) {
+  const setPosition = useBuilderStore((s) => s.setPosition);
+  return (
+    <button
+      type="button"
+      aria-label={expanded ? "Collapse block" : "Edit in place"}
+      title={expanded ? "Collapse" : "Edit in place"}
+      onClick={(e) => {
+        e.stopPropagation();
+        setPosition(id, expanded ? { x, y } : { x, y, w: fit.w, h: fit.h });
+      }}
+      className="nodrag mx-auto mt-1.5 flex w-full items-center justify-center rounded-md py-0.5 text-faint transition-colors hover:bg-surface-2 hover:text-fg"
+    >
+      {expanded ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+    </button>
+  );
+}
+
+/** Scrollable editor region inside an expanded node. */
+function InlineEditor({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="nowheel mt-2.5 min-h-0 flex-1 overflow-y-auto border-t border-border pt-2.5">
+      {children}
+    </div>
   );
 }
 
@@ -114,17 +185,23 @@ const statePill = (state: ConditionNodeData["state"], actual: string | null) => 
 
 export const MarketNode = memo(function MarketNode({
   data,
+  width,
+  height,
   selected,
 }: NodeProps<Node<MarketNodeData>>) {
+  const sized = width !== undefined || height !== undefined;
   return (
-    <div className={shell(selected, !data.bound)}>
+    <div className={shell(selected, sized, !data.bound)}>
+      <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} maxHeight={240} />
       <div className="flex items-start gap-2">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-brand-soft text-accent">
           <TrendingUp size={14} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-faint">Market</div>
-          <div className="truncate text-[13px] font-medium text-fg">{data.title}</div>
+          <div className={cn("text-[13px] font-medium text-fg", sized ? "" : "truncate")}>
+            {data.title}
+          </div>
         </div>
         {data.deletable ? (
           <DeleteButton
@@ -153,10 +230,17 @@ export const MarketNode = memo(function MarketNode({
 export const ConditionNode = memo(function ConditionNode({
   id,
   data,
+  width,
+  height,
+  positionAbsoluteX,
+  positionAbsoluteY,
   selected,
 }: NodeProps<Node<ConditionNodeData>>) {
+  const sized = width !== undefined || height !== undefined;
+  const showEditor = disclosed(height);
   return (
-    <div className={shell(selected, Boolean(data.issue))}>
+    <div className={shell(selected, sized, Boolean(data.issue))}>
+      <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} />
       <Handle type="target" position={Position.Left} className="!bg-border-strong" />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -177,7 +261,18 @@ export const ConditionNode = memo(function ConditionNode({
           <AlertCircle size={11} aria-hidden /> {data.issue}
         </div>
       ) : null}
-      {selected ? <ConditionInlineEditor id={id} /> : null}
+      {showEditor ? (
+        <InlineEditor>
+          <ConditionEditor id={id} />
+        </InlineEditor>
+      ) : null}
+      <ExpandToggle
+        id={id}
+        x={positionAbsoluteX}
+        y={positionAbsoluteY}
+        fit={FIT_SIZE.condition}
+        expanded={showEditor}
+      />
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
@@ -186,16 +281,24 @@ export const ConditionNode = memo(function ConditionNode({
 export const LogicNode = memo(function LogicNode({
   id,
   data,
+  width,
+  height,
+  positionAbsoluteX,
+  positionAbsoluteY,
   selected,
 }: NodeProps<Node<LogicNodeData>>) {
   const label = data.op === "and" ? "ALL OF" : data.op === "or" ? "ANY OF" : "NOT";
+  const sized = width !== undefined || height !== undefined;
+  const showEditor = disclosed(height);
   return (
     <div
       className={cn(
         "border bg-surface shadow-panel transition-[border-color,background-color,box-shadow]",
-        selected ? "rounded-2xl border-brand px-4 py-2.5 shadow-elev" : "rounded-full border-border px-4 py-2",
+        sized ? "flex h-full w-full flex-col rounded-2xl px-4 py-2.5" : "rounded-full px-4 py-2",
+        selected ? "border-brand shadow-elev" : "border-border",
       )}
     >
+      <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} maxHeight={320} />
       <Handle type="target" position={Position.Left} className="!bg-border-strong" />
       <div className="flex items-center gap-1.5">
         <GitBranch size={13} className="text-accent" aria-hidden />
@@ -215,12 +318,19 @@ export const LogicNode = memo(function LogicNode({
           />
         ) : null}
       </div>
+      {showEditor ? (
+        <InlineEditor>
+          {data.isRoot ? <RootLogicEditor /> : <GroupEditor id={id} op={data.op} />}
+        </InlineEditor>
+      ) : null}
       {selected ? (
-        data.isRoot ? (
-          <RootLogicInlineEditor />
-        ) : (
-          <GroupInlineEditor id={id} op={data.op} />
-        )
+        <ExpandToggle
+          id={id}
+          x={positionAbsoluteX}
+          y={positionAbsoluteY}
+          fit={FIT_SIZE.logic}
+          expanded={showEditor}
+        />
       ) : null}
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
@@ -228,19 +338,29 @@ export const LogicNode = memo(function LogicNode({
 });
 
 export const ActionNode = memo(function ActionNode({
+  id,
   data,
+  width,
+  height,
+  positionAbsoluteX,
+  positionAbsoluteY,
   selected,
 }: NodeProps<Node<ActionNodeData>>) {
+  const sized = width !== undefined || height !== undefined;
+  const showEditor = disclosed(height);
   const icon =
     data.kind === "alert" ? (
       <Bell size={14} aria-hidden />
     ) : data.kind === "stop_strategy" ? (
       <OctagonX size={14} aria-hidden />
+    ) : data.kind === "quote_loop" ? (
+      <Repeat2 size={14} aria-hidden />
     ) : (
       <CircleDollarSign size={14} aria-hidden />
     );
   return (
-    <div className={shell(selected, Boolean(data.issue))}>
+    <div className={shell(selected, sized, Boolean(data.issue))}>
+      <NodeResizer isVisible={selected ?? false} {...RESIZER_PROPS} />
       <Handle type="target" position={Position.Left} className="!bg-border-strong" />
       <div className="flex items-center gap-2">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-pos/10 text-pos">
@@ -254,6 +374,11 @@ export const ActionNode = memo(function ActionNode({
                 AUTO
               </span>
             ) : null}
+            {data.kind === "quote_loop" ? (
+              <span className="rounded-full border border-brand/40 bg-brand-soft px-1.5 text-[9px] font-bold text-accent">
+                FARM
+              </span>
+            ) : null}
           </div>
           <div className="text-[13px] font-medium leading-snug text-fg">{data.summary}</div>
         </div>
@@ -263,7 +388,18 @@ export const ActionNode = memo(function ActionNode({
           <AlertCircle size={11} aria-hidden /> {data.issue}
         </div>
       ) : null}
-      {selected ? <ActionInlineEditor /> : null}
+      {showEditor ? (
+        <InlineEditor>
+          <ActionEditor />
+        </InlineEditor>
+      ) : null}
+      <ExpandToggle
+        id={id}
+        x={positionAbsoluteX}
+        y={positionAbsoluteY}
+        fit={FIT_SIZE.action}
+        expanded={showEditor}
+      />
     </div>
   );
 });

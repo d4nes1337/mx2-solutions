@@ -58,10 +58,13 @@ const describeCondition = (doc: StrategyDoc, c: ConditionV2): string => {
       return "at any time";
     }
     case "price_move": {
-      const verb =
-        c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves";
+      const verb = c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves";
       return `${c.market.outcome} price of ${marketLabel(doc, c.market)} ${verb} ${cents(c.deltaThreshold)}+ within ${humanDuration(c.windowMs)}`;
     }
+    case "trailing":
+      return c.mode === "stop"
+        ? `${c.market.outcome} price of ${marketLabel(doc, c.market)} falls ${cents(c.offset)} from its peak`
+        : `${c.market.outcome} price of ${marketLabel(doc, c.market)} rebounds ${cents(c.offset)} off its low`;
   }
 };
 

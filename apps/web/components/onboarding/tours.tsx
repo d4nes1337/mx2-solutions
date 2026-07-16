@@ -62,7 +62,12 @@ export function BuilderTour() {
         {
           target: "builder-canvas",
           title: "Your strategy as blocks",
-          body: "Markets feed conditions; conditions gate the action. Drag blocks freely — the logic stays connected.",
+          body: "Markets feed conditions; conditions gate the action. Tap a block to edit it in the side panel, or expand/resize it to edit right on the canvas.",
+        },
+        {
+          target: "builder-add",
+          title: "Add anything from here",
+          body: "Conditions, markets, logic groups and ready-made presets — including trailing stops and rewards farming.",
         },
         {
           target: "sentence-bar",

@@ -101,7 +101,7 @@ const dipBuy: TemplateSpec = {
     ),
   aiFewShot: {
     user: '"If YES drops below 58¢ for 5 min and liquidity ≥ $2,000, buy YES at 57¢." (after search_markets returned the market as candidate 0 with outcomes ["Yes","No"])',
-    json: '{"name":"Dip buy","summary":"Watches for a dip below 58¢ that holds for 5 minutes with at least $2,000 of ask liquidity, then prepares a buy of 100 Yes shares at 57¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.58,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.58,"minNotional":2000,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}}],"holdsForMs":300000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.57,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+    json: '{"name":"Dip buy","summary":"Watches for a dip below 58¢ that holds for 5 minutes with at least $2,000 of ask liquidity, then prepares a buy of 100 Yes shares at 57¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.58,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.58,"minNotional":2000,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}}],"holdsForMs":300000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.57,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
   },
 };
 
@@ -150,7 +150,90 @@ const spikeReversal: TemplateSpec = {
     ),
   aiFewShot: {
     user: '"If the favourite\'s price crashes 8 cents within 5 minutes during the match, prepare a buy 10 cents under wherever it lands." (candidate 0, current Yes price 0.72)',
-    json: '{"name":"Spike reversal entry","summary":"Watches for an 8¢ drop inside 5 minutes, then immediately prepares a 100-share buy at 54¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price_move","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":"drop","deltaThreshold":0.08,"windowMs":300000}}],"holdsForMs":0,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.54,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+    json: '{"name":"Spike reversal entry","summary":"Watches for an 8¢ drop inside 5 minutes, then immediately prepares a 100-share buy at 54¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price_move","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":"drop","deltaThreshold":0.08,"windowMs":300000,"mode":null,"offset":null}}],"holdsForMs":0,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.54,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+  },
+};
+
+const trailingStop: TemplateSpec = {
+  id: "trailing-stop",
+  name: "Protect position",
+  blurb:
+    "A trailing stop for a bet going the wrong way: follows the peak and prepares the exit when the price slips.",
+  example: "If YES falls 8¢ from its peak, prepare a sell of 100 shares immediately.",
+  prompt: "Sell my 100 YES shares if the price drops 8 cents from its high",
+  flag: null,
+  buildDefinition: (market = UNBOUND_MARKET) =>
+    base(
+      "trailing-stop",
+      "Protect position",
+      {
+        type: "group",
+        id: "root",
+        op: "and",
+        children: [
+          {
+            type: "condition",
+            id: "c1",
+            condition: { kind: "trailing", market, mode: "stop", source: "bid", offset: 0.08 },
+          },
+        ],
+      },
+      0, // the breach IS the signal
+      {
+        kind: "order",
+        market,
+        side: "SELL",
+        price: 0.5,
+        size: 100,
+        orderType: "FAK",
+        execution: "prepare",
+      },
+    ),
+  aiFewShot: {
+    user: "\"I'm holding Yes and it's going against me — sell my 100 shares if it drops 8 cents from its high.\" (candidate 0, current Yes price 0.55)",
+    json: '{"name":"Protect position","summary":"Follows the Yes price\'s peak from now on and, if it slips 8¢ below that peak, immediately prepares a sell of your 100 shares at 47¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"trailing","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"bid","comparator":"lte","threshold":null,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":"stop","offset":0.08}}],"holdsForMs":0,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"SELL","price":0.47,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+  },
+};
+
+const trailingEntry: TemplateSpec = {
+  id: "trailing-entry",
+  name: "Trailing dip entry",
+  blurb:
+    "Buy the rebound, not the falling knife: follows the low down and enters when the price bounces off it.",
+  example: "If YES rebounds 5¢ off its low, place a time-boxed buy.",
+  prompt: "Buy 100 YES when the price bounces 5 cents off whatever low it hits",
+  flag: null,
+  buildDefinition: (market = UNBOUND_MARKET) =>
+    base(
+      "trailing-entry",
+      "Trailing dip entry",
+      {
+        type: "group",
+        id: "root",
+        op: "and",
+        children: [
+          {
+            type: "condition",
+            id: "c1",
+            condition: { kind: "trailing", market, mode: "entry", source: "ask", offset: 0.05 },
+          },
+        ],
+      },
+      0,
+      {
+        kind: "order",
+        market,
+        side: "BUY",
+        price: 0.5,
+        size: 100,
+        orderType: "GTD",
+        expiresAfterMs: 300_000,
+        execution: "prepare",
+      },
+    ),
+  aiFewShot: {
+    user: '"This market keeps falling — buy me 100 Yes when it bounces 5 cents off whatever low it hits." (candidate 0, current Yes price 0.44)',
+    json: '{"name":"Trailing dip entry","summary":"Follows the Yes price\'s low from now on and, when it rebounds 5¢ above that low, prepares a buy of 100 shares at 49¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"trailing","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":null,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":"entry","offset":0.05}}],"holdsForMs":0,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.49,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
   },
 };
 
@@ -159,7 +242,8 @@ const makerEfficiency: TemplateSpec = {
   name: "Maker efficiency",
   blurb:
     "Rest a post-only quote when the spread and rewards line up — makers pay no fee and share the rewards pool.",
-  example: "If the spread is tighter than 2¢ and liquidity is healthy, rest a post-only maker quote.",
+  example:
+    "If the spread is tighter than 2¢ and liquidity is healthy, rest a post-only maker quote.",
   prompt:
     "When the spread on @market tightens under 2 cents with healthy liquidity, prepare a 200-share maker quote",
   flag: null,
@@ -206,7 +290,7 @@ const makerEfficiency: TemplateSpec = {
     ),
   aiFewShot: {
     user: '"Quote this market whenever the spread is tighter than 2 cents and there\'s healthy liquidity."',
-    json: '{"name":"Maker efficiency","summary":"When the spread tightens under 2¢ with at least $1,000 resting, prepares a 200-share maker quote at 50¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"spread","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.02,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.99,"minNotional":1000,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}}],"holdsForMs":120000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.5,"size":200},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+    json: '{"name":"Maker efficiency","summary":"When the spread tightens under 2¢ with at least $1,000 resting, prepares a 200-share maker quote at 50¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"spread","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.02,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.99,"minNotional":1000,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}}],"holdsForMs":120000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.5,"size":200},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
   },
 };
 
@@ -250,7 +334,7 @@ const crossMarket: TemplateSpec = {
     ),
   aiFewShot: {
     user: '"Alert me if this market goes above 70¢ while that other market is above 40¢ for 10 minutes." (candidates 0 and 1 from two search_markets calls)',
-    json: '{"name":"Cross-market watch","summary":"Alerts you when the first market trades above 70¢ while the second holds above 40¢ for 10 minutes.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.7,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}},{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":1,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.4,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null}}],"holdsForMs":600000,"action":{"kind":"alert","market":null,"side":"BUY","price":null,"size":null},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
+    json: '{"name":"Cross-market watch","summary":"Alerts you when the first market trades above 70¢ while the second holds above 40¢ for 10 minutes.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.7,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}},{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":1,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.4,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null,"direction":null,"deltaThreshold":null,"windowMs":null,"mode":null,"offset":null}}],"holdsForMs":600000,"action":{"kind":"alert","market":null,"side":"BUY","price":null,"size":null},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}',
   },
 };
 
@@ -291,6 +375,8 @@ const rebateFarm: TemplateSpec = {
 export const TEMPLATE_SPECS: readonly TemplateSpec[] = [
   dipBuy,
   spikeReversal,
+  trailingStop,
+  trailingEntry,
   makerEfficiency,
   rebateFarm,
   crossMarket,

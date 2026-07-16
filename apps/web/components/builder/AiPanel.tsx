@@ -103,8 +103,7 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     textareaRef.current?.focus();
   };
 
-  const pushMessage = (msg: ChatMessage) =>
-    setMessages((m) => [...m, msg].slice(-MAX_MESSAGES));
+  const pushMessage = (msg: ChatMessage) => setMessages((m) => [...m, msg].slice(-MAX_MESSAGES));
 
   const applyResult = (prompt: string, res: AiGenerateResponse) => {
     if (res.status === "clarify") {
@@ -210,8 +209,9 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
         <Badge tone="brand">AI beta</Badge>
       </div>
 
-      {/* Conversation log */}
-      <div className="builder-chat max-h-[50vh] min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 lg:max-h-none">
+      {/* Conversation log: bounded by the panel column on lg (see
+          PANEL_HEIGHT_CLASS); capped at half the viewport on mobile. */}
+      <div className="builder-chat max-h-[50vh] min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 lg:max-h-full">
         {!hasConversation && !generate.isPending ? (
           <div className="space-y-2 px-1 py-2">
             <p className="text-[12px] leading-relaxed text-muted">

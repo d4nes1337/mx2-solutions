@@ -179,7 +179,13 @@ export type ReasonCode =
   // price_move (round 4):
   | "PRICE_MOVE_OK"
   | "PRICE_MOVE_FAIL"
-  | "PRICE_MOVE_WINDOW_INCOMPLETE";
+  | "PRICE_MOVE_WINDOW_INCOMPLETE"
+  // trailing (watermark) conditions:
+  | "TRAILING_OK"
+  // Ends with FAIL so the state machine's reset-reason pickup
+  // (`endsWith("FAIL")`) covers trailing without special-casing.
+  | "TRAILING_FAIL"
+  | "TRAILING_ARMING";
 
 /**
  * Mutable per-rule runtime carried between events. Persisted by the worker as

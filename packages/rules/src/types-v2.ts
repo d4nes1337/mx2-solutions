@@ -89,13 +89,38 @@ export interface PriceMoveConditionV2 {
   readonly windowMs: number;
 }
 
+/**
+ * Trailing watermark condition. "stop" tracks the PEAK of the reference price
+ * since arming and is satisfied when the price falls `offset` below it (sell
+ * protection for a position going the wrong way); "entry" tracks the TROUGH
+ * and is satisfied when the price rises `offset` above it (buy the rebound
+ * off a falling market). Arms at the first fresh observation — the arming
+ * tick itself never satisfies. The watermark lives in StrategyRuntime
+ * (persisted by the worker), is FROZEN while data is stale/missing
+ * (fail-closed: stale data can neither fire nor ratchet), survives
+ * reconnects/restarts/pauses by owner decision (D-025 — resetting on every
+ * gap would silently walk a stop level down a declining market), and is
+ * cleared when a repeat-recurrence trigger fires (each repetition trails
+ * from scratch).
+ */
+export interface TrailingConditionV2 {
+  readonly kind: "trailing";
+  readonly market: MarketRef;
+  readonly mode: "stop" | "entry";
+  /** Reference price side: bid for stop/SELL, ask for entry/BUY (advisory). */
+  readonly source: BookSide;
+  /** Distance from the watermark in probability units (0.05 = 5¢). [0.01, 0.5]. */
+  readonly offset: number;
+}
+
 export type ConditionV2 =
   | PriceConditionV2
   | SpreadConditionV2
   | CumulativeNotionalConditionV2
   | VisibleLevelsConditionV2
   | TimeWindowConditionV2
-  | PriceMoveConditionV2;
+  | PriceMoveConditionV2
+  | TrailingConditionV2;
 
 // ── Expression tree ─────────────────────────────────────────────────────────
 
@@ -240,9 +265,21 @@ export interface StrategyDefinition {
 
 // ── Runtime ─────────────────────────────────────────────────────────────────
 
+/** Watermark state for one trailing condition node. Plain JSON — persisted. */
+export interface TrailingWatermark {
+  /** Extreme reference price since arming (peak for stop, trough for entry). */
+  readonly value: number;
+  readonly armedAtMs: number;
+  /** Last time `value` moved (evidence/debug). */
+  readonly updatedAtMs: number;
+}
+
+/** Watermarks keyed by the trailing ConditionNode's id. */
+export type WatermarksByNode = Readonly<Record<string, TrailingWatermark>>;
+
 /**
  * v2 runtime adds repeat bookkeeping to the v1 shape. Persisted by the worker
- * as columns on `conditional_rules` (migration 0009).
+ * as columns on `conditional_rules` (migration 0009; watermarks in 0011).
  */
 export interface StrategyRuntime {
   readonly status: RuleStatus;
@@ -251,6 +288,8 @@ export interface StrategyRuntime {
   readonly triggerCount: number;
   /** Non-null while in a post-trigger cooldown; accumulation is gated until then. */
   readonly cooldownUntilMs: number | null;
+  /** Trailing-condition watermarks. Absent/empty when the expr has none. */
+  readonly watermarks?: WatermarksByNode;
 }
 
 /** Views keyed by tokenId. Plain object (not Map) so fixtures stay serializable. */
@@ -284,6 +323,11 @@ export interface ConditionResultV2 {
   readonly tokenId: string | null;
   /** True when the bound market's data was missing or older than maxDataAgeMs. */
   readonly stale: boolean;
+  /**
+   * Trailing only: the tracked peak/trough (null while arming). The effective
+   * trigger level (peak − offset / trough + offset) is in `threshold`.
+   */
+  readonly watermark?: number | null;
 }
 
 export type ExprResultNode =
@@ -308,6 +352,12 @@ export interface EvaluationV2 {
   readonly reasonCodes: readonly ReasonCode[];
   /** Referenced tokens whose views were missing or stale at evaluation time. */
   readonly staleTokenIds: readonly string[];
+  /**
+   * Updated trailing watermarks after this observation (input map is never
+   * mutated). Empty when the expression has no trailing leaves. The state
+   * machine persists these into StrategyRuntime.
+   */
+  readonly watermarks: WatermarksByNode;
 }
 
 // ── Evidence ────────────────────────────────────────────────────────────────
@@ -341,6 +391,8 @@ export interface TriggerEvidenceV2 {
   readonly preparedAction: ActionV2;
   /** 1-based index of this trigger within the strategy's recurrence. */
   readonly triggerNumber: number;
+  /** Trailing watermarks at trigger time (absent for non-trailing strategies). */
+  readonly watermarks?: WatermarksByNode;
   // v1-compatible flat fields (primary market):
   readonly tokenId: string;
   readonly conditionId: string;

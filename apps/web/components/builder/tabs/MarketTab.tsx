@@ -55,10 +55,22 @@ export function MarketTab() {
   const doc = useBuilderStore((s) => s.doc);
   const focusedToken = useBuilderStore((s) => s.focusedMarketToken);
   const focusMarket = useBuilderStore((s) => s.focusMarket);
+  const setAction = useBuilderStore((s) => s.setAction);
 
   const markets = docMarketRefs(doc);
   const active = markets.find((m) => m.tokenId === focusedToken) ?? markets[0];
-  const book = useOrderbookByToken(active?.conditionId ?? "", active?.tokenId ?? null);
+  const book = useOrderbookByToken(active?.tokenId ?? null);
+
+  // Clicking a book level prefills the order price when the strategy's order
+  // trades this market; otherwise the book is read-only.
+  const orderTradesThisMarket =
+    doc.action.kind === "order" && doc.action.market.tokenId === active?.tokenId;
+  const prefillPrice = orderTradesThisMarket
+    ? (sel: { price: number }) => {
+        if (doc.action.kind !== "order") return;
+        setAction({ ...doc.action, price: sel.price });
+      }
+    : undefined;
 
   if (!active) {
     return (
@@ -107,7 +119,7 @@ export function MarketTab() {
         {book.isLoading ? (
           <Skeleton className="h-[220px] w-full" />
         ) : book.data ? (
-          <OrderbookTable bids={book.data.bids} asks={book.data.asks} />
+          <OrderbookTable bids={book.data.bids} asks={book.data.asks} onSelect={prefillPrice} />
         ) : (
           <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted">
             Order book unavailable right now.

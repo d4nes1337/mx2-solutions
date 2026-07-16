@@ -18,6 +18,9 @@ import type {
 export interface NodePosition {
   x: number;
   y: number;
+  /** Manual node size (NodeResizer / expand button). Unset = auto/compact. */
+  w?: number;
+  h?: number;
 }
 
 /** Display metadata for a referenced market (titles come from search/binding). */

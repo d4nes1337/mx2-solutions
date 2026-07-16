@@ -55,7 +55,8 @@ describe("takerCrossCost", () => {
     expect(c.notionalUsd).toBeCloseTo(100 * 0.5 + 150 * 0.52, 6);
     expect(c.avgPrice).toBeCloseTo((100 * 0.5 + 150 * 0.52) / 250, 6);
     expect(c.impactUsd).toBeCloseTo((c.avgPrice - 0.5) * 250, 5);
-    const expectedFee = takerFeeUsd(100, 0.5, schedule(0.04)) + takerFeeUsd(150, 0.52, schedule(0.04));
+    const expectedFee =
+      takerFeeUsd(100, 0.5, schedule(0.04)) + takerFeeUsd(150, 0.52, schedule(0.04));
     expect(c.feeUsd).toBeCloseTo(expectedFee, 6);
   });
 

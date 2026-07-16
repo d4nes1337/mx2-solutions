@@ -1,18 +1,44 @@
 "use client";
 
 /**
- * Inline parameter editor rendered INSIDE a selected condition node. Same
- * store-driven editing the old Inspector did — relocated onto the canvas so
- * the canvas is the one place strategies are shaped.
+ * Condition parameter editor. One implementation for both editing surfaces:
+ * the workspace panel's Block tab AND the expanded canvas node (hybrid UX —
+ * D-025). Controls carry `nodrag` so React Flow never starts a node drag.
  */
 import { Trash2 } from "lucide-react";
 import type { ConditionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
-import { findNode } from "@/lib/smart-orders/doc";
+import { findNode, UNBOUND } from "@/lib/smart-orders/doc";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
 
-export function ConditionInlineEditor({ id }: { id: string }) {
+export const CONDITION_KIND_OPTIONS = [
+  { value: "price", label: "Price" },
+  { value: "price_move", label: "Move" },
+  { value: "trailing", label: "Trailing" },
+  { value: "spread", label: "Spread" },
+  { value: "cumulative_notional", label: "Liquidity" },
+  { value: "visible_levels", label: "Levels" },
+  { value: "time_window", label: "Time" },
+] as const;
+
+/** Fresh condition of a given kind, keeping the market binding when possible. */
+export const defaultCondition = (kind: ConditionV2["kind"], market = UNBOUND): ConditionV2 =>
+  kind === "price"
+    ? { kind, market, source: "ask", comparator: "lte", threshold: 0.5 }
+    : kind === "price_move"
+      ? { kind, market, direction: "drop", deltaThreshold: 0.05, windowMs: 600_000 }
+      : kind === "trailing"
+        ? { kind, market, mode: "stop", source: "bid", offset: 0.05 }
+        : kind === "spread"
+          ? { kind, market, comparator: "lte", threshold: 0.02 }
+          : kind === "cumulative_notional"
+            ? { kind, market, source: "ask", priceBound: 0.5, minNotional: 1000 }
+            : kind === "visible_levels"
+              ? { kind, market, source: "ask", priceBound: 0.5, minLevels: 3 }
+              : { kind: "time_window", startMs: null, endMs: null };
+
+export function ConditionEditor({ id }: { id: string }) {
   const doc = useBuilderStore((s) => s.doc);
   const updateCondition = useBuilderStore((s) => s.updateCondition);
   const bindMarket = useBuilderStore((s) => s.bindMarket);
@@ -24,39 +50,24 @@ export function ConditionInlineEditor({ id }: { id: string }) {
   if (!found || found.type !== "condition") return null;
   const c = found.condition;
 
-  const KIND_OPTIONS = [
-    { value: "price", label: "Price" },
-    { value: "price_move", label: "Move" },
-    { value: "spread", label: "Spread" },
-    { value: "cumulative_notional", label: "Liquidity" },
-    { value: "visible_levels", label: "Levels" },
-    { value: "time_window", label: "Time" },
-  ] as const;
-
   /** Switching the condition type keeps the market binding where possible. */
   const switchKind = (kind: ConditionV2["kind"]) => {
     if (kind === c.kind) return;
-    const market = c.kind !== "time_window" ? c.market : { conditionId: "", tokenId: "", outcome: "YES" };
-    const next: ConditionV2 =
-      kind === "price"
-        ? { kind, market, source: "ask", comparator: "lte", threshold: 0.5 }
-        : kind === "price_move"
-          ? { kind, market, direction: "drop", deltaThreshold: 0.05, windowMs: 600_000 }
-          : kind === "spread"
-            ? { kind, market, comparator: "lte", threshold: 0.02 }
-            : kind === "cumulative_notional"
-              ? { kind, market, source: "ask", priceBound: 0.5, minNotional: 1000 }
-              : kind === "visible_levels"
-                ? { kind, market, source: "ask", priceBound: 0.5, minLevels: 3 }
-                : { kind: "time_window", startMs: null, endMs: null };
-    updateCondition(id, next);
+    const market = c.kind !== "time_window" ? c.market : UNBOUND;
+    updateCondition(id, defaultCondition(kind, market));
   };
 
   return (
-    <div className="mt-3 space-y-3 border-t border-border pt-3">
+    <div className="space-y-3">
       <Field label="Condition type">
         <div className="nodrag">
-          <Segmented options={[...KIND_OPTIONS]} value={c.kind} onChange={switchKind} size="sm" />
+          <Segmented
+            options={[...CONDITION_KIND_OPTIONS]}
+            value={c.kind}
+            onChange={switchKind}
+            size="sm"
+            grow={3}
+          />
         </div>
       </Field>
 
@@ -80,6 +91,7 @@ export function ConditionInlineEditor({ id }: { id: string }) {
                 value={c.comparator}
                 onChange={(comparator) => updateCondition(id, { ...c, comparator })}
                 size="md"
+                grow
               />
             </div>
           </Field>
@@ -108,6 +120,7 @@ export function ConditionInlineEditor({ id }: { id: string }) {
                 value={c.direction}
                 onChange={(direction) => updateCondition(id, { ...c, direction })}
                 size="md"
+                grow
               />
             </div>
           </Field>
@@ -133,12 +146,57 @@ export function ConditionInlineEditor({ id }: { id: string }) {
                 value={String(c.windowMs)}
                 onChange={(v) => updateCondition(id, { ...c, windowMs: Number(v) })}
                 size="md"
+                grow
               />
             </div>
           </Field>
           <p className="text-[11px] leading-snug text-muted">
-            Live detection uses tick-by-tick data; draft checks and backtests use 1-minute
-            candles, so very short windows look coarser there.
+            Live detection uses tick-by-tick data; draft checks and backtests use 1-minute candles,
+            so very short windows look coarser there.
+          </p>
+        </>
+      ) : null}
+
+      {c.kind === "trailing" ? (
+        <>
+          <Field label="Watch for">
+            <div className="nodrag">
+              <Segmented
+                options={[
+                  { value: "stop", label: "fall from peak" },
+                  { value: "entry", label: "rebound off low" },
+                ]}
+                value={c.mode}
+                onChange={(mode) =>
+                  updateCondition(id, {
+                    ...c,
+                    mode,
+                    // Reference side follows the mode: stops read what you
+                    // can sell at (bid), entries what you must pay (ask).
+                    source: mode === "stop" ? "bid" : "ask",
+                  })
+                }
+                size="md"
+                grow
+              />
+            </div>
+          </Field>
+          <Field label="Trailing distance">
+            <NumberInput
+              value={toCents(c.offset)}
+              onChange={(v) =>
+                updateCondition(id, { ...c, offset: Math.min(0.5, Math.max(0.01, v / 100)) })
+              }
+              suffix="¢"
+              min={1}
+              max={50}
+            />
+          </Field>
+          <p className="text-[11px] leading-snug text-muted">
+            {c.mode === "stop"
+              ? "Arms at the current price, follows the peak up, and fires when the price slips this far below it — the classic way to protect a position going the wrong way."
+              : "Arms at the current price, follows the low down, and fires when the price bounces this far off it — a patient way to enter a falling market."}{" "}
+            The tracked level survives restarts and never moves on stale data.
           </p>
         </>
       ) : null}
@@ -155,6 +213,7 @@ export function ConditionInlineEditor({ id }: { id: string }) {
                 value={c.comparator}
                 onChange={(comparator) => updateCondition(id, { ...c, comparator })}
                 size="md"
+                grow
               />
             </div>
           </Field>
@@ -199,6 +258,7 @@ export function ConditionInlineEditor({ id }: { id: string }) {
                 value={c.source}
                 onChange={(source) => updateCondition(id, { ...c, source })}
                 size="md"
+                grow
               />
             </div>
           </Field>

@@ -158,24 +158,43 @@ export function Stat({
   );
 }
 
-/** Segmented control — used for chart ranges, outcome toggles, filters. */
+/**
+ * Segmented control — used for chart ranges, outcome toggles, filters.
+ * `grow` stretches it to the container width with equal-width, truncating
+ * segments (for narrow panels where the inline-flex default overflows).
+ * `grow={N}` wraps into rows of N columns instead of one squeezed row —
+ * a first-class prop because Tailwind class order can't override
+ * `grid-flow-col` from a caller's className reliably.
+ */
 export function Segmented<T extends string>({
   options,
   value,
   onChange,
   size = "sm",
+  grow = false,
   className,
 }: {
   options: { value: T; label: ReactNode; disabled?: boolean }[];
   value: T;
   onChange: (v: T) => void;
   size?: "sm" | "md";
+  grow?: boolean | 2 | 3 | 4;
   className?: string;
 }) {
+  const wrapCols = typeof grow === "number" ? grow : null;
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-md border border-border bg-surface-2 p-0.5",
+        "rounded-md border border-border bg-surface-2 p-0.5",
+        grow
+          ? cn(
+              "grid w-full gap-0.5",
+              wrapCols === null && "auto-cols-fr grid-flow-col",
+              wrapCols === 2 && "grid-cols-2",
+              wrapCols === 3 && "grid-cols-3",
+              wrapCols === 4 && "grid-cols-4",
+            )
+          : "inline-flex items-center gap-0.5",
         className,
       )}
     >
@@ -188,6 +207,7 @@ export function Segmented<T extends string>({
           className={cn(
             "rounded-[3px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-30",
             size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
+            Boolean(grow) && "min-w-0 truncate whitespace-nowrap text-center",
             value === o.value
               ? "bg-brand text-white shadow-[0_0_14px_-6px_rgba(var(--brand-rgb),0.45)]"
               : "text-muted hover:text-fg",

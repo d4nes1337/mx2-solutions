@@ -27,7 +27,12 @@ export interface RestingQuote extends QuoteIntent {
 export type IdleReason = "gate_unsatisfied" | "no_book" | "stale_book" | "mid_out_of_range";
 
 export type DesiredQuotes =
-  | { readonly kind: "quote"; readonly yesBid: QuoteIntent; readonly noBid: QuoteIntent; readonly mid: number }
+  | {
+      readonly kind: "quote";
+      readonly yesBid: QuoteIntent;
+      readonly noBid: QuoteIntent;
+      readonly mid: number;
+    }
   | { readonly kind: "idle"; readonly reason: IdleReason };
 
 const tickOf = (tickSize: TickSize | undefined): number => Number(tickSize ?? "0.01");
@@ -69,8 +74,18 @@ export const computeDesiredQuotes = (
   return {
     kind: "quote",
     mid,
-    yesBid: { tokenId: params.market.yesTokenId, side: "BUY", price: yesPrice, size: params.sizeShares },
-    noBid: { tokenId: params.market.noTokenId, side: "BUY", price: noPrice, size: params.sizeShares },
+    yesBid: {
+      tokenId: params.market.yesTokenId,
+      side: "BUY",
+      price: yesPrice,
+      size: params.sizeShares,
+    },
+    noBid: {
+      tokenId: params.market.noTokenId,
+      side: "BUY",
+      price: noPrice,
+      size: params.sizeShares,
+    },
   };
 };
 

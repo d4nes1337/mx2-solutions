@@ -100,15 +100,21 @@ function BookSide({
   if (!rows.length) {
     return <div className="py-2 text-xs text-muted">No {side}s</div>;
   }
+  // Without onSelect the book is a read-only display — plain rows, not a
+  // column of disabled buttons.
+  const RowEl = onSelect ? "button" : "div";
   return (
     <div className="space-y-0.5">
       {rows.map((r, i) => (
-        <button
+        <RowEl
           key={i}
-          type="button"
-          onClick={() => onSelect?.({ price: r.price, size: r.size, side })}
-          disabled={!onSelect}
-          title={onSelect ? `Trade at ${cents(r.price)}` : undefined}
+          {...(onSelect
+            ? {
+                type: "button" as const,
+                onClick: () => onSelect({ price: r.price, size: r.size, side }),
+                title: `Trade at ${cents(r.price)}`,
+              }
+            : {})}
           className={cn(
             "relative flex w-full items-center justify-between rounded-sm px-1.5 py-1 text-xs transition-colors",
             onSelect ? "cursor-pointer hover:bg-surface-3/70" : "cursor-default",
@@ -136,7 +142,7 @@ function BookSide({
               </span>
             </>
           )}
-        </button>
+        </RowEl>
       ))}
     </div>
   );

@@ -311,6 +311,13 @@ export const conditionalRules = pgTable(
       .default(sql`'[]'::jsonb`),
     triggerCount: integer("trigger_count").notNull().default(0),
     cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
+    /**
+     * Trailing-condition watermarks keyed by node id (migration 0011).
+     * NULL for strategies without trailing conditions. Survives worker
+     * restarts by design (D-025) — a trailing stop keeps protecting through
+     * an outage; staleness rules stop it firing on bad data.
+     */
+    runtimeWatermarks: jsonb("runtime_watermarks"),
     totalNotionalExecuted: numeric("total_notional_executed").notNull().default("0"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

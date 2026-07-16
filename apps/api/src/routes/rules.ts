@@ -142,11 +142,7 @@ const evaluateAgainstSnapshot = (
  * triggeredAtMs + expiresAfterMs + 60s (Polymarket expires GTD orders ~1 min
  * before the stated timestamp — ADR-0013). null expiration = "0" (no expiry).
  */
-const buildOrderPreview = (
-  def: StrategyDefinition,
-  config: AppConfig,
-  triggeredAtMs?: number,
-) => {
+const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggeredAtMs?: number) => {
   if (def.action.kind !== "order") return null;
   const { market, side, price, size, orderType, postOnly, expiresAfterMs, execution } = def.action;
   const expiration =

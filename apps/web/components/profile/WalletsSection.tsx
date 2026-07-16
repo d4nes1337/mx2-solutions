@@ -40,10 +40,16 @@ export function WalletsSection({
   const accounts = tradingAccounts.data?.accounts ?? [];
   const hasPrivyWallet = accounts.some((a) => a.kind === "internal_privy");
   const privyEnabled = walletStatus.data?.privySigningEnabled ?? false;
+  // A Privy mapping can exist with no visible account (the user hit "Remove
+  // wallet", which only archives the row) — the wallet and funds still exist.
+  const hasWalletMapping = walletStatus.data?.provisioned ?? false;
 
   // One provider round-trip to catch wallets deleted outside the app (e.g. in
-  // the Privy dashboard). Only when an internal wallet is supposed to exist.
-  const health = useTradingWalletHealth(signedIn && privyEnabled && hasPrivyWallet);
+  // the Privy dashboard). Whenever a wallet is supposed to exist at the
+  // provider — including the archived-account case.
+  const health = useTradingWalletHealth(
+    signedIn && privyEnabled && (hasPrivyWallet || hasWalletMapping),
+  );
   const walletMissing = health.data?.walletHealth === "missing";
   const firstPrivyWithDeposit = accounts.find(
     (a) => a.kind === "internal_privy" && a.depositWalletAddress,
@@ -132,7 +138,7 @@ export function WalletsSection({
           <Spinner label="Loading wallets…" />
         ) : tradingAccounts.error ? (
           <ErrorNote message={(tradingAccounts.error as Error).message} />
-        ) : accounts.length === 0 ? (
+        ) : accounts.length === 0 && (!privyEnabled || hasPrivyWallet) ? (
           <p className="text-sm text-muted">No trading accounts found.</p>
         ) : (
           accounts.map((account) => (
@@ -154,12 +160,20 @@ export function WalletsSection({
           </div>
         )}
 
-        {/* Create Privy wallet */}
+        {/* No internal wallet → a proper empty state with Create as the primary
+            action. Creating when a mapping still exists RESTORES the same
+            wallet (same address, same funds) — say so. */}
         {signedIn && privyEnabled && !hasPrivyWallet && (
-          <div className="pt-1">
+          <div className="space-y-2 rounded-md border border-dashed border-border bg-surface-2/50 px-3 py-3">
+            <p className="text-[13px] font-medium text-fg">No Arima trading wallet yet</p>
+            <p className="text-[12px] leading-snug text-muted">
+              {hasWalletMapping
+                ? "You removed your trading wallet earlier — it still exists safely at the provider. Creating brings the same wallet (and any funds on it) right back."
+                : "Create a server-managed trading wallet to unlock no-popup Smart Orders. You stay in control: it can only trade on Polymarket, never withdraw elsewhere."}
+            </p>
             <Button
               size="sm"
-              variant="outline"
+              variant="primary"
               disabled={provisionWallet.isPending}
               onClick={() => provisionWallet.mutate()}
             >
@@ -168,7 +182,7 @@ export function WalletsSection({
               ) : (
                 <Plus size={12} />
               )}
-              Create Arima trading wallet
+              {hasWalletMapping ? "Restore Arima trading wallet" : "Create Arima trading wallet"}
             </Button>
             {provisionWallet.error && (
               <p className="mt-1 text-[12px] text-neg">
@@ -177,9 +191,20 @@ export function WalletsSection({
             )}
           </div>
         )}
+        {provisionWallet.data?.alreadyProvisioned && hasPrivyWallet ? (
+          <div className="rounded-md border border-pos/30 bg-pos/10 px-3 py-2 text-sm text-pos">
+            Your trading wallet is back — same address, same funds.
+          </div>
+        ) : null}
 
-        {/* Relayer feature note */}
-        {signedIn && walletStatus.data && !walletStatus.data.relayerEnabled && (
+        {/* Feature notes */}
+        {signedIn && walletStatus.data && !privyEnabled && (
+          <p className="text-[11px] text-muted">
+            Server-managed trading wallets aren&apos;t enabled on this build — you can still trade
+            by signing each order in your connected wallet.
+          </p>
+        )}
+        {signedIn && walletStatus.data && privyEnabled && !walletStatus.data.relayerEnabled && (
           <p className="text-[11px] text-muted">
             No-popup trading isn&apos;t active on this server yet. You can still trade by signing
             each order in your connected wallet.

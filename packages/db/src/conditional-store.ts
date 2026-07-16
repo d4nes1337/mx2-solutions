@@ -52,6 +52,11 @@ export interface RuleEvaluationUpdate {
   /** v2 repeat bookkeeping; omitted by the legacy v1 evaluator path. */
   triggerCount?: number;
   cooldownUntilMs?: number | null;
+  /**
+   * Trailing watermarks (migration 0011). Omitted = leave the column
+   * untouched; the worker only writes when a watermark actually moved.
+   */
+  watermarks?: Record<string, unknown> | null;
 }
 
 export interface RuleStore {
@@ -157,6 +162,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
         ...(update.cooldownUntilMs !== undefined
           ? { cooldownUntil: tsOrNull(update.cooldownUntilMs) }
           : {}),
+        ...(update.watermarks !== undefined ? { runtimeWatermarks: update.watermarks } : {}),
         updatedAt: sql`now()`,
       })
       .where(

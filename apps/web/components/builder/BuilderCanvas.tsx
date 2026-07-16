@@ -74,6 +74,14 @@ const conditionSummary = (
         summary: `${c.market.outcome} ${c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves"} ${cents(c.deltaThreshold)}+ in ${Math.round(c.windowMs / 60_000)}m`,
         detail: marketLabel(doc, c.market),
       };
+    case "trailing":
+      return {
+        summary:
+          c.mode === "stop"
+            ? `${c.market.outcome} falls ${cents(c.offset)} from its peak`
+            : `${c.market.outcome} rebounds ${cents(c.offset)} off its low`,
+        detail: marketLabel(doc, c.market),
+      };
   }
 };
 
@@ -93,6 +101,7 @@ const formatActual = (kind: ConditionV2["kind"], actual: number | null): string 
     case "price":
     case "spread":
     case "price_move":
+    case "trailing":
       return cents(actual);
     case "cumulative_notional":
       return usd(Math.round(actual));
@@ -248,6 +257,13 @@ function buildGraph(
     style: { strokeWidth: 2 },
   });
 
+  // Manual sizes (resize handles / expand toggle) ride along with positions.
+  for (const n of nodes) {
+    const p = doc.positions[n.id];
+    if (p?.w !== undefined) n.width = p.w;
+    if (p?.h !== undefined) n.height = p.h;
+  }
+
   return { nodes, edges };
 }
 
@@ -261,8 +277,8 @@ const shallowEqualData = (a: Record<string, unknown>, b: Record<string, unknown>
 /**
  * Merge a freshly-built graph into the live arrays. Nodes whose payload is
  * unchanged keep their previous object identity (so memoized bodies bail);
- * positions come from the live array when `preferLivePositions` (evaluation
- * ticks) or for the node currently being dragged.
+ * positions AND sizes come from the live array when `preferLivePositions`
+ * (evaluation ticks) or for the node currently being dragged/resized.
  */
 function reconcileNodes(
   prev: Node[],
@@ -273,19 +289,23 @@ function reconcileNodes(
   return fresh.map((fn) => {
     const pn = prevById.get(fn.id);
     if (!pn) return fn;
-    const keepLivePos = opts.preferLivePositions || fn.id === opts.draggingId;
-    const position = keepLivePos ? pn.position : fn.position;
+    const keepLive = opts.preferLivePositions || fn.id === opts.draggingId;
+    const position = keepLive ? pn.position : fn.position;
+    const width = keepLive ? pn.width : fn.width;
+    const height = keepLive ? pn.height : fn.height;
     if (
       pn.type === fn.type &&
       pn.selected === fn.selected &&
       pn.position.x === position.x &&
       pn.position.y === position.y &&
+      pn.width === width &&
+      pn.height === height &&
       pn.className === fn.className &&
       shallowEqualData(pn.data, fn.data)
     ) {
       return pn;
     }
-    return { ...fn, position };
+    return { ...fn, position, width, height };
   });
 }
 
@@ -321,6 +341,8 @@ export default function BuilderCanvas({
   const issuesRef = useRef(issues);
   issuesRef.current = issues;
   const draggingId = useRef<string | null>(null);
+  /** Last dimensions seen during an active NodeResizer gesture. */
+  const resizeLast = useRef<{ id: string; width: number; height: number } | null>(null);
 
   // Staged reveal: for ~2.5s after the AI replaces the doc, nodes mount with a
   // cascading entrance (CSS animation, reduced-motion-gated in globals.css).
@@ -333,6 +355,8 @@ export default function BuilderCanvas({
   if (initialGraph.current === null) initialGraph.current = buildGraph(doc, evaluation, issues);
   const [nodes, setNodes] = useState<Node[]>(initialGraph.current.nodes);
   const [edges, setEdges] = useState<Edge[]>(initialGraph.current.edges);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   // Doc/validation authority: rebuild + reconcile on structural change, drop,
   // selection, or staged reveal. Never moves the node under the pointer.
@@ -371,7 +395,31 @@ export default function BuilderCanvas({
       setNodes((prev) => applyNodeChanges(changes, prev));
       for (const change of changes) {
         if (change.type === "position" && change.position && !change.dragging) {
-          setPosition(change.id, change.position);
+          const p = useBuilderStore.getState().doc.positions[change.id];
+          setPosition(change.id, { ...p, ...change.position });
+        }
+        // NodeResizer gesture: track live, persist the size at gesture end so
+        // eval-tick rebuilds can't snap a node mid-resize.
+        if (change.type === "dimensions") {
+          if (change.resizing) {
+            draggingId.current = change.id;
+            if (change.dimensions) {
+              resizeLast.current = { id: change.id, ...change.dimensions };
+            }
+          } else if (change.resizing === false) {
+            draggingId.current = null;
+            const final =
+              change.dimensions ??
+              (resizeLast.current?.id === change.id
+                ? { width: resizeLast.current.width, height: resizeLast.current.height }
+                : null);
+            if (final) {
+              const xy = useBuilderStore.getState().doc.positions[change.id] ??
+                nodesRef.current.find((n) => n.id === change.id)?.position ?? { x: 0, y: 0 };
+              setPosition(change.id, { x: xy.x, y: xy.y, w: final.width, h: final.height });
+            }
+            resizeLast.current = null;
+          }
         }
         if (
           change.type === "select" &&
@@ -379,12 +427,20 @@ export default function BuilderCanvas({
           useBuilderStore.getState().doc.selectedNodeId !== change.id
         ) {
           select(change.id);
-          // Selecting a market node routes the panel to its live preview;
-          // other nodes edit inline on the canvas.
+          const store = useBuilderStore.getState();
           if (change.id.startsWith("market:")) {
-            const store = useBuilderStore.getState();
+            // Market blocks route to their live preview…
             store.focusMarket(change.id.slice("market:".length));
             store.setActiveTab("market");
+          } else {
+            // …every other block opens its details/editor in the Block tab.
+            store.setActiveTab("block");
+          }
+        }
+        if (change.type === "select" && !change.selected) {
+          const store = useBuilderStore.getState();
+          if (store.doc.selectedNodeId === change.id && store.activeTab === "block") {
+            store.setActiveTab(store.lastNonBlockTab);
           }
         }
       }

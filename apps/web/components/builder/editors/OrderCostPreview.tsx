@@ -14,14 +14,28 @@ import { cn } from "@/components/ui";
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-function Row({ label, tone, children }: { label: string; tone?: "pos" | "warn" | "neg"; children: React.ReactNode }) {
+function Row({
+  label,
+  tone,
+  children,
+}: {
+  label: string;
+  tone?: "pos" | "warn" | "neg";
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-2 text-[11px]">
       <span className="text-muted">{label}</span>
       <span
         className={cn(
           "tabular font-medium",
-          tone === "pos" ? "text-pos" : tone === "warn" ? "text-warn" : tone === "neg" ? "text-neg" : "text-fg",
+          tone === "pos"
+            ? "text-pos"
+            : tone === "warn"
+              ? "text-warn"
+              : tone === "neg"
+                ? "text-neg"
+                : "text-fg",
         )}
       >
         {children}
@@ -38,10 +52,7 @@ const toLevels = (raw: { price: string; size: string }[] | undefined): BookLevel
 export function OrderCostPreview({ action }: { action: OrderActionV2 }) {
   const bound = isBound(action.market);
   const economics = useMarketEconomics(bound ? action.market.conditionId : "");
-  const book = useOrderbookByToken(
-    bound ? action.market.conditionId : "",
-    bound ? action.market.tokenId : null,
-  );
+  const book = useOrderbookByToken(bound ? action.market.tokenId : null);
   if (!bound) return null;
 
   const schedule = economics.data?.feeSchedule ?? null;
@@ -62,10 +73,7 @@ export function OrderCostPreview({ action }: { action: OrderActionV2 }) {
         </p>
         {cost ? (
           <>
-            <Row
-              label="Fillable now"
-              tone={cost.fillableShares < action.size ? "warn" : undefined}
-            >
+            <Row label="Fillable now" tone={cost.fillableShares < action.size ? "warn" : undefined}>
               {Math.floor(cost.fillableShares)} / {action.size} shares
             </Row>
             {cost.fillableShares > 0 ? (
@@ -83,8 +91,8 @@ export function OrderCostPreview({ action }: { action: OrderActionV2 }) {
             </Row>
             {action.orderType === "FOK" && cost.fillableShares < action.size ? (
               <p className="text-[10px] leading-snug text-neg">
-                All-or-nothing would be rejected right now — the book can&apos;t fill the full
-                size at your price.
+                All-or-nothing would be rejected right now — the book can&apos;t fill the full size
+                at your price.
               </p>
             ) : null}
           </>

@@ -15,6 +15,7 @@ import type {
   StrategyDefinition,
   TriggerEvidenceV2,
   ViewsByToken,
+  WatermarksByNode,
 } from "./types-v2.js";
 
 export const EVALUATOR_VERSION_V2 = "rules-engine/0.2.0";
@@ -45,6 +46,8 @@ export const buildEvidenceV2 = (args: {
   triggeredAtMs: number;
   reasonCodes: readonly ReasonCode[];
   triggerNumber: number;
+  /** Trailing watermarks at trigger time (only recorded when non-empty). */
+  watermarks?: WatermarksByNode;
 }): TriggerEvidenceV2 => {
   const { def, definitionHash, views, resultTree, windowStartMs, triggeredAtMs } = args;
 
@@ -66,6 +69,9 @@ export const buildEvidenceV2 = (args: {
     reasonCodes: [...args.reasonCodes],
     preparedAction: def.action,
     triggerNumber: args.triggerNumber,
+    ...(args.watermarks && Object.keys(args.watermarks).length > 0
+      ? { watermarks: args.watermarks }
+      : {}),
     tokenId: primary?.tokenId ?? primaryTokenId(def),
     conditionId: primary?.conditionId ?? "",
     bestBid: primary ? bestBid(primary) : null,

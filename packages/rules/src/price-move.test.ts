@@ -7,11 +7,7 @@ import { priceMove } from "./predicates.js";
 import { evaluateExpression } from "./evaluate-v2.js";
 import { simulateTriggers, type PricePoint } from "./simulate.js";
 import type { MarketDataView, PriceSample } from "./types.js";
-import type {
-  ExprNode,
-  PriceMoveConditionV2,
-  StrategyDefinition,
-} from "./types-v2.js";
+import type { ExprNode, PriceMoveConditionV2, StrategyDefinition } from "./types-v2.js";
 import { validateStrategyDefinition } from "./validate-v2.js";
 
 const MARKET = { conditionId: "cond-1", tokenId: "tok-1", outcome: "YES" };
@@ -225,7 +221,7 @@ describe("simulateTriggers with price_move", () => {
   it("matches a brute-force reference on random series", () => {
     // Deterministic pseudo-random walk.
     let seed = 42;
-    const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
     const prices: number[] = [0.5];
     for (let i = 1; i < 300; i++) {
       const next = Math.min(0.95, Math.max(0.05, prices[i - 1]! + (rand() - 0.5) * 0.04));

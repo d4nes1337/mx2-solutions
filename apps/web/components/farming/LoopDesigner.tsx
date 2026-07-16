@@ -202,17 +202,19 @@ export function LoopDesigner({ market }: { market: ScannerMarket }) {
             </Badge>
           ) : (
             <Badge tone="warn">
-              {!math.qualifiesSize ? `size < ${market.minSize}` : `spread > ${market.maxSpreadCents}¢`}
+              {!math.qualifiesSize
+                ? `size < ${market.minSize}`
+                : `spread > ${market.maxSpreadCents}¢`}
             </Badge>
           )}
         </Row>
       </div>
 
       <p className="text-[11px] leading-snug text-muted">
-        One-sided fills leave real inventory — the loop halts at your caps rather than chase.
-        Your rewards share depends on competing makers; nothing here is a promised return. New
-        loops run in <span className="font-semibold text-fg">shadow mode</span>: intended quotes
-        are recorded, nothing is placed, no funds move.
+        One-sided fills leave real inventory — the loop halts at your caps rather than chase. Your
+        rewards share depends on competing makers; nothing here is a promised return. New loops run
+        in <span className="font-semibold text-fg">shadow mode</span>: intended quotes are recorded,
+        nothing is placed, no funds move.
       </p>
 
       {session.data ? (

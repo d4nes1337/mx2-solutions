@@ -67,6 +67,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         tokenIds: [...(o.tokenIds ?? [o.tokenId])],
         triggerCount: 0,
         cooldownUntil: null,
+        runtimeWatermarks: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -425,6 +426,46 @@ describe("POST /api/smart-orders", () => {
     expect(body.definitionV2.version).toBe(2);
     expect(audits.some((a) => a.action === "rule.created")).toBe(true);
     expect(ruleStore.rows[0]!.definitionHash).toMatch(/^[0-9a-f]{8}$/);
+    await app.close();
+  });
+
+  it("creates a strategy with a trailing condition and rejects bad offsets", async () => {
+    const trailingLeaf = (offset: number) => ({
+      type: "condition",
+      id: "t1",
+      condition: {
+        kind: "trailing",
+        market: marketRef("tok-1"),
+        mode: "stop",
+        source: "bid",
+        offset,
+      },
+    });
+    const bodyWith = (offset: number) => ({
+      ...validBody,
+      name: "Protect position",
+      expr: { type: "group", id: "root", op: "and", children: [trailingLeaf(offset)] },
+      action: { ...validBody.action, side: "SELL" },
+    });
+
+    const { app } = buildSmartOrdersApp({});
+    const ok = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: bodyWith(0.08),
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json().definitionV2.expr.children[0].condition.kind).toBe("trailing");
+
+    // Out-of-range offset dies at the zod layer (mirrors validate-v2 bounds).
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: bodyWith(0.6),
+    });
+    expect(bad.statusCode).toBe(400);
     await app.close();
   });
 

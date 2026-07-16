@@ -22,7 +22,7 @@ import {
 } from "./doc";
 
 /** Tabs of the right-hand workspace panel (editor-only UI state). */
-export type WorkspaceTab = "ai" | "simulate" | "market" | "settings";
+export type WorkspaceTab = "ai" | "simulate" | "market" | "settings" | "block";
 
 export interface BuilderState {
   doc: StrategyDoc;
@@ -32,6 +32,11 @@ export interface BuilderState {
   revealTick: number;
   /** Active workspace-panel tab. Editor-only — never triggers evaluation. */
   activeTab: WorkspaceTab;
+  /**
+   * Where to return when the selection-driven Block tab closes (deselect).
+   * Tracks the last tab the user chose that wasn't "block".
+   */
+  lastNonBlockTab: Exclude<WorkspaceTab, "block">;
   /** Token whose preview the Market tab shows (null = first referenced market). */
   focusedMarketToken: string | null;
 
@@ -41,7 +46,10 @@ export interface BuilderState {
   revealAll: () => void;
   setName: (name: string) => void;
   setRootOp: (op: "and" | "or") => void;
-  addCondition: (condition: ConditionV2) => string;
+  /** Append a condition — to the root, or into the group `parentId`. */
+  addCondition: (condition: ConditionV2, parentId?: string) => string;
+  /** Append an empty AND/OR group to the root (fill via the group editor). */
+  addGroup: (op: "and" | "or") => string;
   updateCondition: (id: string, condition: ConditionV2) => void;
   removeNode: (id: string) => void;
   toggleNot: (id: string) => void;
@@ -70,20 +78,39 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   revision: 0,
   revealTick: 0,
   activeTab: "ai",
+  lastNonBlockTab: "ai",
   focusedMarketToken: null,
 
   reset: (doc) => set({ doc: doc ?? emptyDoc(), revision: get().revision + 1 }),
 
   // Editor-only (no revision bump — never retriggers evaluation).
   revealAll: () => set((s) => ({ revealTick: s.revealTick + 1 })),
-  setActiveTab: (activeTab) => set({ activeTab }),
+  setActiveTab: (activeTab) =>
+    set(activeTab === "block" ? { activeTab } : { activeTab, lastNonBlockTab: activeTab }),
   focusMarket: (focusedMarketToken) => set({ focusedMarketToken }),
 
   setName: (name) => set((s) => bump({ ...s.doc, name }, s)),
 
   setRootOp: (op) => set((s) => bump({ ...s.doc, expr: { ...s.doc.expr, op } }, s)),
 
-  addCondition: (condition) => {
+  addCondition: (condition, parentId) => {
+    const id = freshNodeId();
+    set((s) => {
+      const child = { type: "condition" as const, id, condition };
+      const parent = parentId ? findNode(s.doc.expr, parentId) : null;
+      const expr =
+        parent && parent.type === "group"
+          ? (replaceNodeInTree(s.doc.expr, parent.id, {
+              ...parent,
+              children: [...parent.children, child],
+            }) as typeof s.doc.expr)
+          : { ...s.doc.expr, children: [...s.doc.expr.children, child] };
+      return bump({ ...s.doc, expr, selectedNodeId: id }, s);
+    });
+    return id;
+  },
+
+  addGroup: (op) => {
     const id = freshNodeId();
     set((s) =>
       bump(
@@ -91,7 +118,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
           ...s.doc,
           expr: {
             ...s.doc.expr,
-            children: [...s.doc.expr.children, { type: "condition", id, condition }],
+            children: [...s.doc.expr.children, { type: "group", id, op, children: [] }],
           },
           selectedNodeId: id,
         },

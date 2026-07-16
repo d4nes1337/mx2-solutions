@@ -168,24 +168,29 @@ beforeEach(() => {
 });
 
 describe("GET /api/markets/:id/scenarios", () => {
-  it("emits ranked entry scenarios with VALID prepare/once definitions and chat prompts", async () => {
+  it("emits ranked entry scenarios with VALID prepare/alert-once definitions and chat prompts", async () => {
     const { app } = buildHarness();
     const res = await app.inject({ method: "GET", url: "/api/markets/m-dip/scenarios" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.conditionId).toBe("cond-dip");
     expect(body.scenarios.length).toBeGreaterThanOrEqual(2);
-    expect(body.scenarios.length).toBeLessThanOrEqual(3);
+    expect(body.scenarios.length).toBeLessThanOrEqual(5);
 
     const kinds = body.scenarios.map((s: { kind: string }) => s.kind);
     expect(kinds).toContain("dip_buy");
     expect(kinds).toContain("breakout");
+    expect(kinds).toContain("rescue_exit");
 
     for (const sc of body.scenarios) {
       expect(validateStrategyDefinition(sc.definition)).toEqual([]);
       expect(sc.definition.recurrence.kind).toBe("once");
-      expect(sc.definition.action.execution).toBe("prepare");
-      expect(sc.definition.templateId).toBe("scenario");
+      // Every emitted definition is safe: a prepared order or an alert.
+      if (sc.definition.action.kind === "order") {
+        expect(sc.definition.action.execution).toBe("prepare");
+      } else {
+        expect(sc.definition.action.kind).toBe("alert");
+      }
       expect(typeof sc.prompt).toBe("string");
       expect(sc.prompt.length).toBeGreaterThan(10);
       expect(sc.entryPriceCents).toBeGreaterThan(0);
@@ -202,14 +207,35 @@ describe("GET /api/markets/:id/scenarios", () => {
       expect(limit.stats.touches).toBeGreaterThanOrEqual(1);
       expect(limit.stats.hypotheticalPnlUsd).toBeUndefined();
     }
+
+    // The trailing-stop rescue card is alert-framed and NEVER claims a PnL.
+    const rescue = body.scenarios.find((s: { kind: string }) => s.kind === "rescue_exit");
+    expect(rescue).toBeDefined();
+    expect(rescue.definition.action.kind).toBe("alert");
+    expect(rescue.stats.hypotheticalPnlUsd).toBeUndefined();
+    expect(rescue.definition.expr.children[0].condition.kind).toBe("trailing");
     await app.close();
   });
 
-  it("returns an empty list for a market with no winning entries", async () => {
+  it("keeps only claim-free cards for a market with no winning entries", async () => {
     const { app } = buildHarness();
     const res = await app.inject({ method: "GET", url: "/api/markets/m-flat/scenarios" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().scenarios).toEqual([]);
+    const scenarios = res.json().scenarios as { kind: string; stats: Record<string, number> }[];
+    // No PnL winners on a flat series — no dip/breakout/trailing_dip cards.
+    for (const sc of scenarios) {
+      expect(sc.stats["hypotheticalPnlUsd"]).toBeUndefined();
+    }
+    expect(scenarios.map((s) => s.kind)).toContain("rescue_exit");
+    await app.close();
+  });
+
+  it("adds a farm_rewards card only when the market carries a live pool", async () => {
+    // Harness clob.getRewardsMarket errors → no pool → no farm card.
+    const { app } = buildHarness();
+    const res = await app.inject({ method: "GET", url: "/api/markets/m-dip/scenarios" });
+    const kinds = res.json().scenarios.map((s: { kind: string }) => s.kind);
+    expect(kinds).not.toContain("farm_rewards");
     await app.close();
   });
 
@@ -228,6 +254,38 @@ describe("GET /api/markets/:id/scenarios", () => {
     const res = await app.inject({ method: "GET", url: "/api/markets/nope/scenarios" });
     expect(res.statusCode).toBe(404);
     await app.close();
+  });
+
+  it("buildScenariosFor emits a farm_rewards card for a live pool (cockpit link only when enabled)", async () => {
+    const { buildScenariosFor } = await import("../lib/scenarios.js");
+    const input = {
+      conditionId: "cond-dip",
+      tokenId: DIP_TOKEN,
+      outcome: "Yes",
+      title: "Will BTC hit $150k?",
+      currentPrice: 0.5,
+    };
+    const series = dipSeries.map((s) => ({ t: s.t * 1000, p: s.p }));
+    const silent = { warn: () => {} };
+
+    const withPool = buildScenariosFor(input, series, silent, {
+      rewards: { ratePerDayUsd: 42, minSize: 100 },
+      makerLoopEnabled: true,
+    });
+    const farm = withPool.find((s) => s.kind === "farm_rewards");
+    expect(farm).toBeDefined();
+    expect(farm!.stats.rewardsPerDayUsd).toBe(42);
+    expect(farm!.link?.href).toContain("/farming?conditionId=");
+    expect(validateStrategyDefinition(farm!.definition)).toEqual([]);
+
+    const withoutLoop = buildScenariosFor(input, series, silent, {
+      rewards: { ratePerDayUsd: 42, minSize: 100 },
+      makerLoopEnabled: false,
+    });
+    expect(withoutLoop.find((s) => s.kind === "farm_rewards")?.link).toBeUndefined();
+
+    const noPool = buildScenariosFor(input, series, silent, { rewards: null });
+    expect(noPool.find((s) => s.kind === "farm_rewards")).toBeUndefined();
   });
 });
 

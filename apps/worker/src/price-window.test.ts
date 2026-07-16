@@ -32,7 +32,7 @@ describe("price window store", () => {
   it("evicts beyond the horizon but retains one carry-in sample", () => {
     const store = createPriceWindowStore();
     const t0 = 10 * HOUR;
-    store.push("tok", 0.40, t0 - 2 * HOUR); // far past — evictable
+    store.push("tok", 0.4, t0 - 2 * HOUR); // far past — evictable
     store.push("tok", 0.45, t0 - 90 * 60_000); // past horizon — becomes carry-in
     store.push("tok", 0.5, t0);
     const hist = store.history("tok")!;

@@ -151,18 +151,17 @@ export function useOrderbook(id: string, outcome: number) {
 
 /**
  * Order book keyed by the exact CLOB token (the builder knows tokenIds, not
- * outcome indices). Falls back server-side to outcome 0 if the token doesn't
- * belong to the market.
+ * Gamma market ids). Uses the token-keyed public route; a persistent failure
+ * stops the poll instead of hammering a doomed request every 2s.
  */
-export function useOrderbookByToken(id: string, tokenId: string | null) {
+export function useOrderbookByToken(tokenId: string | null) {
   return useQuery({
-    queryKey: ["orderbook-token", id, tokenId],
+    queryKey: ["orderbook-token", tokenId],
     queryFn: () =>
-      api.get<OrderbookResponse>(
-        `/api/markets/${id}/orderbook?tokenId=${encodeURIComponent(tokenId!)}`,
-      ),
-    enabled: Boolean(id && tokenId),
-    refetchInterval: POLL.orderbook,
+      api.get<OrderbookResponse>(`/api/markets/orderbook?tokenId=${encodeURIComponent(tokenId!)}`),
+    enabled: Boolean(tokenId),
+    retry: 1,
+    refetchInterval: (query) => (query.state.error ? false : POLL.orderbook),
   });
 }
 
@@ -313,7 +312,12 @@ export function useProvisionTradingWallet() {
   return useMutation({
     mutationFn: () => api.post<TradingWalletProvisionResponse>("/api/trading-wallet/provision"),
     onSuccess: () => {
+      // Provisioning can also RESTORE an archived account — refresh everything
+      // that renders wallet state so the card reappears immediately.
       void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-health"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
     },
   });
 }

@@ -10,7 +10,7 @@
  * the home showcases, R-023).
  */
 import Link from "next/link";
-import { Sparkles, TrendingDown, TrendingUp, Clock3 } from "lucide-react";
+import { Sparkles, TrendingDown, TrendingUp, Clock3, ShieldCheck, Repeat2 } from "lucide-react";
 import { useMarketScenarios } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
 import type { MarketScenario } from "@/lib/types";
@@ -20,6 +20,9 @@ const KIND_META: Record<MarketScenario["kind"], { Icon: typeof TrendingUp; tone:
   dip_buy: { Icon: TrendingDown, tone: "text-pos" },
   breakout: { Icon: TrendingUp, tone: "text-accent" },
   limit_entry: { Icon: Clock3, tone: "text-muted" },
+  trailing_dip: { Icon: TrendingDown, tone: "text-accent" },
+  rescue_exit: { Icon: ShieldCheck, tone: "text-warn" },
+  farm_rewards: { Icon: Repeat2, tone: "text-pos" },
 };
 
 export function MarketScenarios({
@@ -94,21 +97,36 @@ function ScenarioCard({
               hypothetical · would have fired {scenario.stats.triggerCount}×
             </span>
           </span>
-        ) : (
+        ) : scenario.stats.touches !== undefined ? (
           <span className="text-faint">
             price touched this level {scenario.stats.touches}× in {scenario.stats.windowDays}d
           </span>
+        ) : scenario.stats.rewardsPerDayUsd !== undefined ? (
+          <span className="text-faint">
+            pool pays ≈${scenario.stats.rewardsPerDayUsd}/day, shared across makers
+          </span>
+        ) : scenario.stats.triggerCount !== undefined ? (
+          <span className="text-faint">
+            would have spoken up {scenario.stats.triggerCount}× in {scenario.stats.windowDays}d — no
+            profit claim
+          </span>
+        ) : (
+          <span className="text-faint">no backtest claim for this one</span>
         )}
       </div>
 
       <div className="flex items-center justify-between gap-2">
         <Link
-          href={href}
+          href={scenario.link?.href ?? href}
           className="inline-flex items-center gap-1 rounded-md border border-brand/40 bg-brand-soft px-2 py-1 text-[11px] font-semibold text-accent transition-colors hover:border-brand"
         >
-          <Sparkles size={11} aria-hidden /> Open in builder
+          <Sparkles size={11} aria-hidden /> {scenario.link?.label ?? "Open in builder"}
         </Link>
-        <span className="tabular text-[11px] text-muted">entry {scenario.entryPriceCents}¢</span>
+        <span className="tabular text-[11px] text-muted">
+          {scenario.kind === "rescue_exit" || scenario.kind === "farm_rewards"
+            ? `now ${scenario.entryPriceCents}¢`
+            : `entry ${scenario.entryPriceCents}¢`}
+        </span>
       </div>
     </div>
   );

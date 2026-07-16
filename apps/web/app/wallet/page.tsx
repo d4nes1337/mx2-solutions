@@ -3,7 +3,7 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "@/lib/auth";
-import { useTradingAccounts } from "@/lib/queries";
+import { useTradingAccounts, useTradingWallet } from "@/lib/queries";
 import { Empty, Spinner } from "@/components/ui";
 import { WalletsSection } from "@/components/profile/WalletsSection";
 import { TradingModeCards, WalletStepper } from "@/components/wallet/TradingModes";
@@ -20,6 +20,8 @@ function WalletPageInner() {
   const session = useSession();
   const signedIn = Boolean(session.data);
   const tradingAccounts = useTradingAccounts(signedIn);
+  const walletStatus = useTradingWallet(signedIn);
+  const privyEnabled = walletStatus.data?.privySigningEnabled ?? false;
   const params = useSearchParams();
   const autoOpenTopUp = params.get("topup") === "1";
 
@@ -46,7 +48,9 @@ function WalletPageInner() {
             <WalletStepper account={internal} />
             {!internal ? (
               <p className="text-[12px] text-muted">
-                Create your trading wallet below to unlock no-popup Smart Orders.
+                {privyEnabled
+                  ? "Create your trading wallet below to unlock no-popup Smart Orders."
+                  : "Server-managed trading wallets aren't enabled on this build yet — sign each trade from your connected wallet instead."}
               </p>
             ) : null}
           </div>

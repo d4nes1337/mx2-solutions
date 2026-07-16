@@ -382,6 +382,9 @@ export const registerTradingWalletRoutes = (
     return {
       privySigningEnabled: deps.config.features.privySigning,
       relayerEnabled: deps.config.features.relayer && deps.depositWalletRelayer.enabled,
+      // NOTE: stays true even when the user archived their trading account —
+      // the Privy mapping (and wallet) still exist. The UI keys restore and
+      // health-check affordances off this, not off visible accounts.
       provisioned: wallet !== null,
       embeddedAddress: wallet?.embeddedAddress ?? null,
       tradingAccountId: internalAccount?.id ?? null,

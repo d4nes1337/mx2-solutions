@@ -26,6 +26,7 @@ import {
   type RuleDefinition,
   type StrategyDefinition,
   type ViewsByToken,
+  type WatermarksByNode,
 } from "@mx2/rules";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
@@ -91,6 +92,13 @@ const ConditionSchema = z.discriminatedUnion("kind", [
     deltaThreshold: z.number().gt(0).lt(1),
     windowMs: z.number().int().min(60_000).max(3_600_000),
   }),
+  z.object({
+    kind: z.literal("trailing"),
+    market: MarketRefSchema,
+    mode: z.enum(["stop", "entry"]),
+    source: z.enum(["ask", "bid"]),
+    offset: z.number().min(0.01).max(0.5),
+  }),
 ]);
 
 const ExprNodeSchema: z.ZodType<ExprNode> = z.lazy(() =>
@@ -119,12 +127,7 @@ const ActionSchema = z.discriminatedUnion("kind", [
     size: z.number().positive(),
     orderType: z.enum(["GTC", "GTD", "FOK", "FAK"]),
     postOnly: z.boolean().optional(),
-    expiresAfterMs: z
-      .number()
-      .int()
-      .min(180_000)
-      .max(86_400_000)
-      .optional(),
+    expiresAfterMs: z.number().int().min(180_000).max(86_400_000).optional(),
     execution: z.enum(["prepare", "auto"]),
     negRisk: z.boolean().optional(),
     tickSize: z.enum(["0.1", "0.01", "0.001", "0.0001"]).optional(),
@@ -594,7 +597,15 @@ export const registerSmartOrdersRoutes = (
     const tokens = referencedTokenIds(def);
     const nowMs = Date.now();
     const views = await loadViews(deps, tokens, nowMs, priceMoveTokens(def));
-    const evaluation = evaluateExpression(def, views, nowMs);
+    // Armed strategies carry real trailing state — pass it so the monitor
+    // shows the actual peak/trough and trigger level, not a fresh "arming".
+    // (Read-only here: the worker remains the single writer of watermarks.)
+    const evaluation = evaluateExpression(
+      def,
+      views,
+      nowMs,
+      (row.runtimeWatermarks as WatermarksByNode | null) ?? {},
+    );
     return {
       strategyId: row.id,
       status: row.status,

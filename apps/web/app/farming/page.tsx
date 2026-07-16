@@ -127,8 +127,8 @@ export default function FarmingPage() {
 
       <p className="text-[11px] leading-snug text-faint">
         Pool rates are Polymarket&apos;s published daily liquidity rewards, shared pro-rata across
-        qualifying makers — your share depends on the competition. Data refreshes every 15
-        minutes. Not investment advice.
+        qualifying makers — your share depends on the competition. Data refreshes every 15 minutes.
+        Not investment advice.
       </p>
     </div>
   );

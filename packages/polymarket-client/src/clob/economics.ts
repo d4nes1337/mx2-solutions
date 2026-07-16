@@ -29,9 +29,7 @@ export const ClobMarketInfoSchema = z
   .passthrough();
 export type ClobMarketInfo = z.infer<typeof ClobMarketInfoSchema>;
 
-export const FeeRateResponseSchema = z
-  .object({ base_fee: z.coerce.number() })
-  .passthrough();
+export const FeeRateResponseSchema = z.object({ base_fee: z.coerce.number() }).passthrough();
 
 export const RewardsConfigSchema = z
   .object({

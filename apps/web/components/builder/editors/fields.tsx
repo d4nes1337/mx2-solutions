@@ -4,6 +4,7 @@
  * Shared field primitives for the inline node editors. Everything interactive
  * carries `nodrag` so React Flow never starts a node drag from a control.
  */
+import { useState } from "react";
 import type { MarketRef } from "@mx2/rules";
 import { cn } from "@/components/ui";
 import { isBound, marketLabel, type MarketMeta, type StrategyDoc } from "@/lib/smart-orders/doc";
@@ -18,6 +19,19 @@ export function Field({ label, children }: { label: string; children: React.Reac
   );
 }
 
+const clampNumber = (v: number, min?: number, max?: number): number => {
+  let out = v;
+  if (min !== undefined && out < min) out = min;
+  if (max !== undefined && out > max) out = max;
+  return out;
+};
+
+/**
+ * Numeric field that never commits garbage into the doc: a cleared or
+ * half-typed value keeps the last valid number (the field may look empty until
+ * blur re-syncs it), and typed values are clamped to [min, max] on commit —
+ * the native attributes only bound the spinner, not the keyboard.
+ */
 export function NumberInput({
   value,
   onChange,
@@ -33,6 +47,9 @@ export function NumberInput({
   min?: number;
   max?: number;
 }) {
+  // null = mirror the committed prop; a string = mid-edit display state.
+  const [text, setText] = useState<string | null>(null);
+  const shown = text ?? (Number.isFinite(value) ? String(value) : "");
   return (
     <div
       className={cn(
@@ -42,11 +59,18 @@ export function NumberInput({
     >
       <input
         type="number"
-        value={Number.isFinite(value) ? value : ""}
+        value={shown}
         step={step}
         min={min}
         max={max}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setText(raw);
+          const v = raw === "" ? NaN : Number(raw);
+          if (!Number.isFinite(v)) return;
+          onChange(clampNumber(v, min, max));
+        }}
+        onBlur={() => setText(null)}
         className="tabular w-full bg-transparent text-[13px] text-fg outline-none"
       />
       {suffix ? <span className="shrink-0 text-[11px] text-faint">{suffix}</span> : null}

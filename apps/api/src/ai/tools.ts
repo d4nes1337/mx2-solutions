@@ -5,9 +5,10 @@ import { z } from "zod";
  *
  * Design notes (ADR-0011):
  *  - `strict: true` on the small tools (search/clarify): the API guarantees
- *    inputs validate exactly. create_strategy CANNOT be strict — its 19
- *    union-typed parameters exceed Anthropic's strict-compilation cap of 16
- *    (verified live 2026-07-10) — so its safety net is the zod mirror parse,
+ *    inputs validate exactly. create_strategy CANNOT be strict — its 21+
+ *    union-typed parameters (19 pre-trailing) exceed Anthropic's
+ *    strict-compilation cap of 16 (verified live 2026-07-10) — so its safety
+ *    net is the zod mirror parse,
  *    one repair round, and validateStrategyDefinition. The expression tree is
  *    still a BOUNDED unrolling — root children are conditions or ONE level
  *    of sub-groups whose children are conditions. That matches
@@ -68,6 +69,8 @@ const CONDITION_SCHEMA = {
     "direction",
     "deltaThreshold",
     "windowMs",
+    "mode",
+    "offset",
   ],
   properties: {
     kind: {
@@ -79,6 +82,7 @@ const CONDITION_SCHEMA = {
         "visible_levels",
         "time_window",
         "price_move",
+        "trailing",
       ],
     },
     market: {
@@ -89,7 +93,7 @@ const CONDITION_SCHEMA = {
       type: "string",
       enum: ["ask", "bid"],
       description:
-        "Book side. price: ask for buy-side logic, bid for sell-side. Ignored for spread/time_window.",
+        "Book side. price: ask for buy-side logic, bid for sell-side. trailing: bid for stop mode, ask for entry mode. Ignored for spread/time_window.",
     },
     comparator: {
       type: "string",
@@ -134,6 +138,16 @@ const CONDITION_SCHEMA = {
       anyOf: [{ type: "integer" }, { type: "null" }],
       description:
         "price_move: trailing lookback in ms, 60000–3600000 (e.g. a spike 'in the last 10 minutes' = 600000). null for other kinds.",
+    },
+    mode: {
+      anyOf: [{ type: "string", enum: ["stop", "entry"] }, { type: "null" }],
+      description:
+        "trailing: stop = fires when the price falls `offset` below its PEAK since arming (protect/sell logic); entry = fires when it rises `offset` above its TROUGH (buy-the-rebound logic). null for other kinds.",
+    },
+    offset: {
+      anyOf: [{ type: "number" }, { type: "null" }],
+      description:
+        "trailing: distance from the watermark as probability 0–1 (5¢ = 0.05), range 0.01–0.5. null for other kinds.",
     },
   },
 } as const;
@@ -181,8 +195,8 @@ export const SEARCH_MARKETS_TOOL = {
   },
 } as const;
 
-// NOT strict: the flattened nullable condition shape carries 19 union-typed
-// parameters and Anthropic's strict-mode grammar compilation caps at 16
+// NOT strict: the flattened nullable condition shape carries 21 union-typed
+// parameters (19 pre-trailing) and Anthropic's strict-mode grammar compilation caps at 16
 // (verified live 2026-07-10: 400 invalid_request_error). Shape safety comes
 // from the zod mirror parse + one repair round + validateStrategyDefinition
 // instead; the few-shot examples in the system prompt anchor the exact JSON.
@@ -296,6 +310,7 @@ export const AiConditionZ = z.object({
     "visible_levels",
     "time_window",
     "price_move",
+    "trailing",
   ]),
   market: MarketSelectorZ.nullable(),
   source: z.enum(["ask", "bid"]),
@@ -310,6 +325,9 @@ export const AiConditionZ = z.object({
   direction: z.enum(["drop", "rise", "either"]).nullable().default(null),
   deltaThreshold: z.number().nullable().default(null),
   windowMs: z.number().int().nullable().default(null),
+  // trailing (defaulted for the same reason):
+  mode: z.enum(["stop", "entry"]).nullable().default(null),
+  offset: z.number().nullable().default(null),
 });
 export type AiCondition = z.infer<typeof AiConditionZ>;
 

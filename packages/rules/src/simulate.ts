@@ -1,11 +1,12 @@
 /**
  * Historical trigger simulation ("would this have fired?") against CLOB
  * trade-price history. Deliberately narrow and honestly labeled: only
- * price + price_move + time_window conditions on a SINGLE market are
- * simulatable from a price series — books, liquidity, spread and freshness
+ * price + price_move + trailing + time_window conditions on a SINGLE market
+ * are simulatable from a price series — books, liquidity, spread and freshness
  * rules are not. Everything is a hypothetical estimate; past prices don't
  * predict future prices.
  */
+import { conditionLeaves } from "./compat.js";
 import { takerFeeUsd, type FeeSchedule } from "./fees.js";
 import type {
   ActionV2,
@@ -58,7 +59,7 @@ const analyse = (expr: ExprNode): Analysis => {
   let priceLeaves = 0;
   for (const c of leavesOf(expr)) {
     if (c.kind === "time_window") continue;
-    if (c.kind !== "price" && c.kind !== "price_move")
+    if (c.kind !== "price" && c.kind !== "price_move" && c.kind !== "trailing")
       return { ok: false, reason: "unsupported_conditions" };
     if (c.market.tokenId === "") return { ok: false, reason: "no_price_conditions" };
     tokenIds.add(c.market.tokenId);
@@ -119,11 +120,16 @@ const rollingMoves = (
   return out;
 };
 
+/** Trailing watermark for one node id (undefined = not armed yet). */
+type TrailingAt = (nodeId: string) => number | undefined;
+
 /**
  * Evaluate the expression against one price sample. The trade price stands in
  * for both bid and ask (approximation — disclaimed in the UI); time_window
  * checks the sample's own timestamp; price_move reads the precomputed rolling
- * window (no coverage → unsatisfied, matching the fail-closed live engine).
+ * window (no coverage → unsatisfied, matching the fail-closed live engine);
+ * trailing reads the watermark the caller ratcheted with THIS sample first
+ * (update-then-check, so the arming sample can never satisfy).
  */
 const sampleSatisfies = (
   node: ExprNode,
@@ -131,6 +137,7 @@ const sampleSatisfies = (
   tMs: number,
   sampleIdx: number,
   moveAt: MoveAt,
+  trailingAt: TrailingAt,
 ): boolean => {
   if (node.type === "condition") {
     const c = node.condition;
@@ -144,19 +151,29 @@ const sampleSatisfies = (
       const m = moveAt(c, sampleIdx);
       if (m === null) return false;
       const actual =
-        c.direction === "drop" ? m.drop : c.direction === "rise" ? m.rise : Math.max(m.drop, m.rise);
+        c.direction === "drop"
+          ? m.drop
+          : c.direction === "rise"
+            ? m.rise
+            : Math.max(m.drop, m.rise);
       return actual >= c.deltaThreshold;
+    }
+    if (c.kind === "trailing") {
+      const wm = trailingAt(node.id);
+      if (wm === undefined) return false; // arming
+      // Same float tolerance as the live evaluator (TRAILING_EPS).
+      return c.mode === "stop" ? price <= wm - c.offset + 1e-9 : price >= wm + c.offset - 1e-9;
     }
     return false; // unreachable for supported strategies (analyse() gates)
   }
   if (node.op === "not") {
     const child = node.children[0];
-    return child ? !sampleSatisfies(child, price, tMs, sampleIdx, moveAt) : false;
+    return child ? !sampleSatisfies(child, price, tMs, sampleIdx, moveAt, trailingAt) : false;
   }
   if (node.children.length === 0) return false;
   return node.op === "and"
-    ? node.children.every((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt))
-    : node.children.some((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt));
+    ? node.children.every((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt, trailingAt))
+    : node.children.some((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt, trailingAt));
 };
 
 export const simulateTriggers = (opts: {
@@ -194,12 +211,23 @@ export const simulateTriggers = (opts: {
   }
   const movesByWindow = new Map<number, ({ drop: number; rise: number } | null)[]>();
   for (const c of moveLeaves) {
-    if (!movesByWindow.has(c.windowMs)) movesByWindow.set(c.windowMs, rollingMoves(samples, c.windowMs));
+    if (!movesByWindow.has(c.windowMs))
+      movesByWindow.set(c.windowMs, rollingMoves(samples, c.windowMs));
   }
   const moveAt: MoveAt = (c, i) => movesByWindow.get(c.windowMs)?.[i] ?? null;
 
   const maxRepeats = opts.recurrence.kind === "repeat" ? opts.recurrence.maxRepeats : 1;
   const cooldownMs = opts.recurrence.kind === "repeat" ? opts.recurrence.cooldownMs : 0;
+
+  // Trailing watermarks, keyed by node id. Live-parity semantics: arm at the
+  // first evaluated sample (disclosed as "armed at the window start" in UI
+  // copy), ratchet before checking, freeze through gaps and cooldowns, clear
+  // on trigger so each repetition trails from scratch.
+  const trailingLeaves = conditionLeaves(opts.expr).filter(
+    (l) => l.condition.kind === "trailing",
+  ) as readonly { id: string; condition: Extract<ConditionV2, { kind: "trailing" }> }[];
+  const trailingWm = new Map<string, number>();
+  const trailingAt: TrailingAt = (nodeId) => trailingWm.get(nodeId);
 
   const triggers: BacktestTrigger[] = [];
   let satisfiedSince: number | null = null;
@@ -214,7 +242,15 @@ export const simulateTriggers = (opts: {
     const prev = samples[i - 1];
     if (prev && s.t - prev.t > maxBridgeMs) satisfiedSince = null;
 
-    if (!sampleSatisfies(opts.expr, s.p, s.t, i, moveAt)) {
+    for (const { id, condition } of trailingLeaves) {
+      const wm = trailingWm.get(id);
+      trailingWm.set(
+        id,
+        wm === undefined ? s.p : condition.mode === "stop" ? Math.max(wm, s.p) : Math.min(wm, s.p),
+      );
+    }
+
+    if (!sampleSatisfies(opts.expr, s.p, s.t, i, moveAt, trailingAt)) {
       satisfiedSince = null;
       continue;
     }
@@ -224,6 +260,7 @@ export const simulateTriggers = (opts: {
       if (triggers.length >= maxRepeats) break;
       cooldownUntil = s.t + cooldownMs;
       satisfiedSince = null;
+      trailingWm.clear();
     }
   }
 

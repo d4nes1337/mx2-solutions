@@ -97,7 +97,10 @@ export interface TradingAccountStore {
   getPrimary(ownerWalletAddress: string): Promise<TradingAccountRow | null>;
   setPrimary(ownerWalletAddress: string, id: string): Promise<TradingAccountRow | null>;
   upsertExternal(opts: UpsertExternalTradingAccountOpts): Promise<TradingAccountRow>;
-  upsertInternalPrivy(opts: UpsertInternalPrivyTradingAccountOpts): Promise<TradingAccountRow>;
+  /** `wasArchived` is set when the upsert restored a soft-deleted account. */
+  upsertInternalPrivy(
+    opts: UpsertInternalPrivyTradingAccountOpts,
+  ): Promise<TradingAccountRow & { wasArchived?: boolean }>;
   markReady(id: string): Promise<void>;
   updateStatus(id: string, status: TradingAccountStatus): Promise<void>;
   /** Soft-delete: stamps archivedAt, clears isPrimary, promotes next active account if needed. */
@@ -121,6 +124,12 @@ const ensurePrimary = async (
     .where(eq(tradingAccounts.id, id));
 };
 
+/**
+ * Deliberately matches archived rows too: provisioning re-links to the same
+ * signer, and the upsert's update branch un-archives it (the "removed my
+ * wallet, now Create does nothing" dead-end). List paths filter archived rows
+ * separately.
+ */
 const findAccountBySigner = async (
   db: Database,
   ownerWalletAddress: string,
@@ -174,6 +183,9 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
         and(
           eq(tradingAccounts.ownerWalletAddress, ownerWalletAddress),
           eq(tradingAccounts.isPrimary, true),
+          // Archived rows never carry isPrimary, but never serve one as
+          // primary even if that invariant slips.
+          isNull(tradingAccounts.archivedAt),
         ),
       )
       .limit(1);
@@ -248,6 +260,7 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
     );
     const funderAddress = depositWalletAddress;
     if (existing) {
+      const wasArchived = existing.archivedAt !== null;
       const [row] = await db
         .update(tradingAccounts)
         .set({
@@ -259,13 +272,22 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
           privyWalletId: opts.privyWalletId,
           depositWalletAddress,
           metadata: opts.metadata ?? existing.metadata,
+          // Re-provisioning restores a soft-deleted account: the Privy wallet
+          // (same address, same funds) still exists, so "Create" = un-archive.
+          archivedAt: null,
           updatedAt: sql`now()`,
         })
         .where(eq(tradingAccounts.id, existing.id))
         .returning();
       if (!row) throw new Error("Failed to update internal trading account");
-      if (opts.makePrimary) await ensurePrimary(db, ownerWalletAddress, row.id);
-      return opts.makePrimary ? { ...row, isPrimary: true } : row;
+      // A restored account must be reachable: if the owner has no active
+      // primary (they archived their only wallet), this one takes over.
+      const makePrimary =
+        (opts.makePrimary ?? false) ||
+        (wasArchived && (await this.getPrimary(ownerWalletAddress)) === null);
+      if (makePrimary) await ensurePrimary(db, ownerWalletAddress, row.id);
+      const result = makePrimary ? { ...row, isPrimary: true } : row;
+      return wasArchived ? { ...result, wasArchived: true } : result;
     }
 
     const [row] = await db

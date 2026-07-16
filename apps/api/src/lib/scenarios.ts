@@ -1,5 +1,6 @@
 import {
   simulateTriggers,
+  templateSpecById,
   validateStrategyDefinition,
   type ExprNode,
   type MarketRef,
@@ -20,10 +21,19 @@ import type { ClobClient } from "@mx2/polymarket-client";
  *                (momentum entry; same positive-PnL bar)
  *  - limit_entry — a patient resting bid at the window's lower quartile;
  *                no PnL claim, only how often the window touched that level
+ *  - trailing_dip — trailing entry (buy the rebound off the running low);
+ *                backtested over an offset grid, same positive-PnL bar
+ *  - rescue_exit — "save a dead bet": a trailing-stop ALERT. Deliberately
+ *                alert-framed with NO PnL claim — without the user's position
+ *                there is nothing defensible to project, only how often the
+ *                stop would have fired
+ *  - farm_rewards — shown only when the market carries a live rewards pool;
+ *                deep-links the maker-efficiency template (or the farming
+ *                cockpit when the maker loop is enabled)
  *
  * Honesty contract mirrors the showcases (R-023): only positive backtests are
  * shown for the trigger families, everything is labeled hypothetical, and all
- * emitted definitions are execution:"prepare" + recurrence:"once".
+ * emitted definitions are execution:"prepare" (or alert) + recurrence:"once".
  * Cost bound mirrors R-025: one CLOB history fetch per market per 15 minutes
  * (per-market cache, single-inflight, stale-on-error, LRU-capped).
  */
@@ -39,7 +49,7 @@ export interface ScenarioMarketInput {
 
 export interface MarketScenario {
   id: string;
-  kind: "dip_buy" | "breakout" | "limit_entry";
+  kind: "dip_buy" | "breakout" | "limit_entry" | "trailing_dip" | "rescue_exit" | "farm_rewards";
   label: string;
   sentence: string;
   /** Chat-voice text a user could paste into the AI prompt box. */
@@ -53,8 +63,12 @@ export interface MarketScenario {
     triggerCount?: number;
     /** limit_entry: number of times the 30-day series touched the entry level. */
     touches?: number;
+    /** farm_rewards: the pool's daily rate (shared across makers), when known. */
+    rewardsPerDayUsd?: number;
   };
   triggers: { t: number; price: number }[];
+  /** Alternate destination (farming cockpit) instead of the builder deep-link. */
+  link?: { label: string; href: string };
 }
 
 export interface ScenariosResponse {
@@ -66,6 +80,15 @@ export interface ScenariosResponse {
 
 export interface ScenariosDeps {
   clobClient: ClobClient;
+  /**
+   * Rewards-pool lookup for the farm_rewards card (5-min cached upstream in
+   * the markets route). Optional: absent = the card is simply never emitted.
+   */
+  getRewards?: (
+    conditionId: string,
+  ) => Promise<{ ratePerDayUsd: number | null; minSize: number | null } | null>;
+  /** Routes the farm card to the cockpit instead of the builder template. */
+  makerLoopEnabled?: boolean;
 }
 
 export interface ScenarioLogger {
@@ -76,10 +99,12 @@ const CACHE_TTL_MS = 15 * 60_000;
 const CACHE_MAX_MARKETS = 200;
 const DIP_DELTAS = [0.03, 0.05, 0.08];
 const BREAKOUT_DELTAS = [0.03, 0.05];
+const TRAILING_OFFSETS = [0.03, 0.05, 0.08];
+const RESCUE_OFFSET = 0.08;
 const HOLDS_FOR_MS = 15 * 60_000;
 const STAKE_USD = 100;
 const WINDOW_DAYS = 30;
-const MAX_SCENARIOS = 3;
+const MAX_SCENARIOS = 5;
 
 const centsLabel = (p: number): string => `${Math.round(p * 100)}¢`;
 const clampPrice = (p: number): number => Math.round(p * 100) / 100;
@@ -174,10 +199,71 @@ const lowerQuartile = (series: readonly { t: number; p: number }[]): number => {
   return sorted[Math.floor(sorted.length * 0.25)] ?? sorted[0] ?? NaN;
 };
 
+const trailingExpr = (ref: MarketRef, mode: "stop" | "entry", offset: number): ExprNode => ({
+  type: "group",
+  id: "root",
+  op: "and",
+  children: [
+    {
+      type: "condition",
+      id: "c1",
+      condition: {
+        kind: "trailing",
+        market: ref,
+        mode,
+        source: mode === "stop" ? "bid" : "ask",
+        offset,
+      },
+    },
+  ],
+});
+
+/** Best positive-PnL trailing-entry offset, or null when none win. */
+const bestTrailingEntry = (
+  input: ScenarioMarketInput,
+  ref: MarketRef,
+  series: readonly { t: number; p: number }[],
+): { offset: number; pnl: number; triggers: { t: number; price: number }[] } | null => {
+  let best: { offset: number; pnl: number; triggers: { t: number; price: number }[] } | null = null;
+  const entryPrice = clampPrice(input.currentPrice);
+  for (const offset of TRAILING_OFFSETS) {
+    const result = simulateTriggers({
+      expr: trailingExpr(ref, "entry", offset),
+      holdsForMs: 0, // the rebound IS the signal
+      recurrence: { kind: "repeat", maxRepeats: 5, cooldownMs: 6 * 3_600_000 },
+      action: {
+        kind: "order",
+        market: ref,
+        side: "BUY",
+        price: entryPrice,
+        size: Math.round(STAKE_USD / entryPrice),
+        orderType: "GTD",
+        expiresAfterMs: 300_000,
+        execution: "prepare",
+      },
+      series,
+    });
+    if (!result.supported || result.triggers.length === 0) continue;
+    if (result.hypotheticalPnlUsd <= 0) continue;
+    if (!best || result.hypotheticalPnlUsd > best.pnl) {
+      best = {
+        offset,
+        pnl: result.hypotheticalPnlUsd,
+        triggers: result.triggers.map((tr) => ({ t: tr.t, price: tr.price })),
+      };
+    }
+  }
+  return best;
+};
+
 export const buildScenariosFor = (
   input: ScenarioMarketInput,
   series: readonly { t: number; p: number }[],
   logger: ScenarioLogger,
+  extras?: {
+    rewards?: { ratePerDayUsd: number | null; minSize: number | null } | null;
+    makerLoopEnabled?: boolean;
+  },
 ): MarketScenario[] => {
   const ref: MarketRef = {
     conditionId: input.conditionId,
@@ -240,6 +326,119 @@ export const buildScenariosFor = (
     });
   }
 
+  const trail = bestTrailingEntry(input, ref, series);
+  if (trail) {
+    const offsetCents = Math.round(trail.offset * 100);
+    push({
+      id: `${input.conditionId}:trail:${offsetCents}`,
+      kind: "trailing_dip",
+      label: "Trailing dip entry",
+      sentence: `If ${input.outcome} rebounds ${offsetCents}¢ off any low → buy $${STAKE_USD} (armed from now)`,
+      prompt: `Buy $${STAKE_USD} of ${input.outcome} on "${shortTitle}" when the price bounces ${offsetCents} cents off whatever low it hits`,
+      definition: {
+        version: 2,
+        name: `Trailing dip: ${shortTitle}`.slice(0, 80),
+        templateId: "scenario",
+        expr: trailingExpr(ref, "entry", trail.offset),
+        holdsForMs: 0,
+        maxDataAgeMs: 5_000,
+        action: {
+          kind: "order",
+          market: ref,
+          side: "BUY",
+          price: clampPrice(input.currentPrice),
+          size: Math.round(STAKE_USD / clampPrice(input.currentPrice)),
+          orderType: "GTD",
+          expiresAfterMs: 300_000,
+          execution: "prepare",
+        },
+        recurrence: { kind: "once" },
+        limits: null,
+        expiresAtMs: null,
+      },
+      entryPriceCents: Math.round(clampPrice(input.currentPrice) * 100),
+      stats: {
+        stakeUsd: STAKE_USD,
+        windowDays: WINDOW_DAYS,
+        hypotheticalPnlUsd: Math.round(trail.pnl * 100) / 100,
+        triggerCount: trail.triggers.length,
+      },
+      triggers: trail.triggers,
+    });
+  }
+
+  // "Save a dead bet": alert-framed by design — with no position context there
+  // is no defensible PnL claim, only how often the stop would have spoken up.
+  {
+    const rescueSim = simulateTriggers({
+      expr: trailingExpr(ref, "stop", RESCUE_OFFSET),
+      holdsForMs: 0,
+      recurrence: { kind: "repeat", maxRepeats: 5, cooldownMs: 6 * 3_600_000 },
+      action: { kind: "alert" },
+      series,
+    });
+    const offsetCents = Math.round(RESCUE_OFFSET * 100);
+    push({
+      id: `${input.conditionId}:rescue:${offsetCents}`,
+      kind: "rescue_exit",
+      label: "Save a dead bet",
+      sentence: `Alert when ${input.outcome} slips ${offsetCents}¢ from its peak — then decide`,
+      prompt: `Alert me if ${input.outcome} on "${shortTitle}" drops ${offsetCents} cents from its high, so I can rescue what's left of my position`,
+      definition: {
+        version: 2,
+        name: `Trailing stop alert: ${shortTitle}`.slice(0, 80),
+        templateId: "scenario",
+        expr: trailingExpr(ref, "stop", RESCUE_OFFSET),
+        holdsForMs: 0,
+        maxDataAgeMs: 5_000,
+        action: { kind: "alert" },
+        recurrence: { kind: "once" },
+        limits: null,
+        expiresAtMs: null,
+      },
+      entryPriceCents: Math.round(clampPrice(input.currentPrice) * 100),
+      stats: {
+        stakeUsd: 0,
+        windowDays: WINDOW_DAYS,
+        ...(rescueSim.supported ? { triggerCount: rescueSim.triggers.length } : {}),
+      },
+      triggers: rescueSim.supported
+        ? rescueSim.triggers.map((tr) => ({ t: tr.t, price: tr.price }))
+        : [],
+    });
+  }
+
+  // Rewards farming — only when this market carries a live rewards pool.
+  const rewards = extras?.rewards;
+  if (rewards && rewards.ratePerDayUsd !== null && rewards.ratePerDayUsd > 0) {
+    const makerSpec = templateSpecById("maker-reward");
+    if (makerSpec) {
+      push({
+        id: `${input.conditionId}:farm`,
+        kind: "farm_rewards",
+        label: "Farm the rewards pool",
+        sentence: `This market pays ≈$${Math.round(rewards.ratePerDayUsd)}/day to makers — rest a qualifying quote to earn a share`,
+        prompt: `When the spread on "${shortTitle}" tightens, prepare a maker quote that qualifies for the rewards pool`,
+        definition: makerSpec.buildDefinition(ref),
+        entryPriceCents: Math.round(clampPrice(input.currentPrice) * 100),
+        stats: {
+          stakeUsd: 0,
+          windowDays: WINDOW_DAYS,
+          rewardsPerDayUsd: Math.round(rewards.ratePerDayUsd * 100) / 100,
+        },
+        triggers: [],
+        ...(extras?.makerLoopEnabled
+          ? {
+              link: {
+                label: "Set up in the farming cockpit",
+                href: `/farming?conditionId=${encodeURIComponent(input.conditionId)}`,
+              },
+            }
+          : {}),
+      });
+    }
+  }
+
   const quartile = clampPrice(lowerQuartile(series));
   if (Number.isFinite(quartile) && quartile >= 0.05 && quartile < clampPrice(input.currentPrice)) {
     const touches = series.filter((s) => s.p <= quartile).length;
@@ -256,10 +455,17 @@ export const buildScenariosFor = (
     });
   }
 
-  // Winners first (by hypothetical PnL), the patient entry as the calm option.
-  out.sort(
-    (a, b) => (b.stats.hypotheticalPnlUsd ?? -Infinity) - (a.stats.hypotheticalPnlUsd ?? -Infinity),
-  );
+  // Winners first (by hypothetical PnL); the position-protection and farming
+  // cards keep a stable late position rather than competing on PnL claims.
+  const rank = (s: MarketScenario): number =>
+    s.stats.hypotheticalPnlUsd !== undefined
+      ? s.stats.hypotheticalPnlUsd
+      : s.kind === "rescue_exit"
+        ? -1
+        : s.kind === "farm_rewards"
+          ? -2
+          : -3;
+  out.sort((a, b) => rank(b) - rank(a));
   return out.slice(0, MAX_SCENARIOS);
 };
 
@@ -301,7 +507,17 @@ const refresh = async (
     interval: "1m",
   });
   if (!history.ok) throw new Error(`scenarios: history fetch failed (${history.error.code})`);
-  const scenarios = history.value.length < 2 ? [] : buildScenariosFor(input, history.value, logger);
+  // Rewards lookup is best-effort: a failure only drops the farm card.
+  const rewards = deps.getRewards
+    ? await deps.getRewards(input.conditionId).catch(() => null)
+    : null;
+  const scenarios =
+    history.value.length < 2
+      ? []
+      : buildScenariosFor(input, history.value, logger, {
+          rewards,
+          makerLoopEnabled: deps.makerLoopEnabled ?? false,
+        });
   return {
     conditionId: input.conditionId,
     outcome: input.outcome,

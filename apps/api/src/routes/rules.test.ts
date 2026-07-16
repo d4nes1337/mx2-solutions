@@ -85,6 +85,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         tokenIds: [...(o.tokenIds ?? [o.tokenId])],
         triggerCount: 0,
         cooldownUntil: null,
+        runtimeWatermarks: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),

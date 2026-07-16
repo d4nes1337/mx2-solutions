@@ -13,9 +13,17 @@ import {
   type StrategyRuntime,
   type TransitionResultV2,
   type ViewsByToken,
+  type WatermarksByNode,
 } from "@mx2/rules";
 import type { AutoExecutor } from "./auto-executor.js";
 import { createPriceWindowStore } from "./price-window.js";
+
+/** Content equality for watermark maps (per-node value, not identity). */
+const watermarksEqual = (a: WatermarksByNode = {}, b: WatermarksByNode = {}): boolean => {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((k) => b[k] !== undefined && a[k]!.value === b[k]!.value);
+};
 
 /**
  * Single-writer conditional-rule evaluator (L3 host). Lives in the worker so a
@@ -118,14 +126,16 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     );
     // Conservative restart: never resume mid-accumulation across a reload/restart
     // (app-restart-mid-window robustness is deferred) — but PRESERVE the repeat
-    // bookkeeping (triggerCount, cooldownUntil) so restarts can't reset repeat
-    // limits or skip cooldowns.
+    // bookkeeping (triggerCount, cooldownUntil) AND the trailing watermarks
+    // (D-025: a trailing stop keeps protecting through a restart; resetting
+    // the peak on every restart would walk the stop level down a decline).
     const runtime: StrategyRuntime = {
       status: "ACTIVE_WAITING",
       trueSinceMs: null,
       lastEventTimeMs: null,
       triggerCount: row.triggerCount ?? 0,
       cooldownUntilMs: row.cooldownUntil ? row.cooldownUntil.getTime() : null,
+      watermarks: (row.runtimeWatermarks as WatermarksByNode | null) ?? {},
     };
     rules.set(row.id, {
       id: row.id,
@@ -209,6 +219,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       lastEvaluatedAt: new Date(nowMs),
       triggerCount: result.runtime.triggerCount,
       cooldownUntilMs: result.runtime.cooldownUntilMs,
+      watermarks: result.runtime.watermarks ?? {},
     });
     if (!updated) {
       // The rule was concurrently controlled (paused/cancelled) — user wins.
@@ -318,7 +329,10 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     const result = transitionV2(ar.def, ar.defHash, ar.runtime, event);
     const runtimeChanged =
       result.runtime.triggerCount !== ar.runtime.triggerCount ||
-      result.runtime.cooldownUntilMs !== ar.runtime.cooldownUntilMs;
+      result.runtime.cooldownUntilMs !== ar.runtime.cooldownUntilMs ||
+      // Content compare, not identity — the evaluator returns a fresh map per
+      // pass. Write volume is bounded by actual watermark movement.
+      !watermarksEqual(result.runtime.watermarks, ar.runtime.watermarks);
     ar.runtime = result.runtime;
     if (!result.transition && !result.trigger && !runtimeChanged) return;
     ar.writeChain = ar.writeChain

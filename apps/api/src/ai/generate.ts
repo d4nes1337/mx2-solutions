@@ -243,6 +243,21 @@ const mapCondition = (
         deltaThreshold: need(c.deltaThreshold, "deltaThreshold"),
         windowMs: need(c.windowMs, "windowMs"),
       };
+    case "trailing": {
+      const mode = c.mode;
+      if (mode === null) {
+        throw new MappingError([
+          { code: "MISSING_FIELD", message: "trailing condition requires mode (stop|entry)." },
+        ]);
+      }
+      return {
+        kind: "trailing",
+        market: market(),
+        mode,
+        source: c.source,
+        offset: need(c.offset, "offset"),
+      };
+    }
   }
 };
 

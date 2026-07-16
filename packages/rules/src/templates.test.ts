@@ -12,10 +12,12 @@ import type { MarketRef } from "./types-v2.js";
 const BOUND: MarketRef = { conditionId: "cond-1", tokenId: "tok-1", outcome: "Yes" };
 
 describe("TEMPLATE_SPECS", () => {
-  it("exposes the round-4 business scenarios", () => {
+  it("exposes the business scenarios incl. the trailing pair", () => {
     expect(TEMPLATE_SPECS.map((t) => t.id)).toEqual([
       "re-entry",
       "spike-reversal",
+      "trailing-stop",
+      "trailing-entry",
       "maker-reward",
       "rebate-farm",
       "cross-market",

@@ -172,6 +172,7 @@ export const buildApp = (deps: AppDeps) => {
     clobClient: deps.clobClient,
     dataClient: deps.dataClient,
     marketSnapshots: deps.marketSnapshots,
+    makerLoopEnabled: deps.config.features.makerLoop,
   });
   registerAuthRoutes(fastifyApp, {
     config: deps.config,

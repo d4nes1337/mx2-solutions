@@ -21,9 +21,7 @@ describe("watched markets", () => {
   });
 
   it("unbound refs are rejected", () => {
-    useBuilderStore
-      .getState()
-      .addWatchedMarket({ conditionId: "", tokenId: "", outcome: "YES" });
+    useBuilderStore.getState().addWatchedMarket({ conditionId: "", tokenId: "", outcome: "YES" });
     expect(useBuilderStore.getState().doc.watchedMarkets).toHaveLength(0);
   });
 

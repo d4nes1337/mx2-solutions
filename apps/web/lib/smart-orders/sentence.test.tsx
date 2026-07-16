@@ -50,6 +50,38 @@ describe("strategySentence", () => {
     expect(s).toContain("repeat up to 5×");
   });
 
+  it("describes trailing conditions in both modes", () => {
+    const doc = emptyDoc();
+    doc.marketMeta[market.tokenId] = meta;
+    doc.expr = {
+      ...doc.expr,
+      children: [
+        {
+          type: "condition",
+          id: freshNodeId(),
+          condition: { kind: "trailing", market, mode: "stop", source: "bid", offset: 0.08 },
+        },
+      ],
+    };
+    expect(strategySentence(doc)).toContain(
+      "YES price of Will it rain tomorrow? falls 8¢ from its peak",
+    );
+
+    doc.expr = {
+      ...doc.expr,
+      children: [
+        {
+          type: "condition",
+          id: freshNodeId(),
+          condition: { kind: "trailing", market, mode: "entry", source: "ask", offset: 0.05 },
+        },
+      ],
+    };
+    expect(strategySentence(doc)).toContain(
+      "YES price of Will it rain tomorrow? rebounds 5¢ off its low",
+    );
+  });
+
   it("never leaks internal vocabulary", () => {
     for (const template of TEMPLATES) {
       const s = strategySentence(template.build(market, meta));

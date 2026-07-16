@@ -35,9 +35,9 @@ const toDef = (spec: (typeof TEMPLATE_SPECS)[number]): TemplateDef => ({
  * are designed in the farming cockpit, not the canvas — the gallery links
  * them there instead.
  */
-export const TEMPLATES: readonly TemplateDef[] = TEMPLATE_SPECS.filter(
-  (s) => s.flag === null,
-).map(toDef);
+export const TEMPLATES: readonly TemplateDef[] = TEMPLATE_SPECS.filter((s) => s.flag === null).map(
+  toDef,
+);
 
 export const templateById = (id: string): TemplateDef | null => {
   const spec = templateSpecById(id);

@@ -58,6 +58,8 @@ export const ensureTradingWalletProvisioned = async (
 
     if (!status.ok || status.value === "active") {
       // Alive — or unverifiable right now. Either way: re-link, never recreate.
+      // If the account row was soft-deleted in the app ("Remove wallet"), the
+      // upsert restores it — the wallet itself (address, funds) never left.
       const account = await deps.tradingAccounts.upsertInternalPrivy({
         ownerWalletAddress,
         signerAddress: existing.embeddedAddress,
@@ -66,6 +68,17 @@ export const ensureTradingWalletProvisioned = async (
         makePrimary: false,
         metadata: { source: "privy_existing", relayerRequired: true },
       });
+      if (account.wasArchived) {
+        await deps.auditStore.emit({
+          actor: ownerWalletAddress,
+          action: "trading_account.unarchived",
+          subject: `wallet:${ownerWalletAddress}`,
+          metadata: {
+            tradingAccountId: account.id,
+            embeddedAddress: existing.embeddedAddress,
+          },
+        });
+      }
       return {
         ok: true,
         tradingAccountId: account.id,
