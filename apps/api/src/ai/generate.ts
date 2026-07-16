@@ -235,6 +235,14 @@ const mapCondition = (
       };
     case "time_window":
       return { kind: "time_window", startMs: c.startMs, endMs: c.endMs };
+    case "price_move":
+      return {
+        kind: "price_move",
+        market: market(),
+        direction: c.direction ?? "either",
+        deltaThreshold: need(c.deltaThreshold, "deltaThreshold"),
+        windowMs: need(c.windowMs, "windowMs"),
+      };
   }
 };
 

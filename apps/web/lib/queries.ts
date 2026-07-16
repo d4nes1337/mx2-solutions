@@ -14,6 +14,7 @@ import type {
   HistoryResponse,
   HistoryTypeFilter,
   MarketDetail,
+  MarketEconomicsResponse,
   MarketHoldersResponse,
   MarketScenariosResponse,
   MarketTradesResponse,
@@ -148,6 +149,23 @@ export function useOrderbook(id: string, outcome: number) {
   });
 }
 
+/**
+ * Order book keyed by the exact CLOB token (the builder knows tokenIds, not
+ * outcome indices). Falls back server-side to outcome 0 if the token doesn't
+ * belong to the market.
+ */
+export function useOrderbookByToken(id: string, tokenId: string | null) {
+  return useQuery({
+    queryKey: ["orderbook-token", id, tokenId],
+    queryFn: () =>
+      api.get<OrderbookResponse>(
+        `/api/markets/${id}/orderbook?tokenId=${encodeURIComponent(tokenId!)}`,
+      ),
+    enabled: Boolean(id && tokenId),
+    refetchInterval: POLL.orderbook,
+  });
+}
+
 export function usePricesHistory(
   id: string,
   opts?: { interval?: string; outcome?: number; enabled?: boolean; refetchInterval?: number },
@@ -183,6 +201,17 @@ export function useMarketHolders(id: string, limit = 8) {
     queryKey: ["market-holders", id, limit],
     queryFn: () => api.get<MarketHoldersResponse>(`/api/markets/${id}/holders?limit=${limit}`),
     enabled: Boolean(id),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Per-market fee schedule + rewards config (server-cached 5 min). */
+export function useMarketEconomics(conditionId: string) {
+  return useQuery({
+    queryKey: ["market-economics", conditionId],
+    queryFn: () =>
+      api.get<MarketEconomicsResponse>(`/api/markets/${encodeURIComponent(conditionId)}/economics`),
+    enabled: Boolean(conditionId),
     staleTime: 5 * 60_000,
   });
 }

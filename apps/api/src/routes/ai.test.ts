@@ -185,6 +185,10 @@ const buildAiApp = (opts: {
     getPrices: async () => err(upstreamErr),
     getLastTradePrice: async () => err(upstreamErr),
     getPricesHistory: async () => err(upstreamErr),
+    getClobMarket: async () => err(upstreamErr),
+    getFeeRate: async () => err(upstreamErr),
+    getRewardsMarket: async () => err(upstreamErr),
+    getRewardsMarketsCurrent: async () => err(upstreamErr),
   };
   const data: DataClient = {
     getPositions: async () => ok([]),
@@ -564,5 +568,21 @@ describe("POST /api/ai/generate-strategy", () => {
     expect(haiku.aiCalls[0]!.model).toBe("claude-haiku-4-5");
     expect(haiku.aiCalls[0]!.output_config).toBeUndefined();
     await haiku.app.close();
+  });
+});
+
+// ── Few-shot sync guarantee ──────────────────────────────────────────────────
+// The system prompt's examples come from the canonical template specs; every
+// one must parse under the SAME zod mirror the live tool loop applies, so a
+// spec edit can never teach the model an invalid create_strategy shape.
+describe("template few-shots", () => {
+  it("every TEMPLATE_SPECS aiFewShot parses under CreateStrategyInputZ", async () => {
+    const { TEMPLATE_SPECS } = await import("@mx2/rules");
+    const { CreateStrategyInputZ } = await import("../ai/tools.js");
+    for (const spec of TEMPLATE_SPECS) {
+      if (!spec.aiFewShot) continue;
+      const parsed = CreateStrategyInputZ.safeParse(JSON.parse(spec.aiFewShot.json));
+      expect(parsed.success, `${spec.id}: ${JSON.stringify(parsed.error?.issues?.[0])}`).toBe(true);
+    }
   });
 });

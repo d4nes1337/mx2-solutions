@@ -19,6 +19,89 @@ export interface MarketsRoutesDeps {
 // CLOB token ids are uint256 rendered as decimal strings.
 const TOKEN_ID_RE = /^\d{1,100}$/;
 
+// ── Per-market economics (fees + rewards), 5-min in-memory cache ────────────
+
+export interface MarketEconomics {
+  feeSchedule: {
+    rate: number;
+    exponent: number;
+    takerOnly: boolean;
+    rebateRate: number | null;
+  } | null;
+  rewards: {
+    minSize: number | null;
+    maxSpread: number | null;
+    ratePerDayUsd: number | null;
+    totalRewards: number | null;
+    startDate: string | null;
+    endDate: string | null;
+  } | null;
+  fetchedAt: string;
+}
+
+const ECONOMICS_TTL_MS = 5 * 60_000;
+const economicsCache = new Map<string, { at: number; value: MarketEconomics }>();
+
+/**
+ * Fee source of truth: CLOB `fd`; Gamma `feeSchedule` is the fallback. A null
+ * section means UNKNOWN — the UI must say "fee unknown", never assume zero
+ * (fail-open display posture, R-029).
+ */
+const getMarketEconomics = async (
+  deps: MarketsRoutesDeps,
+  conditionId: string,
+): Promise<MarketEconomics> => {
+  const hit = economicsCache.get(conditionId);
+  if (hit && Date.now() - hit.at < ECONOMICS_TTL_MS) return hit.value;
+
+  const [clobInfo, rewardsRes, gammaRes] = await Promise.all([
+    deps.clobClient.getClobMarket(conditionId),
+    deps.clobClient.getRewardsMarket(conditionId),
+    deps.gammaClient.getMarket(conditionId),
+  ]);
+
+  const gamma = gammaRes.ok ? gammaRes.value : null;
+  const fd = clobInfo.ok ? clobInfo.value.fd : null;
+  const gammaFee = gamma?.feeSchedule ?? null;
+  const feeSchedule =
+    fd != null
+      ? {
+          rate: fd.r,
+          exponent: fd.e,
+          takerOnly: fd.to,
+          rebateRate: gammaFee?.rebateRate ?? null,
+        }
+      : gammaFee != null
+        ? {
+            rate: gammaFee.rate,
+            exponent: gammaFee.exponent,
+            takerOnly: gammaFee.takerOnly,
+            rebateRate: gammaFee.rebateRate ?? null,
+          }
+        : gamma?.feesEnabled === false
+          ? { rate: 0, exponent: 1, takerOnly: true, rebateRate: null }
+          : null;
+
+  const rewardsRow = rewardsRes.ok ? rewardsRes.value[0] : undefined;
+  const activeConfig = rewardsRow?.rewards_config?.find((c) => (c.rate_per_day ?? 0) > 0);
+  const anyRewards =
+    rewardsRow != null || gamma?.rewardsMinSize != null || gamma?.rewardsMaxSpread != null;
+  const rewards = anyRewards
+    ? {
+        minSize: rewardsRow?.rewards_min_size ?? gamma?.rewardsMinSize ?? null,
+        maxSpread: rewardsRow?.rewards_max_spread ?? gamma?.rewardsMaxSpread ?? null,
+        ratePerDayUsd: activeConfig?.rate_per_day ?? null,
+        totalRewards: activeConfig?.total_rewards ?? null,
+        startDate: activeConfig?.start_date ?? null,
+        endDate: activeConfig?.end_date ?? null,
+      }
+    : null;
+
+  const value: MarketEconomics = { feeSchedule, rewards, fetchedAt: new Date().toISOString() };
+  economicsCache.set(conditionId, { at: Date.now(), value });
+  return value;
+};
+
 const parseTokenIds = (raw: string): string[] => {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -52,6 +135,17 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
         return { error: histResult.error.code, message: histResult.error.message };
       }
       return { tokenId, history: histResult.value };
+    },
+  );
+
+  // PUBLIC, rate-limited: per-market fee schedule + liquidity-rewards config
+  // (5-min cache above). Null sections mean "unknown", never "zero".
+  app.get(
+    "/api/markets/:conditionId/economics",
+    { preHandler: [makeRateLimit({ scope: "market-economics", limit: 60, windowMs: 60_000 })] },
+    async (req) => {
+      const { conditionId } = req.params as { conditionId: string };
+      return getMarketEconomics(deps, conditionId);
     },
   );
 
@@ -144,7 +238,13 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
 
     const tokenIds = parseTokenIds(marketResult.value.clobTokenIds);
     const outcomeIdx = q["outcome"] !== undefined ? Number(q["outcome"]) : 0;
-    const tokenId = tokenIds[outcomeIdx] ?? tokenIds[0];
+    // ?tokenId= addresses an outcome directly (the builder knows tokenIds, not
+    // indices); it must belong to this market, else fall back to the index.
+    const requestedToken = q["tokenId"];
+    const tokenId =
+      requestedToken !== undefined && tokenIds.includes(requestedToken)
+        ? requestedToken
+        : (tokenIds[outcomeIdx] ?? tokenIds[0]);
 
     if (tokenId === undefined) {
       reply.code(404);

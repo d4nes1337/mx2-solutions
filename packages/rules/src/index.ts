@@ -12,3 +12,5 @@ export * from "./evidence-v2.js";
 export * from "./state-machine-v2.js";
 export * from "./validate-v2.js";
 export * from "./simulate.js";
+export * from "./fees.js";
+export * from "./templates.js";

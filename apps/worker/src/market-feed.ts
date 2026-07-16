@@ -12,6 +12,11 @@ export interface MarketFeedOptions {
   onBookView?: (view: MarketDataView) => void;
   onReconnect?: () => void;
   onTickSizeChange?: (tokenId: string) => void;
+  /**
+   * Price observations for rolling price_move windows: last-trade prints,
+   * price_change ticks, and book mids (which keep windows alive on quiet tape).
+   */
+  onPrice?: (tokenId: string, price: number, tMs: number) => void;
 }
 
 export interface MarketFeedManager {
@@ -71,6 +76,12 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
         opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Rule evaluator onBookView failed");
       }
       try {
+        const mid = computeMidPrice(msg.buys, msg.sells);
+        if (mid !== null) opts.onPrice?.(msg.asset_id, Number(mid), receivedAtMs);
+      } catch (e) {
+        opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window mid push failed");
+      }
+      try {
         await opts.marketSnapshots.upsert({
           tokenId: msg.asset_id,
           conditionId: msg.market,
@@ -87,7 +98,18 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
       }
     } else if (msg.event_type === "tick_size_change") {
       opts.onTickSizeChange?.(msg.asset_id);
+    } else if (msg.event_type === "price_change") {
+      try {
+        opts.onPrice?.(msg.asset_id, Number(msg.price), Date.now());
+      } catch (e) {
+        opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window tick push failed");
+      }
     } else if (msg.event_type === "last_trade_price") {
+      try {
+        opts.onPrice?.(msg.asset_id, Number(msg.price), Date.now());
+      } catch (e) {
+        opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window trade push failed");
+      }
       try {
         const existing = await opts.marketSnapshots.findByTokenId(msg.asset_id);
         if (existing !== null) {

@@ -84,6 +84,9 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
         signer: activeAccount.signerAddress,
         builderCode: d.preview.builderCode,
         chainId: 137,
+        // GTD entry windows: the API preview computed the wire expiration
+        // (trigger time + window + 60s compensation, ADR-0013).
+        ...(d.preview.expiration ? { expiration: d.preview.expiration } : {}),
         // MVP: neg-risk markets for triggered orders are a follow-up (see RFC-0001).
         negRisk: false,
       });
@@ -93,7 +96,8 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
         conditionId: d.preview.conditionId,
         price: d.preview.price,
         size: d.preview.size,
-        orderType: "GTC",
+        orderType: d.preview.orderType,
+        postOnly: d.preview.postOnly,
         order,
       });
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });

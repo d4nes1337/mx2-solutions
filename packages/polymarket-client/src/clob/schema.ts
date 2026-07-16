@@ -94,7 +94,7 @@ export const SubmitOrderResponseSchema = z
 export type SubmitOrderResponse = z.infer<typeof SubmitOrderResponseSchema>;
 
 export type OrderSide = "BUY" | "SELL";
-export type OrderType = "GTC" | "GTD" | "FOK";
+export type OrderType = "GTC" | "GTD" | "FOK" | "FAK";
 
 // Polymarket CLOB SignatureType enum (verified against @polymarket/clob-client
 // order-utils; see docs/INTEGRATION_VERIFIED.md §10). EOA=0, POLY_PROXY=1,

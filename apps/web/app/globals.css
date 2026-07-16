@@ -144,13 +144,20 @@ body::before {
 }
 
 /* ── Focus ────────────────────────────────────────────────────────────── */
-:focus-visible {
+/* Text fields are excluded: they style focus via border-color (focus:border-brand)
+   and clicking into a textarea matches :focus-visible, which read as a broken
+   blue halo around the chat composer. */
+:focus-visible:not(input):not(textarea):not(select):not([contenteditable="true"]) {
   outline: 2px solid var(--brand-strong);
   outline-offset: 1px;
 }
 
 ::selection {
   background: rgba(var(--brand-rgb), 0.16);
+}
+
+.builder-chat ::selection {
+  background: rgba(var(--brand-rgb), 0.08);
 }
 
 /* ── Effects ──────────────────────────────────────────────────────────── */

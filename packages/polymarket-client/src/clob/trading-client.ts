@@ -43,6 +43,7 @@ export interface AuthenticatedClobClient {
     creds: L2Credentials,
     address: string,
     idempotencyKey: string,
+    opts?: SubmitOrderOptions,
   ): Promise<Result<SubmitOrderResponse, PolymarketError>>;
   cancelOrder(
     clobOrderId: string,
@@ -53,6 +54,14 @@ export interface AuthenticatedClobClient {
     address: string,
     creds: L2Credentials,
   ): Promise<Result<OpenOrder[], PolymarketError>>;
+}
+
+export interface SubmitOrderOptions {
+  /**
+   * Maker-only: the CLOB rejects the order instead of crossing (GTC/GTD only;
+   * INVALID_POST_ONLY_ORDER_TYPE with FOK/FAK). Default false.
+   */
+  postOnly?: boolean;
 }
 
 export interface AuthenticatedClobClientOptions {
@@ -187,14 +196,14 @@ export const createAuthenticatedClobClient = (
       );
     },
 
-    async submitOrder(order, orderType, creds, address, idempotencyKey) {
+    async submitOrder(order, orderType, creds, address, idempotencyKey, opts) {
       // CLOB V2 POST /order body (orderToJsonV2): side is "BUY"|"SELL", includes
       // timestamp/metadata/builder; domain version "2" at sign time.
       const sideWire = order.side === 0 || order.side === "BUY" ? "BUY" : "SELL";
       const requestPath = "/order";
       const body = {
         deferExec: false,
-        postOnly: false,
+        postOnly: opts?.postOnly ?? false,
         order: {
           salt: typeof order.salt === "string" ? Number.parseInt(order.salt, 10) : order.salt,
           maker: order.maker,

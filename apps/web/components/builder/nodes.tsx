@@ -1,14 +1,30 @@
 "use client";
 
 /**
- * Presentational node bodies for the builder canvas. Deliberately free of any
- * React Flow state logic beyond Handles, so they stay testable and the canvas
- * library remains swappable (ADR-0010).
+ * Node bodies for the builder canvas. The canvas is the multitool: a selected
+ * node expands in place into its parameter editor (see inline/), and blocks
+ * carry their own delete affordance. Bodies stay free of React Flow state
+ * logic beyond Handles, so the canvas library remains swappable (ADR-0010).
  */
 import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { AlertCircle, Bell, CircleDollarSign, GitBranch, OctagonX, TrendingUp } from "lucide-react";
+import {
+  AlertCircle,
+  Bell,
+  CircleDollarSign,
+  GitBranch,
+  OctagonX,
+  TrendingUp,
+  X,
+} from "lucide-react";
 import { cn } from "@/components/ui";
+import { useBuilderStore } from "@/lib/smart-orders/store";
+import { ConditionInlineEditor } from "./inline/ConditionInlineEditor";
+import {
+  ActionInlineEditor,
+  GroupInlineEditor,
+  RootLogicInlineEditor,
+} from "./inline/ActionInlineEditor";
 
 export interface MarketNodeData extends Record<string, unknown> {
   title: string;
@@ -17,6 +33,9 @@ export interface MarketNodeData extends Record<string, unknown> {
   bestBid: number | null;
   stale: boolean;
   bound: boolean;
+  tokenId: string;
+  /** Watched-but-unreferenced markets can be removed from the canvas. */
+  deletable: boolean;
 }
 
 export interface ConditionNodeData extends Record<string, unknown> {
@@ -45,9 +64,27 @@ export interface ActionNodeData extends Record<string, unknown> {
 // interpolate the large-blur shadow every frame while a node was dragged.
 const shell = (selected: boolean | undefined, issue?: boolean) =>
   cn(
-    "w-[260px] rounded-xl border bg-surface px-3.5 py-3 shadow-panel transition-[border-color,background-color,box-shadow]",
-    selected ? "border-brand shadow-elev" : issue ? "border-neg/60" : "border-border",
+    "rounded-xl border bg-surface px-3.5 py-3 shadow-panel transition-[border-color,background-color,box-shadow]",
+    selected ? "w-[320px] border-brand shadow-elev" : "w-[260px]",
+    !selected && (issue ? "border-neg/60" : "border-border"),
   );
+
+/** Small in-card remove control (top-right). */
+function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDelete();
+      }}
+      className="nodrag -mr-1 -mt-1 shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-neg/10 hover:text-neg"
+    >
+      <X size={12} aria-hidden />
+    </button>
+  );
+}
 
 const statePill = (state: ConditionNodeData["state"], actual: string | null) => {
   const styles: Record<string, string> = {
@@ -81,26 +118,40 @@ export const MarketNode = memo(function MarketNode({
 }: NodeProps<Node<MarketNodeData>>) {
   return (
     <div className={shell(selected, !data.bound)}>
-      <div className="flex items-center gap-2">
+      <div className="flex items-start gap-2">
         <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-brand-soft text-accent">
           <TrendingUp size={14} aria-hidden />
         </span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-faint">Market</div>
           <div className="truncate text-[13px] font-medium text-fg">{data.title}</div>
         </div>
+        {data.deletable ? (
+          <DeleteButton
+            label={`Remove market ${data.title}`}
+            onDelete={() => useBuilderStore.getState().removeWatchedMarket(data.tokenId)}
+          />
+        ) : null}
       </div>
       <div className="tabular mt-2 flex items-center gap-2 text-[11px] text-muted">
         {data.bestAsk !== null ? <span>ask {Math.round(data.bestAsk * 100)}¢</span> : null}
         {data.bestBid !== null ? <span>bid {Math.round(data.bestBid * 100)}¢</span> : null}
         {data.stale ? <span className="text-warn">waiting for data…</span> : null}
       </div>
+      {selected ? (
+        <p className="mt-2 border-t border-border pt-2 text-[11px] leading-snug text-muted">
+          Chart and order book are in the panel&apos;s{" "}
+          <span className="font-semibold text-fg">Market</span> tab.
+          {data.deletable ? "" : " Referenced by a block — unbind it before removing."}
+        </p>
+      ) : null}
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
 });
 
 export const ConditionNode = memo(function ConditionNode({
+  id,
   data,
   selected,
 }: NodeProps<Node<ConditionNodeData>>) {
@@ -115,6 +166,10 @@ export const ConditionNode = memo(function ConditionNode({
           <div className="text-[13px] font-medium leading-snug text-fg">{data.summary}</div>
           {data.detail ? <div className="mt-0.5 text-[11px] text-muted">{data.detail}</div> : null}
         </div>
+        <DeleteButton
+          label="Remove condition"
+          onDelete={() => useBuilderStore.getState().removeNode(id)}
+        />
       </div>
       <div className="mt-2">{statePill(data.state, data.actual)}</div>
       {data.issue ? (
@@ -122,12 +177,14 @@ export const ConditionNode = memo(function ConditionNode({
           <AlertCircle size={11} aria-hidden /> {data.issue}
         </div>
       ) : null}
+      {selected ? <ConditionInlineEditor id={id} /> : null}
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
 });
 
 export const LogicNode = memo(function LogicNode({
+  id,
   data,
   selected,
 }: NodeProps<Node<LogicNodeData>>) {
@@ -135,8 +192,8 @@ export const LogicNode = memo(function LogicNode({
   return (
     <div
       className={cn(
-        "rounded-full border bg-surface px-4 py-2 shadow-panel transition-[border-color,background-color,box-shadow]",
-        selected ? "border-brand shadow-elev" : "border-border",
+        "border bg-surface shadow-panel transition-[border-color,background-color,box-shadow]",
+        selected ? "rounded-2xl border-brand px-4 py-2.5 shadow-elev" : "rounded-full border-border px-4 py-2",
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-border-strong" />
@@ -151,7 +208,20 @@ export const LogicNode = memo(function LogicNode({
             )}
           />
         ) : null}
+        {selected && !data.isRoot ? (
+          <DeleteButton
+            label="Remove group"
+            onDelete={() => useBuilderStore.getState().removeNode(id)}
+          />
+        ) : null}
       </div>
+      {selected ? (
+        data.isRoot ? (
+          <RootLogicInlineEditor />
+        ) : (
+          <GroupInlineEditor id={id} op={data.op} />
+        )
+      ) : null}
       <Handle type="source" position={Position.Right} className="!bg-border-strong" />
     </div>
   );
@@ -193,6 +263,7 @@ export const ActionNode = memo(function ActionNode({
           <AlertCircle size={11} aria-hidden /> {data.issue}
         </div>
       ) : null}
+      {selected ? <ActionInlineEditor /> : null}
     </div>
   );
 });

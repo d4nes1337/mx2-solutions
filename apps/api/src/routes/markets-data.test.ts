@@ -101,6 +101,10 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
       if (params.tokenId === FLAT_TOKEN) return ok(flatSeries);
       return err(upstreamErr);
     },
+    getClobMarket: async () => err(upstreamErr),
+    getFeeRate: async () => err(upstreamErr),
+    getRewardsMarket: async () => err(upstreamErr),
+    getRewardsMarketsCurrent: async () => err(upstreamErr),
   } satisfies ClobClient;
 
   const data: DataClient = {

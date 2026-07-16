@@ -145,7 +145,7 @@ describe("AiPanel", () => {
 
     expect(await screen.findByText(/free AI limit/)).toBeInTheDocument();
     // Template chips offer a non-AI path forward.
-    expect(screen.getByText("Re-entry")).toBeInTheDocument();
+    expect(screen.getByText("Dip buy")).toBeInTheDocument();
   });
 
   it("@-mention: typing @fra surfaces markets; picking pins a chip and rewrites the input", async () => {

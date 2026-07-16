@@ -127,6 +127,10 @@ const mockClobClient: ClobClient = {
   getPrices: async () => ok([]),
   getLastTradePrice: async () => err(upstreamErr),
   getPricesHistory: async () => ok([]),
+  getClobMarket: async () => err(upstreamErr),
+  getFeeRate: async () => err(upstreamErr),
+  getRewardsMarket: async () => err(upstreamErr),
+  getRewardsMarketsCurrent: async () => err(upstreamErr),
 };
 
 const mockDataClient: DataClient = {

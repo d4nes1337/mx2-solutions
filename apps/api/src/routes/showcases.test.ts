@@ -100,6 +100,10 @@ const buildHarness = () => {
     getTrades: async () => err(upstreamErr),
     getPrices: async () => err(upstreamErr),
     getLastTradePrice: async () => err(upstreamErr),
+    getClobMarket: async () => err(upstreamErr),
+    getFeeRate: async () => err(upstreamErr),
+    getRewardsMarket: async () => err(upstreamErr),
+    getRewardsMarketsCurrent: async () => err(upstreamErr),
     getPricesHistory: async (params: { tokenId: string }) => {
       counters.history++;
       if (params.tokenId === DIP_TOKEN) return ok(dipSeries);
@@ -190,6 +194,10 @@ describe("GET /api/showcases", () => {
       getPrices: async () => err(upstreamErr),
       getLastTradePrice: async () => err(upstreamErr),
       getPricesHistory: async () => err(upstreamErr),
+      getClobMarket: async () => err(upstreamErr),
+      getFeeRate: async () => err(upstreamErr),
+      getRewardsMarket: async () => err(upstreamErr),
+      getRewardsMarketsCurrent: async () => err(upstreamErr),
     } satisfies ClobClient;
     const app = Fastify({ logger: false });
     registerShowcasesRoutes(app, { gammaClient: gamma, clobClient: clob });

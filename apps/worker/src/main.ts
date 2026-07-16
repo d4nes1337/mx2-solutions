@@ -17,6 +17,9 @@ import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
+import { createQuoterManager, type QuoterManager } from "./quoter/manager.js";
+import { createShadowExecutor } from "./quoter/executor.js";
+import { createQuoterStore } from "@mx2/db";
 
 /**
  * Long-running worker process. Hosts the Polymarket WebSocket ingestion and the
@@ -116,21 +119,47 @@ const main = async (): Promise<void> => {
     logger.warn("FEATURE_CONDITIONAL_RULES is off — rule evaluator disabled");
   }
 
+  // Maker-loop quoter (RFC-0003): SHADOW executor only — the live executor
+  // arrives with the W4 order path and is separately gated by
+  // FEATURE_MAKER_LOOP_LIVE plus the RFC's rollout ladder.
+  let quoter: QuoterManager | null = null;
+  if (config.features.makerLoop && config.features.conditionalRules) {
+    quoter = createQuoterManager({
+      logger,
+      ruleStore: createRuleStore(dbHandle.db),
+      quoterStore: createQuoterStore(dbHandle.db),
+      auditStore: createAuditStore(dbHandle.db),
+      runtimeFlags: createRuntimeFlagStore(dbHandle.db),
+      executor: createShadowExecutor(),
+      subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
+      unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
+    });
+    logger.info("FEATURE_MAKER_LOOP is ON — quoter running in SHADOW mode");
+  }
+
   const marketFeed = createMarketFeedManager({
     wsUrl: config.polymarket.marketWsUrl,
     logger,
     marketSnapshots,
-    ...(evaluator
+    ...(evaluator || quoter
       ? {
-          onBookView: (view) => evaluator?.onBook(view),
-          onReconnect: () => evaluator?.onReconnect(),
+          onBookView: (view) => {
+            evaluator?.onBook(view);
+            quoter?.onBook(view);
+          },
+          onReconnect: () => {
+            evaluator?.onReconnect();
+            quoter?.onReconnect();
+          },
           onTickSizeChange: (tokenId) => evaluator?.onTickSizeChange(tokenId),
+          onPrice: (tokenId, price, tMs) => evaluator?.onPrice(tokenId, price, tMs),
         }
       : {}),
   });
   feedRef.current = marketFeed;
 
   evaluator?.start();
+  quoter?.start();
 
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
@@ -140,6 +169,7 @@ const main = async (): Promise<void> => {
     logger.info({ signal }, "Worker shutting down");
     clearInterval(heartbeat);
     evaluator?.stop();
+    quoter?.stop();
     marketFeed.close();
     await dbHandle.close();
     process.exit(0);

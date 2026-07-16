@@ -65,11 +65,21 @@ const CONDITION_SCHEMA = {
     "minLevels",
     "startMs",
     "endMs",
+    "direction",
+    "deltaThreshold",
+    "windowMs",
   ],
   properties: {
     kind: {
       type: "string",
-      enum: ["price", "spread", "cumulative_notional", "visible_levels", "time_window"],
+      enum: [
+        "price",
+        "spread",
+        "cumulative_notional",
+        "visible_levels",
+        "time_window",
+        "price_move",
+      ],
     },
     market: {
       anyOf: [MARKET_SELECTOR_SCHEMA, { type: "null" }],
@@ -109,6 +119,21 @@ const CONDITION_SCHEMA = {
     endMs: {
       anyOf: [{ type: "integer" }, { type: "null" }],
       description: "time_window: unix ms end (null = unbounded). null for other kinds.",
+    },
+    direction: {
+      anyOf: [{ type: "string", enum: ["drop", "rise", "either"] }, { type: "null" }],
+      description:
+        "price_move: which way the price must have moved within the lookback. null for other kinds.",
+    },
+    deltaThreshold: {
+      anyOf: [{ type: "number" }, { type: "null" }],
+      description:
+        "price_move: minimum move size as probability 0–1 (5¢ = 0.05). null for other kinds.",
+    },
+    windowMs: {
+      anyOf: [{ type: "integer" }, { type: "null" }],
+      description:
+        "price_move: trailing lookback in ms, 60000–3600000 (e.g. a spike 'in the last 10 minutes' = 600000). null for other kinds.",
     },
   },
 } as const;
@@ -264,7 +289,14 @@ export const MarketSelectorZ = z.object({
 export type AiMarketSelector = z.infer<typeof MarketSelectorZ>;
 
 export const AiConditionZ = z.object({
-  kind: z.enum(["price", "spread", "cumulative_notional", "visible_levels", "time_window"]),
+  kind: z.enum([
+    "price",
+    "spread",
+    "cumulative_notional",
+    "visible_levels",
+    "time_window",
+    "price_move",
+  ]),
   market: MarketSelectorZ.nullable(),
   source: z.enum(["ask", "bid"]),
   comparator: z.enum(["lte", "gte"]),
@@ -274,6 +306,10 @@ export const AiConditionZ = z.object({
   minLevels: z.number().int().nullable(),
   startMs: z.number().int().nullable(),
   endMs: z.number().int().nullable(),
+  // price_move (defaulted so older repair rounds / few-shots stay parseable):
+  direction: z.enum(["drop", "rise", "either"]).nullable().default(null),
+  deltaThreshold: z.number().nullable().default(null),
+  windowMs: z.number().int().nullable().default(null),
 });
 export type AiCondition = z.infer<typeof AiConditionZ>;
 

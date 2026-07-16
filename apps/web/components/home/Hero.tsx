@@ -80,9 +80,9 @@ function MarketSearch() {
   );
 }
 
-/** Fallback example thoughts — the templates' NL strings plus a few bespoke. */
+/** Fallback example thoughts — the templates' prompt lines plus a few bespoke. */
 const FALLBACK_EXAMPLES = [
-  ...TEMPLATES.map((t) => t.example),
+  ...TEMPLATES.map((t) => t.prompt),
   "Buy YES on the Fed cutting rates if it dips below 40¢.",
   "Every time the Bitcoin $150k market drops 5¢, alert me.",
 ];

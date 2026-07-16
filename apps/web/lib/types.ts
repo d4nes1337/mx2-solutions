@@ -187,6 +187,8 @@ export interface FeatureFlags {
   privySigning: boolean;
   aiChat: boolean;
   openBeta: boolean;
+  makerLoop: boolean;
+  makerLoopLive: boolean;
 }
 
 export interface TradeStatus {
@@ -572,7 +574,7 @@ export interface PnlResponse {
 }
 
 export type OrderSide = "BUY" | "SELL";
-export type OrderType = "GTC" | "GTD" | "FOK";
+export type OrderType = "GTC" | "GTD" | "FOK" | "FAK";
 
 /** Client-side validated order input (lib/orders.ts). No preview round-trip —
  * the ticket signs and submits directly; the server re-validates everything. */
@@ -617,6 +619,25 @@ export interface SetupCredentialsResponse {
   tradingAccountId: string;
 }
 
+/** Per-market fees + liquidity-rewards config (GET /api/markets/:id/economics). */
+export interface MarketEconomicsResponse {
+  feeSchedule: {
+    rate: number;
+    exponent: number;
+    takerOnly: boolean;
+    rebateRate: number | null;
+  } | null;
+  rewards: {
+    minSize: number | null;
+    maxSpread: number | null;
+    ratePerDayUsd: number | null;
+    totalRewards: number | null;
+    startDate: string | null;
+    endDate: string | null;
+  } | null;
+  fetchedAt: string;
+}
+
 export interface SubmitOrderRequest {
   tradingAccountId?: string;
   idempotencyKey: string;
@@ -624,6 +645,8 @@ export interface SubmitOrderRequest {
   price: string;
   size: string;
   orderType: OrderType;
+  /** Maker-only: the CLOB rejects instead of crossing (GTC/GTD only). */
+  postOnly?: boolean;
   order?: SignedClobOrder;
 }
 
@@ -786,6 +809,9 @@ export interface TriggerDetailResponse {
     price: string;
     size: string;
     orderType: OrderType;
+    postOnly: boolean;
+    /** GTD wire expiration (unix seconds, +60s early-expiry compensation), else null. */
+    expiration: string | null;
     maxSpend: string;
     builderCode: string | null;
     signatureType: number;

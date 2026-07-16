@@ -20,6 +20,14 @@ export type Side = "BUY" | "SELL";
 /** Which side of the book a liquidity/price predicate reads. */
 export type BookSide = "ask" | "bid";
 
+/** One (time, price) observation in a host-maintained rolling window. */
+export interface PriceSample {
+  /** Observation time (source clock), ms. */
+  readonly t: number;
+  /** Probability price in (0,1). */
+  readonly p: number;
+}
+
 /**
  * Normalized snapshot of one outcome token at a point in time. `asks` are
  * sorted best-first (ascending price); `bids` best-first (descending price).
@@ -34,6 +42,12 @@ export interface MarketDataView {
   readonly marketStatus: MarketStatus;
   readonly sourceTimeMs: number;
   readonly receivedAtMs: number;
+  /**
+   * Rolling trade/mid price window (oldest-first), maintained by the host for
+   * tokens referenced by `price_move` conditions. Absent = no window kept.
+   * The engine stays pure: it only reads what the host attached.
+   */
+  readonly priceHistory?: readonly PriceSample[];
 }
 
 // ── Predicates (MVP: combined with AND, matching docs/04 §2 canonical example) ──
@@ -161,7 +175,11 @@ export type ReasonCode =
   | "TIME_WINDOW_FAIL"
   | "COOLDOWN_ACTIVE"
   | "REPEAT_LIMIT_REACHED"
-  | "STRATEGY_COMPLETED";
+  | "STRATEGY_COMPLETED"
+  // price_move (round 4):
+  | "PRICE_MOVE_OK"
+  | "PRICE_MOVE_FAIL"
+  | "PRICE_MOVE_WINDOW_INCOMPLETE";
 
 /**
  * Mutable per-rule runtime carried between events. Persisted by the worker as

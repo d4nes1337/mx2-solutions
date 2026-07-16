@@ -20,7 +20,10 @@ export interface UserStatus {
 
 export const userStatus = (
   status: string,
-  opts: { actionKind?: "alert" | "order" | "stop_strategy"; execution?: "prepare" | "auto" } = {},
+  opts: {
+    actionKind?: "alert" | "order" | "stop_strategy" | "quote_loop";
+    execution?: "prepare" | "auto";
+  } = {},
 ): UserStatus => {
   switch (status) {
     case "ACTIVE_WAITING":

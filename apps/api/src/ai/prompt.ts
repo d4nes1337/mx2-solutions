@@ -3,23 +3,16 @@
  * trailing "current time" line so the prompt-cache prefix survives across
  * requests (cache_control is set on the system block by the generator).
  *
- * Few-shot examples mirror apps/web/lib/smart-orders/templates.ts as literals
- * — templates.ts imports web-only modules and cannot be imported here.
+ * Few-shot examples come straight from the canonical template specs
+ * (@mx2/rules/templates) — one source of truth for templates, gallery copy
+ * and AI examples. TEMPLATE_SPECS is static data, so the assembled prompt
+ * stays byte-stable per process.
  */
+import { TEMPLATE_SPECS } from "@mx2/rules";
 
-const FEW_SHOTS = `## Examples
-
-User: "If YES drops below 58¢ for 5 min and liquidity ≥ $2,000, buy YES at 57¢." (after search_markets returned the market as candidate 0 with outcomes ["Yes","No"])
-create_strategy input:
-{"name":"Re-entry","summary":"Watches for a dip below 58¢ that holds for 5 minutes with at least $2,000 of ask liquidity, then prepares a buy of 100 Yes shares at 57¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.58,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.58,"minNotional":2000,"minLevels":null,"startMs":null,"endMs":null}}],"holdsForMs":300000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.57,"size":100},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}
-
-User: "Alert me if this market goes above 70¢ while that other market is above 40¢ for 10 minutes." (candidates 0 and 1 from two search_markets calls)
-create_strategy input:
-{"name":"Cross-market watch","summary":"Alerts you when the first market trades above 70¢ while the second holds above 40¢ for 10 minutes.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.7,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null}},{"type":"condition","condition":{"kind":"price","market":{"source":"search","index":1,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"gte","threshold":0.4,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null}}],"holdsForMs":600000,"action":{"kind":"alert","market":null,"side":"BUY","price":null,"size":null},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}
-
-User: "Quote this market whenever the spread is tighter than 2 cents and there's healthy liquidity."
-create_strategy input:
-{"name":"Reward-aware maker","summary":"When the spread tightens under 2¢ with at least $1,000 resting, prepares a 200-share maker quote at 50¢ for you to sign.","rootOp":"and","conditions":[{"type":"condition","condition":{"kind":"spread","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":0.02,"priceBound":null,"minNotional":null,"minLevels":null,"startMs":null,"endMs":null}},{"type":"condition","condition":{"kind":"cumulative_notional","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"source":"ask","comparator":"lte","threshold":null,"priceBound":0.99,"minNotional":1000,"minLevels":null,"startMs":null,"endMs":null}}],"holdsForMs":120000,"action":{"kind":"order","market":{"source":"search","index":0,"tokenId":"","outcome":"Yes"},"side":"BUY","price":0.5,"size":200},"recurrence":{"kind":"once","maxRepeats":null,"cooldownMs":null}}`;
+const FEW_SHOTS = `## Examples\n\n${TEMPLATE_SPECS.filter((s) => s.aiFewShot !== null)
+  .map((s) => `User: ${s.aiFewShot!.user}\ncreate_strategy input:\n${s.aiFewShot!.json}`)
+  .join("\n\n")}`;
 
 const CORE = `You are arima's strategy builder. You turn a visitor's trading idea, written in plain language, into exactly one Polymarket Smart Order — a conditional strategy the visitor immediately sees as a visual canvas.
 
@@ -31,6 +24,7 @@ const CORE = `You are arima's strategy builder. You turn a visitor's trading ide
   - cumulative_notional: at least minNotional USD resting within priceBound on one book side (a liquidity check).
   - visible_levels: at least minLevels visible book levels within priceBound.
   - time_window: wall-clock window in unix milliseconds (market is null). Use the current time given at the end of this prompt.
+  - price_move: the price moved by ≥ deltaThreshold (0–1; 5¢ = 0.05) within the trailing windowMs (60000–3600000), direction drop/rise/either. Use for momentum/spike language ("crashes", "spikes", "moves 5¢ in 10 minutes"). Pair with holdsForMs 0 for immediate reaction.
 - Structure: rootOp (and/or) over condition nodes; at most ONE nested sub-group level (its children are conditions only); "not" groups wrap exactly one child. Caps: ≤12 conditions, ≤4 distinct markets.
 - holdsForMs: the whole expression must hold continuously this long. Default 300000 (5 min).
 - Action: alert (notify only) or order (a GTC limit order that is PREPARED for the user's manual signature — nothing executes by itself; never claim otherwise). Order size is in SHARES, default 100.

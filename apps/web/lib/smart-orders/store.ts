@@ -12,6 +12,7 @@ import {
   freshNodeId,
   findNode,
   isBound,
+  isTokenReferenced,
   removeNodeFromTree,
   replaceNodeInTree,
   toggleNotInTree,
@@ -20,14 +21,23 @@ import {
   type StrategyDoc,
 } from "./doc";
 
+/** Tabs of the right-hand workspace panel (editor-only UI state). */
+export type WorkspaceTab = "ai" | "simulate" | "market" | "settings";
+
 export interface BuilderState {
   doc: StrategyDoc;
   /** Bumped on every semantic change — drives draft re-evaluation. */
   revision: number;
   /** Bumped when the AI panel replaces the doc — drives the staged node reveal. */
   revealTick: number;
+  /** Active workspace-panel tab. Editor-only — never triggers evaluation. */
+  activeTab: WorkspaceTab;
+  /** Token whose preview the Market tab shows (null = first referenced market). */
+  focusedMarketToken: string | null;
 
   reset: (doc?: StrategyDoc) => void;
+  setActiveTab: (tab: WorkspaceTab) => void;
+  focusMarket: (tokenId: string | null) => void;
   revealAll: () => void;
   setName: (name: string) => void;
   setRootOp: (op: "and" | "or") => void;
@@ -36,6 +46,10 @@ export interface BuilderState {
   removeNode: (id: string) => void;
   toggleNot: (id: string) => void;
   bindMarket: (nodeId: string | "action", ref: MarketRef, meta?: MarketMeta) => void;
+  /** Add a market node to the canvas without binding anything to it yet. */
+  addWatchedMarket: (ref: MarketRef, meta?: MarketMeta) => void;
+  /** Remove a watched market — refused while a condition/action references it. */
+  removeWatchedMarket: (tokenId: string) => void;
   setAction: (action: ActionV2) => void;
   setLimits: (limits: StrategyLimits | null) => void;
   setRecurrence: (recurrence: RecurrenceV2) => void;
@@ -55,11 +69,15 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   doc: emptyDoc(),
   revision: 0,
   revealTick: 0,
+  activeTab: "ai",
+  focusedMarketToken: null,
 
   reset: (doc) => set({ doc: doc ?? emptyDoc(), revision: get().revision + 1 }),
 
   // Editor-only (no revision bump — never retriggers evaluation).
   revealAll: () => set((s) => ({ revealTick: s.revealTick + 1 })),
+  setActiveTab: (activeTab) => set({ activeTab }),
+  focusMarket: (focusedMarketToken) => set({ focusedMarketToken }),
 
   setName: (name) => set((s) => bump({ ...s.doc, name }, s)),
 
@@ -124,6 +142,32 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
         },
         s,
       );
+    }),
+
+  // Watched markets are editor-only (compile strips them): no revision bump —
+  // the canvas rebuilds off doc identity, and evaluation doesn't depend on them.
+  addWatchedMarket: (ref, meta) =>
+    set((s) => {
+      if (!isBound(ref) || s.doc.watchedMarkets.some((m) => m.tokenId === ref.tokenId)) return s;
+      const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
+      return {
+        doc: { ...s.doc, marketMeta, watchedMarkets: [...s.doc.watchedMarkets, ref] },
+        focusedMarketToken: ref.tokenId,
+      };
+    }),
+
+  removeWatchedMarket: (tokenId) =>
+    set((s) => {
+      if (isTokenReferenced(s.doc, tokenId)) return s;
+      return {
+        doc: {
+          ...s.doc,
+          watchedMarkets: s.doc.watchedMarkets.filter((m) => m.tokenId !== tokenId),
+          selectedNodeId:
+            s.doc.selectedNodeId === `market:${tokenId}` ? null : s.doc.selectedNodeId,
+        },
+        focusedMarketToken: s.focusedMarketToken === tokenId ? null : s.focusedMarketToken,
+      };
     }),
 
   setAction: (action) => set((s) => bump({ ...s.doc, action }, s)),

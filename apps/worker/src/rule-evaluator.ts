@@ -1,6 +1,7 @@
 import type { Logger } from "@mx2/observability";
 import type { AuditStore, RuleStore, TriggerStore, ConditionalRuleRow } from "@mx2/db";
 import {
+  conditionLeaves,
   isTerminal,
   normalizeDefinition,
   referencedTokenIds,
@@ -14,6 +15,7 @@ import {
   type ViewsByToken,
 } from "@mx2/rules";
 import type { AutoExecutor } from "./auto-executor.js";
+import { createPriceWindowStore } from "./price-window.js";
 
 /**
  * Single-writer conditional-rule evaluator (L3 host). Lives in the worker so a
@@ -40,6 +42,8 @@ import type { AutoExecutor } from "./auto-executor.js";
 export interface RuleEvaluatorManager {
   start(): void;
   onBook(view: MarketDataView): void;
+  /** Price print/tick/mid — feeds rolling price_move windows. */
+  onPrice(tokenId: string, price: number, tMs: number): void;
   onReconnect(): void;
   onTickSizeChange(tokenId: string): void;
   stop(): void;
@@ -71,6 +75,8 @@ interface ActiveRule {
   readonly tokenId: string;
   /** Every token the strategy references — its subscription set. */
   readonly tokens: readonly string[];
+  /** Tokens referenced by price_move leaves — get priceHistory attached. */
+  readonly moveTokens: ReadonlySet<string>;
   readonly def: StrategyDefinition;
   /** Hash of the ORIGINAL stored definition (ties evidence to the stored JSON). */
   readonly defHash: string;
@@ -88,6 +94,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const rules = new Map<string, ActiveRule>();
   const tokenSubs = new Map<string, Set<string>>();
   const latestView = new Map<string, MarketDataView>();
+  const priceWindows = createPriceWindowStore();
   let reloadTimer: ReturnType<typeof setInterval> | undefined;
   let tickTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -99,7 +106,16 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       logger.warn({ err: e, ruleId: row.id }, "Skipping rule with unparseable definition");
       return;
     }
+    // Maker loops are the QuoterManager's rows — the trigger state machine
+    // does not apply to them (ADR-0014).
+    if (def.action.kind === "quote_loop") return;
     const tokens = referencedTokenIds(def);
+    const moveTokens = new Set<string>(
+      conditionLeaves(def.expr)
+        .filter((l) => l.condition.kind === "price_move")
+        .map((l) => (l.condition.kind === "price_move" ? l.condition.market.tokenId : ""))
+        .filter((t) => t !== ""),
+    );
     // Conservative restart: never resume mid-accumulation across a reload/restart
     // (app-restart-mid-window robustness is deferred) — but PRESERVE the repeat
     // bookkeeping (triggerCount, cooldownUntil) so restarts can't reset repeat
@@ -116,6 +132,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       walletAddress: row.walletAddress,
       tokenId: row.tokenId,
       tokens,
+      moveTokens,
       def,
       defHash: row.definitionHash,
       runtime,
@@ -143,6 +160,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       if (set.size === 0) {
         tokenSubs.delete(token);
         latestView.delete(token);
+        priceWindows.drop(token);
         unsubscribe([token]);
       }
     }
@@ -160,12 +178,22 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     }
   };
 
-  /** Current views for every token the rule references (missing entries stay absent). */
+  /**
+   * Current views for every token the rule references (missing entries stay
+   * absent). Rolling price history is attached only for tokens this rule's
+   * price_move leaves read — other rules keep the bare (cheaper) views.
+   */
   const viewsFor = (ar: ActiveRule): ViewsByToken => {
     const views: Record<string, MarketDataView> = {};
     for (const token of ar.tokens) {
       const v = latestView.get(token);
-      if (v) views[token] = v;
+      if (!v) continue;
+      if (ar.moveTokens.has(token)) {
+        const priceHistory = priceWindows.history(token);
+        views[token] = priceHistory ? { ...v, priceHistory } : v;
+      } else {
+        views[token] = v;
+      }
     }
     return views;
   };
@@ -329,7 +357,29 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       }
     },
 
+    onPrice(tokenId, price, tMs) {
+      priceWindows.push(tokenId, price, tMs);
+      const set = tokenSubs.get(tokenId);
+      if (!set) return;
+      const now = Date.now();
+      for (const id of [...set]) {
+        const ar = rules.get(id);
+        // Only rules whose price_move reads this token need a re-evaluation —
+        // for everything else the periodic tick covers it.
+        if (!ar || !ar.moveTokens.has(tokenId)) continue;
+        const views = viewsFor(ar);
+        applyEvent(ar, {
+          type: "tick",
+          views: Object.keys(views).length > 0 ? views : null,
+          nowMs: now,
+        });
+      }
+    },
+
     onReconnect() {
+      // Continuity is broken: accumulating hold-windows reset AND rolling
+      // price windows are wiped (they must refill before price_move can hold).
+      priceWindows.clear();
       const now = Date.now();
       for (const ar of rules.values()) applyEvent(ar, { type: "reconnect", nowMs: now });
     },

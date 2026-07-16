@@ -86,10 +86,38 @@ export const registerAiRoutes = (app: FastifyInstance, deps: AiRoutesDeps): void
                     size: cd.action.size,
                     orderType: cd.action.orderType,
                     execution: cd.action.execution,
+                    ...(cd.action.postOnly !== undefined ? { postOnly: cd.action.postOnly } : {}),
+                    ...(cd.action.expiresAfterMs !== undefined
+                      ? { expiresAfterMs: cd.action.expiresAfterMs }
+                      : {}),
                     ...(cd.action.negRisk !== undefined ? { negRisk: cd.action.negRisk } : {}),
                     ...(cd.action.tickSize !== undefined ? { tickSize: cd.action.tickSize } : {}),
                   }
-                : cd.action,
+                : cd.action.kind === "quote_loop"
+                  ? {
+                      kind: "quote_loop",
+                      market: {
+                        conditionId: cd.action.market.conditionId,
+                        yesTokenId: cd.action.market.yesTokenId,
+                        noTokenId: cd.action.market.noTokenId,
+                        ...(cd.action.market.title !== undefined
+                          ? { title: cd.action.market.title }
+                          : {}),
+                        ...(cd.action.market.negRisk !== undefined
+                          ? { negRisk: cd.action.market.negRisk }
+                          : {}),
+                        ...(cd.action.market.tickSize !== undefined
+                          ? { tickSize: cd.action.market.tickSize }
+                          : {}),
+                      },
+                      sizeShares: cd.action.sizeShares,
+                      targetSpreadCents: cd.action.targetSpreadCents,
+                      requoteToleranceCents: cd.action.requoteToleranceCents,
+                      maxInventoryShares: cd.action.maxInventoryShares,
+                      maxCapitalUsd: cd.action.maxCapitalUsd,
+                      maxDailyLossUsd: cd.action.maxDailyLossUsd,
+                    }
+                  : cd.action,
             recurrence: cd.recurrence,
             limits: cd.limits,
             expiresAtMs: cd.expiresAtMs,

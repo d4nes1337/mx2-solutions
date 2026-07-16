@@ -9,14 +9,18 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CircleAlert, Plus, Sparkles } from "lucide-react";
-import type { ConditionV2 } from "@mx2/rules";
+import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { useFeatureFlags, useMarketScenarios, useShowcases } from "@/lib/queries";
+import {
+  useFeatureFlags,
+  useMarketEconomics,
+  useMarketScenarios,
+  useShowcases,
+} from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
-import { UNBOUND, conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
+import { conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
 import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
@@ -28,16 +32,19 @@ import {
   useStrategyControl,
 } from "@/lib/smart-orders/queries";
 import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
-import { AiPanel } from "./AiPanel";
+import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
-import { Inspector } from "./Inspector";
-import { MakerEstimator } from "./MakerEstimator";
-import { ProjectionCard } from "./ProjectionCard";
+import { CanvasToolbar } from "./CanvasToolbar";
+import { PanelResizeHandle } from "./PanelResizeHandle";
 import { SentenceBar } from "./SentenceBar";
+import { WorkspacePanel } from "./WorkspacePanel";
+
+/** Canvas fills the viewport below the fixed chrome on desktop; fixed on mobile. */
+export const CANVAS_HEIGHT_CLASS = "h-[480px] lg:h-[max(420px,calc(100vh-360px))]";
 
 const BuilderCanvas = dynamic(() => import("./BuilderCanvas"), {
   ssr: false,
-  loading: () => <Skeleton className="h-[520px] w-full rounded-xl" />,
+  loading: () => <Skeleton className="h-full w-full rounded-xl" />,
 });
 
 /** Debounce the store revision so draft evaluation isn't spammed per keystroke. */
@@ -49,47 +56,6 @@ function useDebouncedRevision(revision: number, delayMs = 1_200): number {
   }, [revision, delayMs]);
   return debounced;
 }
-
-const CONDITION_MENU: { label: string; make: () => ConditionV2 }[] = [
-  {
-    label: "Price above / below",
-    make: () => ({
-      kind: "price",
-      market: UNBOUND,
-      source: "ask",
-      comparator: "lte",
-      threshold: 0.5,
-    }),
-  },
-  {
-    label: "Spread tightness",
-    make: () => ({ kind: "spread", market: UNBOUND, comparator: "lte", threshold: 0.02 }),
-  },
-  {
-    label: "Liquidity at least",
-    make: () => ({
-      kind: "cumulative_notional",
-      market: UNBOUND,
-      source: "ask",
-      priceBound: 0.5,
-      minNotional: 1000,
-    }),
-  },
-  {
-    label: "Visible book levels",
-    make: () => ({
-      kind: "visible_levels",
-      market: UNBOUND,
-      source: "ask",
-      priceBound: 0.5,
-      minLevels: 3,
-    }),
-  },
-  {
-    label: "Time window",
-    make: () => ({ kind: "time_window", startMs: null, endMs: null }),
-  },
-];
 
 function WouldTriggerNow({
   satisfied,
@@ -147,10 +113,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const revision = useBuilderStore((s) => s.revision);
   const reset = useBuilderStore((s) => s.reset);
   const setName = useBuilderStore((s) => s.setName);
-  const addCondition = useBuilderStore((s) => s.addCondition);
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const panel = usePanelWidth();
 
   const flags = useFeatureFlags();
   const aiPrompt = params.get("prompt");
@@ -274,16 +239,25 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const canSave = issues.length === 0 && !create.isPending;
 
   // Headline payoff next to the verdict — the number the owner wants seen
-  // first ("how much can this make me?"). Estimates only.
+  // first ("how much can this make me?"). Estimates only; taker entries
+  // subtract the market's taker fee when the schedule is known.
+  const takerOrderConditionId =
+    doc.action.kind === "order" && (doc.action.orderType === "FOK" || doc.action.orderType === "FAK")
+      ? doc.action.market.conditionId
+      : "";
+  const headlineEconomics = useMarketEconomics(takerOrderConditionId);
   const projection = useMemo(() => {
     const input = payoffInputFromDoc(doc, evaluation.data?.markets ?? []);
     if (!input) return null;
-    const p = computePayoff(input);
+    const p = computePayoff({
+      ...input,
+      feeSchedule: headlineEconomics.data?.feeSchedule ?? null,
+    });
     return {
       text: `Projected: ${signedUsd(p.payoffIfWinUsd)} if ${input.outcome || "YES"} wins`,
       positive: p.payoffIfWinUsd >= 0,
     };
-  }, [doc, evaluation.data]);
+  }, [doc, evaluation.data, headlineEconomics.data]);
 
   // Definitions are immutable once armed (evidence stays tied to the exact
   // version), so "editing" = create the new version, then cancel the old one.
@@ -343,35 +317,15 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         projection={projection}
       />
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-2">
-          {/* Toolbar: add-condition palette */}
-          <div className="relative flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setMenuOpen((o) => !o)}>
-              <Plus size={13} aria-hidden /> Add condition
-            </Button>
-            <span className="text-[11px] text-faint">
-              drag blocks to arrange · click a block to edit it
-            </span>
-            {menuOpen ? (
-              <div className="absolute left-0 top-full z-20 mt-1.5 w-56 space-y-0.5 rounded-lg border border-border bg-surface p-1.5 shadow-pop">
-                {CONDITION_MENU.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={() => {
-                      addCondition(item.make());
-                      setMenuOpen(false);
-                    }}
-                    className="block w-full rounded-md px-2.5 py-1.5 text-left text-[13px] text-fg transition-colors hover:bg-surface-2"
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+      <div
+        className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_var(--panel-w)] lg:gap-1"
+        style={{ ["--panel-w" as string]: `${panel.width}px` }}
+      >
+        <div className="min-w-0 space-y-2">
+          <CanvasToolbar />
+          <div className={CANVAS_HEIGHT_CLASS}>
+            <BuilderCanvas evaluation={evaluation.data} issues={issues} />
           </div>
-          <BuilderCanvas evaluation={evaluation.data} issues={issues} />
 
           {/* Validation checklist */}
           {issues.length > 0 ? (
@@ -390,58 +344,65 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           )}
         </div>
 
-        <div className="space-y-3">
-          {flags.data?.aiChat ? <AiPanel initialPrompt={aiPrompt} /> : null}
-          <ProjectionCard evaluation={evaluation.data} />
-          <Inspector />
-          <MakerEstimator evaluation={evaluation.data} />
+        <PanelResizeHandle
+          width={panel.width}
+          dragging={panel.dragging}
+          onPointerDown={panel.startDrag}
+          onKeyDown={panel.onKeyDown}
+          className="hidden lg:block"
+        />
 
-          {/* Save / arm */}
-          <div
-            className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"
-            data-tour="builder-save"
-          >
-            {signedIn ? (
-              allowlisted ? (
-                <>
-                  <Button className="w-full" disabled={!canSave} onClick={save}>
-                    <Sparkles size={14} aria-hidden />
-                    {create.isPending ? "Saving…" : "Save & start watching"}
-                  </Button>
-                  {doc.action.kind === "order" && doc.action.execution === "auto" ? (
-                    <p className="text-[11px] leading-snug text-muted">
-                      Auto mode places orders from your{" "}
-                      <Link href="/wallet" className="text-accent hover:underline">
-                        Arima trading wallet
-                      </Link>{" "}
-                      within the limits above. If the wallet isn&apos;t ready, triggers wait for
-                      your signature instead.
-                    </p>
-                  ) : null}
-                  {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
-                </>
+        <WorkspacePanel
+          evaluation={evaluation.data}
+          aiChatEnabled={Boolean(flags.data?.aiChat)}
+          aiPrompt={aiPrompt}
+          footer={
+            <div
+              className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"
+              data-tour="builder-save"
+            >
+              {signedIn ? (
+                allowlisted ? (
+                  <>
+                    <Button className="w-full" disabled={!canSave} onClick={save}>
+                      <Sparkles size={14} aria-hidden />
+                      {create.isPending ? "Saving…" : "Save & start watching"}
+                    </Button>
+                    {doc.action.kind === "order" && doc.action.execution === "auto" ? (
+                      <p className="text-[11px] leading-snug text-muted">
+                        Auto mode places orders from your{" "}
+                        <Link href="/wallet" className="text-accent hover:underline">
+                          Arima trading wallet
+                        </Link>{" "}
+                        within the limits above. If the wallet isn&apos;t ready, triggers wait for
+                        your signature instead.
+                      </p>
+                    ) : null}
+                    {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
+                  </>
+                ) : (
+                  <p className="text-[12px] leading-snug text-muted">
+                    Your account isn&apos;t in the beta yet — you can build and simulate freely,
+                    and save once you have access.
+                  </p>
+                )
               ) : (
-                <p className="text-[12px] leading-snug text-muted">
-                  Your account isn&apos;t in the beta yet — you can build and simulate freely, and
-                  save once you have access.
-                </p>
-              )
-            ) : (
-              <>
-                <Button
-                  className="w-full"
-                  onClick={() => signIn.mutate()}
-                  disabled={signIn.isPending}
-                >
-                  {signIn.isPending ? "Check your wallet…" : "Sign in to save"}
-                </Button>
-                <p className="text-[11px] leading-snug text-muted">
-                  Building and simulating is free — no account needed until you save.
-                </p>
-              </>
-            )}
-          </div>
-        </div>
+                <>
+                  <Button
+                    className="w-full"
+                    onClick={() => signIn.mutate()}
+                    disabled={signIn.isPending}
+                  >
+                    {signIn.isPending ? "Check your wallet…" : "Sign in to save"}
+                  </Button>
+                  <p className="text-[11px] leading-snug text-muted">
+                    Building and simulating is free — no account needed until you save.
+                  </p>
+                </>
+              )}
+            </div>
+          }
+        />
       </div>
     </div>
   );

@@ -12,6 +12,7 @@ import {
   bestBid,
   cumulativeNotional,
   dataAgeMs,
+  priceMove,
   spread,
   visibleLevels,
 } from "./predicates.js";
@@ -119,6 +120,40 @@ const evalCondition = (
         actual,
         threshold: c.minLevels,
         reason: stale ? "DATA_STALE" : satisfied ? "LEVELS_OK" : "LEVELS_FAIL",
+        tokenId: c.market.tokenId,
+        stale,
+      };
+    }
+    case "price_move": {
+      if (!view) return fail("price_move", c.deltaThreshold);
+      const move = priceMove(view, c.windowMs, nowMs);
+      // Incomplete window coverage is treated as staleness: unsatisfied AND
+      // stale, so the global fail-closed override protects NOT(price_move)
+      // from firing on missing data.
+      if (move === null) {
+        return {
+          kind: "price_move",
+          satisfied: false,
+          actual: null,
+          threshold: c.deltaThreshold,
+          reason: "PRICE_MOVE_WINDOW_INCOMPLETE",
+          tokenId: c.market.tokenId,
+          stale: true,
+        };
+      }
+      const actual =
+        c.direction === "drop"
+          ? move.drop
+          : c.direction === "rise"
+            ? move.rise
+            : Math.max(move.drop, move.rise);
+      const satisfied = !stale && actual >= c.deltaThreshold;
+      return {
+        kind: "price_move",
+        satisfied,
+        actual,
+        threshold: c.deltaThreshold,
+        reason: stale ? "DATA_STALE" : satisfied ? "PRICE_MOVE_OK" : "PRICE_MOVE_FAIL",
         tokenId: c.market.tokenId,
         stale,
       };

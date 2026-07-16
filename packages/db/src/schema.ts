@@ -9,6 +9,7 @@ import {
   timestamp,
   uuid,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -412,3 +413,104 @@ export const tradingDelegations = pgTable(
 
 export type TradingDelegationRow = typeof tradingDelegations.$inferSelect;
 export type NewTradingDelegationRow = typeof tradingDelegations.$inferInsert;
+
+/**
+ * One quoting session per armed quote_loop Smart Order (RFC-0003). The session
+ * row is the live scoreboard (inventory, PnL, accruals) the cockpit reads;
+ * every underlying event is in quote_events. mode escalates shadow → confirm →
+ * live only via the audited API and only under FEATURE_MAKER_LOOP_LIVE.
+ */
+export const quoteSessions = pgTable(
+  "quote_sessions",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    ruleId: uuid("rule_id").notNull(),
+    walletAddress: text("wallet_address").notNull(),
+    mode: text("mode").notNull().default("shadow"), // shadow | confirm | live
+    status: text("status").notNull().default("idle"), // idle | quoting | halted
+    haltedReason: text("halted_reason"),
+    inventoryYes: numeric("inventory_yes").notNull().default("0"),
+    inventoryNo: numeric("inventory_no").notNull().default("0"),
+    capitalCommittedUsd: numeric("capital_committed_usd").notNull().default("0"),
+    realizedPnlUsd: numeric("realized_pnl_usd").notNull().default("0"),
+    dailyLossUsd: numeric("daily_loss_usd").notNull().default("0"),
+    rewardsAccruedUsd: numeric("rewards_accrued_usd").notNull().default("0"),
+    lastCycleAt: timestamp("last_cycle_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("quote_sessions_rule_idx").on(t.ruleId),
+    index("quote_sessions_wallet_idx").on(t.walletAddress),
+    index("quote_sessions_status_idx").on(t.status),
+  ],
+);
+
+export type QuoteSessionRow = typeof quoteSessions.$inferSelect;
+export type NewQuoteSessionRow = typeof quoteSessions.$inferInsert;
+
+/**
+ * Append-only audit-grade ledger of everything a quoting session did (or, in
+ * shadow mode, WOULD have done): cycles, quote intents, placements, cancels,
+ * fills, merges, halts. The UNIQUE idempotency key is the DB-level anti-replay
+ * guard — a re-run cycle can never double-book an action.
+ */
+export const quoteEvents = pgTable(
+  "quote_events",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    sessionId: uuid("session_id").notNull(),
+    ruleId: uuid("rule_id").notNull(),
+    type: text("type").notNull(),
+    idempotencyKey: text("idempotency_key").unique(),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("quote_events_session_idx").on(t.sessionId),
+    index("quote_events_rule_idx").on(t.ruleId),
+    index("quote_events_created_at_idx").on(t.createdAt),
+  ],
+);
+
+export type QuoteEventRow = typeof quoteEvents.$inferSelect;
+export type NewQuoteEventRow = typeof quoteEvents.$inferInsert;
+
+/**
+ * Daily liquidity-rewards accruals polled from the authed CLOB rewards
+ * endpoints (one row per wallet × market × day; upsert-once semantics).
+ */
+export const rewardAccruals = pgTable(
+  "reward_accruals",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    conditionId: text("condition_id").notNull(),
+    day: text("day").notNull(), // YYYY-MM-DD (UTC)
+    rewardsUsd: numeric("rewards_usd").notNull().default("0"),
+    raw: jsonb("raw")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("reward_accruals_wallet_market_day_unique").on(
+      t.walletAddress,
+      t.conditionId,
+      t.day,
+    ),
+    index("reward_accruals_wallet_idx").on(t.walletAddress),
+    index("reward_accruals_market_idx").on(t.conditionId),
+  ],
+);
+
+export type RewardAccrualRow = typeof rewardAccruals.$inferSelect;
+export type NewRewardAccrualRow = typeof rewardAccruals.$inferInsert;

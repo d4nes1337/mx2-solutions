@@ -71,6 +71,13 @@
       "when": 1783497128357,
       "tag": "0009_smart_orders_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783497128358,
+      "tag": "0010_quote_sessions",
+      "breakpoints": true
     }
   ]
 }

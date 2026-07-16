@@ -41,8 +41,19 @@ describe("ThemeSwitcher", () => {
     expect(screen.getByRole("button", { name: /paper/i })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("ignores garbage stored values", () => {
+  it("ignores garbage stored values (falls back to the paper default)", () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, "neon");
+    renderSwitcher();
+    expect(screen.getByRole("button", { name: /paper/i })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("defaults to paper when nothing is stored", () => {
+    renderSwitcher();
+    expect(screen.getByRole("button", { name: /paper/i })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps an explicitly stored light theme", () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
     renderSwitcher();
     expect(screen.getByRole("button", { name: /light/i })).toHaveAttribute("aria-pressed", "true");
   });

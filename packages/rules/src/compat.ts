@@ -103,6 +103,10 @@ export const referencedTokenIds = (def: StrategyDefinition): readonly string[] =
   };
   walk(def.expr);
   if (def.action.kind === "order") tokens.add(def.action.market.tokenId);
+  if (def.action.kind === "quote_loop") {
+    tokens.add(def.action.market.yesTokenId);
+    tokens.add(def.action.market.noTokenId);
+  }
   return [...tokens];
 };
 

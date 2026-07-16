@@ -1,8 +1,43 @@
 # Project Status
 
-_Last updated: 2026-07-15_
+_Last updated: 2026-07-16_
 
 ## Recent
+
+- **Round-4: workspace redesign + `price_move` + execution styles/fee engine + maker-loop shadow
+  foundations (built; D-024, ADR-0013/0014, RFC-0003).** Owner's round-4 scope executed end-to-end:
+  - **Workspace redesign.** Focus-ring fix + **paper is now the default theme**; the builder
+    becomes a resizable tabbed workspace — full-height AI chat, Simulate tab, and a Market tab
+    (chart + orderbook) — with inline canvas editing (edit-in-place + delete on nodes) and an
+    add-market search directly on the canvas.
+  - **`price_move` momentum condition end-to-end**: engine predicate + worker rolling price
+    windows + API + AI tooling + builder UI, with fail-closed window-coverage semantics (an
+    under-covered window never satisfies) and backtest support including a `window_too_fine`
+    honesty guard (refuses to fake sub-resolution momentum from coarse history).
+  - **Execution styles + fee engine (ADR-0013).** Per-step `orderType` GTC/GTD/FOK/FAK +
+    `postOnly` + GTD entry windows (trigger-anchored, +60 s wire compensation, 180 s floor →
+    sub-3-min windows use FAK). **Fee Structure V2 verified live** (taker-only, makers never
+    pay; INTEGRATION_VERIFIED §16–§17); pure fee math in `packages/rules/src/fees.ts`; new
+    public `GET /api/markets/:conditionId/economics` (5-min cache); projections/backtests are
+    fee-aware for taker entries; the MakerEstimator now shows **real $/day pool rates** from
+    CLOB `/rewards/markets/*` (A-050 resolved).
+  - **Templates single source of truth** in `@mx2/rules` (renames: re-entry → "Dip buy",
+    maker-reward → "Maker efficiency"; new spike-reversal; cross-market kept) with AI few-shot
+    sync tests so the prompt examples can never drift from the real templates.
+  - **Maker-loop foundations — SHADOW-ONLY behind `FEATURE_MAKER_LOOP`** (ADR-0014, RFC-0003):
+    `quote_loop` strategy archetype on `conditional_rules`; pure quoter engine with the
+    anti-runaway idempotence property (`diff(x,x)=∅`, property-tested); migration `0010`
+    (`quote_sessions` / append-only `quote_events` with UNIQUE idempotency keys /
+    `reward_accruals`); relayer `execute` seam + CTF merge calldata builder +
+    `verify-ctf-adapters` script (adapter addresses config-required, no defaults — R-028);
+    quoter API (sessions/events/mode/halt/resume, escalation blocked without
+    `FEATURE_MAKER_LOOP_LIVE`). RFC-0003 records the **owner-approved rollout ladder** —
+    shadow soak → adapter verification → confirm on one $20–50 market → live minimum caps +
+    kill-switch drill → GA only if real accrual data proves rewards ≥ costs (R-027..R-030).
+  - Quality gates: repo typecheck ✓, root **353 pass** + web **98 pass** ✓, lint ✓; live
+    verification of the economics endpoint + `price_move` draft evaluation against real
+    markets. Known (pre-existing, not round-4): CLOB REST `/book` fallback 422s app-wide
+    (spawned as a separate task); builder page dev-mode hydration lag.
 
 - **Round-3 UX polish: wallet lifecycle self-healing + cockpit intelligence + themes + onboarding
   (built; D-023).** Owner's round-3 brief executed end-to-end:

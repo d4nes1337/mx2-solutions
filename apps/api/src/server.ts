@@ -14,6 +14,7 @@ import {
   createOrderIntentStore,
   createRuntimeFlagStore,
   createRuleStore,
+  createQuoterStore,
   createTriggerStore,
   createPrivyWalletStore,
   createDelegationStore,
@@ -52,6 +53,7 @@ const main = async (): Promise<void> => {
   const orderIntents = createOrderIntentStore(dbHandle.db);
   const runtimeFlags = createRuntimeFlagStore(dbHandle.db);
   const ruleStore = createRuleStore(dbHandle.db);
+  const quoterStore = createQuoterStore(dbHandle.db);
   const triggerStore = createTriggerStore(dbHandle.db);
   const privyWallets = createPrivyWalletStore(dbHandle.db);
   const delegations = createDelegationStore(dbHandle.db);
@@ -89,6 +91,7 @@ const main = async (): Promise<void> => {
     orderIntents,
     runtimeFlags,
     ruleStore,
+    quoterStore,
     triggerStore,
     privyWallets,
     delegations,

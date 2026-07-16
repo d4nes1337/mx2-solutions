@@ -12,6 +12,13 @@ import {
 } from "./schema.js";
 import { PricePointSchema, type PricePoint } from "../gamma/schema.js";
 import {
+  ClobMarketInfoSchema,
+  FeeRateResponseSchema,
+  RewardsMarketsResponseSchema,
+  type ClobMarketInfo,
+  type RewardsMarket,
+} from "./economics.js";
+import {
   networkError,
   upstreamError,
   parseError,
@@ -42,6 +49,14 @@ export interface ClobClient {
   getPrices(tokenIds: string[]): Promise<Result<TokenPrice[], PolymarketError>>;
   getLastTradePrice(tokenId: string): Promise<Result<string, PolymarketError>>;
   getPricesHistory(params: GetPricesHistoryParams): Promise<Result<PricePoint[], PolymarketError>>;
+  /** CLOB market info incl. the authoritative fee schedule `fd`. */
+  getClobMarket(conditionId: string): Promise<Result<ClobMarketInfo, PolymarketError>>;
+  /** Per-token taker base fee in bps (cross-check source for `fd`). */
+  getFeeRate(tokenId: string): Promise<Result<number, PolymarketError>>;
+  /** Liquidity-rewards config for one market (min size, max spread, daily rates). */
+  getRewardsMarket(conditionId: string): Promise<Result<RewardsMarket[], PolymarketError>>;
+  /** One page of markets currently carrying liquidity-rewards pools. */
+  getRewardsMarketsCurrent(cursor?: string): Promise<Result<RewardsMarket[], PolymarketError>>;
 }
 
 // The CLOB price-history endpoint wraps the series in a `history` object:
@@ -99,6 +114,29 @@ export const createClobClient = (opts?: ClobClientOptions): ClobClient => {
       const url = new URL("/book", baseUrl);
       url.searchParams.set("token_id", tokenId);
       return fetchJson(url.toString(), OrderbookSchema, timeoutMs);
+    },
+
+    getClobMarket: (conditionId) => {
+      const url = new URL(`/clob-markets/${encodeURIComponent(conditionId)}`, baseUrl);
+      return fetchJson(url.toString(), ClobMarketInfoSchema, timeoutMs);
+    },
+
+    getFeeRate: async (tokenId) => {
+      const url = new URL("/fee-rate", baseUrl);
+      url.searchParams.set("token_id", tokenId);
+      const res = await fetchJson(url.toString(), FeeRateResponseSchema, timeoutMs);
+      return res.ok ? ok(res.value.base_fee) : err(res.error);
+    },
+
+    getRewardsMarket: (conditionId) => {
+      const url = new URL(`/rewards/markets/${encodeURIComponent(conditionId)}`, baseUrl);
+      return fetchJson(url.toString(), RewardsMarketsResponseSchema, timeoutMs);
+    },
+
+    getRewardsMarketsCurrent: (cursor) => {
+      const url = new URL("/rewards/markets/current", baseUrl);
+      if (cursor) url.searchParams.set("next_cursor", cursor);
+      return fetchJson(url.toString(), RewardsMarketsResponseSchema, timeoutMs);
     },
 
     getTrades: (params) => {

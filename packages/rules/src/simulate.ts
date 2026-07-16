@@ -1,12 +1,19 @@
 /**
  * Historical trigger simulation ("would this have fired?") against CLOB
  * trade-price history. Deliberately narrow and honestly labeled: only
- * price + time_window conditions on a SINGLE market are simulatable from a
- * price series — books, liquidity, spread and freshness rules are not.
- * Everything is a hypothetical estimate; past prices don't predict future
- * prices.
+ * price + price_move + time_window conditions on a SINGLE market are
+ * simulatable from a price series — books, liquidity, spread and freshness
+ * rules are not. Everything is a hypothetical estimate; past prices don't
+ * predict future prices.
  */
-import type { ActionV2, ConditionV2, ExprNode, RecurrenceV2 } from "./types-v2.js";
+import { takerFeeUsd, type FeeSchedule } from "./fees.js";
+import type {
+  ActionV2,
+  ConditionV2,
+  ExprNode,
+  PriceMoveConditionV2,
+  RecurrenceV2,
+} from "./types-v2.js";
 
 export interface PricePoint {
   t: number; // unix seconds or ms
@@ -23,7 +30,12 @@ export interface BacktestTrigger {
 export type BacktestResult =
   | {
       supported: false;
-      reason: "unsupported_conditions" | "multi_market" | "no_price_conditions" | "no_data";
+      reason:
+        | "unsupported_conditions"
+        | "multi_market"
+        | "no_price_conditions"
+        | "no_data"
+        | "window_too_fine";
     }
   | {
       supported: true;
@@ -46,7 +58,8 @@ const analyse = (expr: ExprNode): Analysis => {
   let priceLeaves = 0;
   for (const c of leavesOf(expr)) {
     if (c.kind === "time_window") continue;
-    if (c.kind !== "price") return { ok: false, reason: "unsupported_conditions" };
+    if (c.kind !== "price" && c.kind !== "price_move")
+      return { ok: false, reason: "unsupported_conditions" };
     if (c.market.tokenId === "") return { ok: false, reason: "no_price_conditions" };
     tokenIds.add(c.market.tokenId);
     priceLeaves += 1;
@@ -64,12 +77,61 @@ export const backtestTokenId = (expr: ExprNode): string | null => {
 
 const toMs = (t: number): number => (t < 1e12 ? t * 1000 : t);
 
+/** Per-sample rolling movement for one price_move leaf (null = no coverage). */
+type MoveAt = (c: PriceMoveConditionV2, sampleIdx: number) => { drop: number; rise: number } | null;
+
+/**
+ * Precompute, for one price_move condition, the trailing-window drop/rise at
+ * every sample: two pointers + monotonic deques (O(n)). Coverage mirrors the
+ * live predicate: a carry-in sample at/before the window start is required.
+ */
+const rollingMoves = (
+  samples: readonly { t: number; p: number }[],
+  windowMs: number,
+): ({ drop: number; rise: number } | null)[] => {
+  const out: ({ drop: number; rise: number } | null)[] = new Array(samples.length).fill(null);
+  const maxDq: number[] = []; // indices, prices non-increasing
+  const minDq: number[] = []; // indices, prices non-decreasing
+  let head = 0; // first index inside the window
+  let carry: number | null = null; // price of the last sample at/before start
+
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i]!;
+    const start = s.t - windowMs;
+
+    while (maxDq.length > 0 && samples[maxDq[maxDq.length - 1]!]!.p <= s.p) maxDq.pop();
+    maxDq.push(i);
+    while (minDq.length > 0 && samples[minDq[minDq.length - 1]!]!.p >= s.p) minDq.pop();
+    minDq.push(i);
+
+    while (head <= i && samples[head]!.t <= start) {
+      carry = samples[head]!.p;
+      head++;
+    }
+    while (maxDq.length > 0 && maxDq[0]! < head) maxDq.shift();
+    while (minDq.length > 0 && minDq[0]! < head) minDq.shift();
+
+    if (carry === null) continue; // window not fully covered yet
+    const max = Math.max(carry, maxDq.length > 0 ? samples[maxDq[0]!]!.p : -Infinity);
+    const min = Math.min(carry, minDq.length > 0 ? samples[minDq[0]!]!.p : Infinity);
+    out[i] = { drop: max - s.p, rise: s.p - min };
+  }
+  return out;
+};
+
 /**
  * Evaluate the expression against one price sample. The trade price stands in
  * for both bid and ask (approximation — disclaimed in the UI); time_window
- * checks the sample's own timestamp.
+ * checks the sample's own timestamp; price_move reads the precomputed rolling
+ * window (no coverage → unsatisfied, matching the fail-closed live engine).
  */
-const sampleSatisfies = (node: ExprNode, price: number, tMs: number): boolean => {
+const sampleSatisfies = (
+  node: ExprNode,
+  price: number,
+  tMs: number,
+  sampleIdx: number,
+  moveAt: MoveAt,
+): boolean => {
   if (node.type === "condition") {
     const c = node.condition;
     if (c.kind === "time_window") {
@@ -78,16 +140,23 @@ const sampleSatisfies = (node: ExprNode, price: number, tMs: number): boolean =>
     if (c.kind === "price") {
       return c.comparator === "lte" ? price <= c.threshold : price >= c.threshold;
     }
+    if (c.kind === "price_move") {
+      const m = moveAt(c, sampleIdx);
+      if (m === null) return false;
+      const actual =
+        c.direction === "drop" ? m.drop : c.direction === "rise" ? m.rise : Math.max(m.drop, m.rise);
+      return actual >= c.deltaThreshold;
+    }
     return false; // unreachable for supported strategies (analyse() gates)
   }
   if (node.op === "not") {
     const child = node.children[0];
-    return child ? !sampleSatisfies(child, price, tMs) : false;
+    return child ? !sampleSatisfies(child, price, tMs, sampleIdx, moveAt) : false;
   }
   if (node.children.length === 0) return false;
   return node.op === "and"
-    ? node.children.every((c) => sampleSatisfies(c, price, tMs))
-    : node.children.some((c) => sampleSatisfies(c, price, tMs));
+    ? node.children.every((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt))
+    : node.children.some((c) => sampleSatisfies(c, price, tMs, sampleIdx, moveAt));
 };
 
 export const simulateTriggers = (opts: {
@@ -96,6 +165,12 @@ export const simulateTriggers = (opts: {
   recurrence: RecurrenceV2;
   action: ActionV2;
   series: readonly PricePoint[];
+  /**
+   * Market fee schedule: taker entries (FOK/FAK orders) pay the taker fee per
+   * hypothetical fill. Omitted/null = fees unknown and NOT modeled (the UI
+   * discloses this) — maker entries pay nothing either way.
+   */
+  feeSchedule?: FeeSchedule | null;
 }): BacktestResult => {
   const a = analyse(opts.expr);
   if (!a.ok) return { supported: false, reason: a.reason };
@@ -108,6 +183,20 @@ export const simulateTriggers = (opts: {
   const gaps = samples.slice(1).map((s, i) => s.t - samples[i]!.t);
   const medianGap = [...gaps].sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? 0;
   const maxBridgeMs = Math.max(medianGap * 4, 60_000);
+
+  // price_move honesty guard: a lookback finer than ~2 samples can't be
+  // simulated from this series' resolution — refuse rather than fake it.
+  const moveLeaves = leavesOf(opts.expr).filter(
+    (c): c is PriceMoveConditionV2 => c.kind === "price_move",
+  );
+  if (moveLeaves.some((c) => medianGap > c.windowMs / 2)) {
+    return { supported: false, reason: "window_too_fine" };
+  }
+  const movesByWindow = new Map<number, ({ drop: number; rise: number } | null)[]>();
+  for (const c of moveLeaves) {
+    if (!movesByWindow.has(c.windowMs)) movesByWindow.set(c.windowMs, rollingMoves(samples, c.windowMs));
+  }
+  const moveAt: MoveAt = (c, i) => movesByWindow.get(c.windowMs)?.[i] ?? null;
 
   const maxRepeats = opts.recurrence.kind === "repeat" ? opts.recurrence.maxRepeats : 1;
   const cooldownMs = opts.recurrence.kind === "repeat" ? opts.recurrence.cooldownMs : 0;
@@ -125,7 +214,7 @@ export const simulateTriggers = (opts: {
     const prev = samples[i - 1];
     if (prev && s.t - prev.t > maxBridgeMs) satisfiedSince = null;
 
-    if (!sampleSatisfies(opts.expr, s.p, s.t)) {
+    if (!sampleSatisfies(opts.expr, s.p, s.t, i, moveAt)) {
       satisfiedSince = null;
       continue;
     }
@@ -142,9 +231,12 @@ export const simulateTriggers = (opts: {
 
   // Mark each hypothetical entry to the series' final price. Orders enter at
   // the limit price with the order's share size; alert strategies model a
-  // $100 buy at the trigger-time price.
+  // $100 buy at the trigger-time price. Taker-style orders (FOK/FAK) also pay
+  // the market's taker fee per entry when the schedule is known.
   let pnl = 0;
   const action = opts.action;
+  const takerEntry =
+    action.kind === "order" && (action.orderType === "FOK" || action.orderType === "FAK");
   for (const trig of triggers) {
     let entry: number;
     let shares: number;
@@ -159,6 +251,7 @@ export const simulateTriggers = (opts: {
       side = "BUY";
     }
     pnl += side === "BUY" ? (finalPrice - entry) * shares : (entry - finalPrice) * shares;
+    if (takerEntry && opts.feeSchedule) pnl -= takerFeeUsd(shares, entry, opts.feeSchedule);
   }
 
   return {

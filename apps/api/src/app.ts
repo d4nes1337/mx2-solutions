@@ -15,6 +15,7 @@ import type {
   TradingAccountClobCredentialStore,
   OrderIntentStore,
   RuntimeFlagStore,
+  QuoterStore,
   RuleStore,
   TriggerStore,
   PrivyWalletStore,
@@ -43,6 +44,7 @@ import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
 import { registerShowcasesRoutes } from "./routes/showcases.js";
+import { registerQuoterRoutes } from "./routes/quoter.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import type { AiClient } from "./ai/client.js";
 import type {} from "./auth/types.js";
@@ -69,6 +71,8 @@ export interface AppDeps {
   runtimeFlags: RuntimeFlagStore;
   ruleStore: RuleStore;
   triggerStore: TriggerStore;
+  /** Maker-loop session store; omitted only in tests that never touch quoter routes. */
+  quoterStore?: QuoterStore;
   privyWallets: PrivyWalletStore;
   delegations: DelegationStore;
   gammaClient: GammaClient;
@@ -246,6 +250,17 @@ export const buildApp = (deps: AppDeps) => {
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
   });
+  if (deps.quoterStore) {
+    registerQuoterRoutes(fastifyApp, {
+      config: deps.config,
+      sessions: deps.sessions,
+      ruleStore: deps.ruleStore,
+      quoterStore: deps.quoterStore,
+      auditStore: deps.auditStore,
+      gammaClient: deps.gammaClient,
+      clobClient: deps.clobClient,
+    });
+  }
   registerAiRoutes(fastifyApp, {
     config: deps.config,
     auditStore: deps.auditStore,

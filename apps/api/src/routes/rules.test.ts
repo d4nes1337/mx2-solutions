@@ -336,6 +336,10 @@ const buildRulesApp = (opts: {
     getPrices: async () => err(upstreamErr),
     getLastTradePrice: async () => err(upstreamErr),
     getPricesHistory: async () => err(upstreamErr),
+    getClobMarket: async () => err(upstreamErr),
+    getFeeRate: async () => err(upstreamErr),
+    getRewardsMarket: async () => err(upstreamErr),
+    getRewardsMarketsCurrent: async () => err(upstreamErr),
   };
   const data: DataClient = {
     getPositions: async () => ok([]),

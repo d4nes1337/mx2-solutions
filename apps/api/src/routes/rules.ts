@@ -137,10 +137,22 @@ const evaluateAgainstSnapshot = (
  * Order parameters the user is asked to confirm + sign (mirrors trade preview).
  * Works on the normalized v2 shape so v1 and v2 triggers share one confirm flow;
  * returns null for actions with nothing to sign (alert / stop_strategy).
+ *
+ * GTD entry windows anchor to the TRIGGER time: wire expiration =
+ * triggeredAtMs + expiresAfterMs + 60s (Polymarket expires GTD orders ~1 min
+ * before the stated timestamp — ADR-0013). null expiration = "0" (no expiry).
  */
-const buildOrderPreview = (def: StrategyDefinition, config: AppConfig) => {
+const buildOrderPreview = (
+  def: StrategyDefinition,
+  config: AppConfig,
+  triggeredAtMs?: number,
+) => {
   if (def.action.kind !== "order") return null;
-  const { market, side, price, size, orderType, execution } = def.action;
+  const { market, side, price, size, orderType, postOnly, expiresAfterMs, execution } = def.action;
+  const expiration =
+    orderType === "GTD" && expiresAfterMs !== undefined
+      ? Math.floor(((triggeredAtMs ?? Date.now()) + expiresAfterMs + 60_000) / 1000).toString()
+      : null;
   return {
     tokenId: market.tokenId,
     conditionId: market.conditionId,
@@ -148,6 +160,8 @@ const buildOrderPreview = (def: StrategyDefinition, config: AppConfig) => {
     price: String(price),
     size: String(size),
     orderType,
+    postOnly: postOnly ?? false,
+    expiration,
     maxSpend: (price * size).toFixed(6),
     builderCode: config.polymarket.builderCode ?? null,
     signatureType: config.features.privySigning ? 0 : 2,
@@ -364,7 +378,11 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         root: evaluation.root,
         staleTokenIds: evaluation.staleTokenIds,
       },
-      preview: buildOrderPreview(def, deps.config),
+      preview: buildOrderPreview(
+        def,
+        deps.config,
+        (trigger.evidence as { triggeredAtMs?: number } | null)?.triggeredAtMs,
+      ),
       warning: deps.config.features.liveTrading
         ? "Live trading is ENABLED. Submitting this order will use real funds."
         : "Live trading is DISABLED. This preview is for demonstration only.",

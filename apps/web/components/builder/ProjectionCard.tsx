@@ -17,7 +17,7 @@ import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection
 import { backtestTokenId, simulateTriggers } from "@mx2/rules";
 import { marketLabel } from "@/lib/smart-orders/doc";
 import { cents, signedUsd, usd } from "@/lib/format";
-import { useTokenPricesHistory } from "@/lib/queries";
+import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
 import type { DraftEvaluation } from "@/lib/smart-orders/queries";
 
@@ -43,7 +43,18 @@ export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | u
   const btTokenId = backtestTokenId(doc.expr);
   const history = useTokenPricesHistory(btTokenId);
 
-  const payoff = useMemo(() => (input ? computePayoff(input) : null), [input]);
+  // Taker entries need the market's fee schedule for honest numbers.
+  const orderConditionId =
+    doc.action.kind === "order" && input?.takerEntry ? doc.action.market.conditionId : "";
+  const economics = useMarketEconomics(orderConditionId);
+
+  const payoff = useMemo(
+    () =>
+      input
+        ? computePayoff({ ...input, feeSchedule: economics.data?.feeSchedule ?? null })
+        : null,
+    [input, economics.data],
+  );
 
   // The 30-day backtest is the expensive part — keyed on the strategy fields
   // it reads so drops/selection (which only change doc identity) skip it.
@@ -94,6 +105,9 @@ export function ProjectionCard({ evaluation }: { evaluation: DraftEvaluation | u
       </div>
 
       <Row label={stakeLabel}>{usd(payoff.costUsd)}</Row>
+      {payoff.entryFeeUsd > 0 ? (
+        <Row label="Taker fee at entry">−{usd(payoff.entryFeeUsd)}</Row>
+      ) : null}
       <Row label="Shares">{payoff.shares.toFixed(0)}</Row>
       <Row label="Breakeven price">{cents(payoff.breakevenPrice)}</Row>
       {payoff.markToMarketUsd !== null ? (

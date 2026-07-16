@@ -120,6 +120,24 @@ const EnvSchema = z.object({
   // Open beta: auto-allowlist every wallet that completes EIP-712 sign-in.
   // Allowlist table stays the source of truth (per-wallet revocation intact).
   FEATURE_OPEN_BETA: boolFromEnv(false),
+
+  // Maker loop (RFC-0003): quote_loop creation + SHADOW quoting + cockpit UI.
+  // Places no orders and moves no funds by itself.
+  FEATURE_MAKER_LOOP: boolFromEnv(false),
+  // Live maker-loop execution (orders + merges). Fail-closed cross-checked
+  // below; additionally requires the verified CTF adapter addresses.
+  FEATURE_MAKER_LOOP_LIVE: boolFromEnv(false),
+  // CTF collateral-adapter addresses (standard + negRisk). NO defaults — the
+  // official docs and the ctf-exchange-v2 README disagree (R-028), so these
+  // must come from on-chain verification (apps/api verify-ctf-adapters).
+  CTF_ADAPTER_ADDRESS: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/)
+    .optional(),
+  NEG_RISK_CTF_ADAPTER_ADDRESS: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/)
+    .optional(),
 });
 
 export type AppConfig = {
@@ -168,6 +186,10 @@ export type AppConfig = {
     sessionSignerTtlSeconds: number;
     orderRateLimitPerMin: number;
   };
+  ctf: {
+    adapterAddress: string | undefined;
+    negRiskAdapterAddress: string | undefined;
+  };
   features: {
     liveTrading: boolean;
     conditionalRules: boolean;
@@ -177,6 +199,8 @@ export type AppConfig = {
     privySigning: boolean;
     aiChat: boolean;
     openBeta: boolean;
+    makerLoop: boolean;
+    makerLoopLive: boolean;
   };
 };
 
@@ -243,6 +267,25 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     throw new ConfigError("FEATURE_AI_CHAT=true requires ANTHROPIC_API_KEY.");
   }
 
+  // Fail-closed ladder for the maker loop (RFC-0003): live quoting requires
+  // every underlying capability plus the ON-CHAIN-VERIFIED adapter addresses.
+  if (e.FEATURE_MAKER_LOOP_LIVE) {
+    if (
+      !e.FEATURE_MAKER_LOOP ||
+      !e.FEATURE_LIVE_TRADING ||
+      !e.FEATURE_PRIVY_SIGNING ||
+      !e.FEATURE_RELAYER ||
+      !e.CTF_ADAPTER_ADDRESS ||
+      !e.NEG_RISK_CTF_ADAPTER_ADDRESS
+    ) {
+      throw new ConfigError(
+        "FEATURE_MAKER_LOOP_LIVE=true requires FEATURE_MAKER_LOOP, FEATURE_LIVE_TRADING, " +
+          "FEATURE_PRIVY_SIGNING, FEATURE_RELAYER, and the verified CTF_ADAPTER_ADDRESS + " +
+          "NEG_RISK_CTF_ADAPTER_ADDRESS (run verify-ctf-adapters first — R-028).",
+      );
+    }
+  }
+
   return {
     env: e.APP_ENV,
     baseUrl: e.APP_BASE_URL,
@@ -290,6 +333,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       sessionSignerTtlSeconds: e.SESSION_SIGNER_TTL_SECONDS,
       orderRateLimitPerMin: e.ORDER_RATE_LIMIT_PER_MIN,
     },
+    ctf: {
+      adapterAddress: e.CTF_ADAPTER_ADDRESS,
+      negRiskAdapterAddress: e.NEG_RISK_CTF_ADAPTER_ADDRESS,
+    },
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
       conditionalRules: e.FEATURE_CONDITIONAL_RULES,
@@ -299,6 +346,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       privySigning: e.FEATURE_PRIVY_SIGNING,
       aiChat: e.FEATURE_AI_CHAT,
       openBeta: e.FEATURE_OPEN_BETA,
+      makerLoop: e.FEATURE_MAKER_LOOP,
+      makerLoopLive: e.FEATURE_MAKER_LOOP_LIVE,
     },
   };
 };

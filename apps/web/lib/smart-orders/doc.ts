@@ -45,6 +45,11 @@ export interface StrategyDoc {
   positions: Record<string, NodePosition>;
   selectedNodeId: string | null;
   marketMeta: Record<string, MarketMeta>;
+  /**
+   * Markets added to the canvas (toolbar search) that no condition references
+   * yet — they render as market nodes so conditions can be bound to them.
+   */
+  watchedMarkets: MarketRef[];
 }
 
 /** Placeholder for a condition the user hasn't bound to a market yet. */
@@ -65,6 +70,7 @@ export const emptyDoc = (): StrategyDoc => ({
   positions: {},
   selectedNodeId: null,
   marketMeta: {},
+  watchedMarkets: [],
 });
 
 // ── Pure tree helpers ────────────────────────────────────────────────────────
@@ -147,7 +153,10 @@ export const conditionLeavesOf = (
   return walk(node, false);
 };
 
-/** Every distinct market the doc references (conditions + order action). */
+/**
+ * Every distinct market the doc references (conditions + order action), plus
+ * canvas-watched markets nothing references yet.
+ */
 export const docMarketRefs = (doc: StrategyDoc): MarketRef[] => {
   const seen = new Map<string, MarketRef>();
   for (const { condition } of conditionLeavesOf(doc.expr)) {
@@ -158,7 +167,18 @@ export const docMarketRefs = (doc: StrategyDoc): MarketRef[] => {
   if (doc.action.kind === "order" && isBound(doc.action.market)) {
     seen.set(doc.action.market.tokenId, doc.action.market);
   }
+  for (const ref of doc.watchedMarkets) {
+    if (!seen.has(ref.tokenId)) seen.set(ref.tokenId, ref);
+  }
   return [...seen.values()];
+};
+
+/** True when a condition or the order action references this token. */
+export const isTokenReferenced = (doc: StrategyDoc, tokenId: string): boolean => {
+  for (const { condition } of conditionLeavesOf(doc.expr)) {
+    if (condition.kind !== "time_window" && condition.market.tokenId === tokenId) return true;
+  }
+  return doc.action.kind === "order" && doc.action.market.tokenId === tokenId;
 };
 
 /** Short display label for a market reference. */
@@ -190,6 +210,7 @@ export const docFromDefinition = (def: StrategyDefinition): StrategyDoc => ({
   positions: {},
   selectedNodeId: null,
   marketMeta: {},
+  watchedMarkets: [],
 });
 
 export type StrategyDefinitionInput = Omit<StrategyDefinition, "version">;

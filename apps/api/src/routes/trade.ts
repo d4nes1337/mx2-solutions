@@ -337,8 +337,11 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       const price = typeof body["price"] === "string" ? body["price"] : null;
       const size = typeof body["size"] === "string" ? body["size"] : null;
       const orderType = (
-        ["GTC", "GTD", "FOK"].includes(body["orderType"] as string) ? body["orderType"] : "GTC"
-      ) as "GTC" | "GTD" | "FOK";
+        ["GTC", "GTD", "FOK", "FAK"].includes(body["orderType"] as string)
+          ? body["orderType"]
+          : "GTC"
+      ) as "GTC" | "GTD" | "FOK" | "FAK";
+      const postOnly = body["postOnly"] === true;
 
       if (!idempotencyKey || !conditionId || !price || !size) {
         reply.code(400);
@@ -480,6 +483,7 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         creds,
         clobAddress,
         idempotencyKey,
+        { postOnly },
       );
 
       if (!submitResult.ok) {

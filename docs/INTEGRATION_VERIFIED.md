@@ -265,3 +265,85 @@ Modeled in `packages/polymarket-client/src/data/` (`MarketTradeSchema`,
 `MarketHoldersGroupSchema`) and exposed via `GET /api/markets/:id/trades` and
 `GET /api/markets/:id/holders` (public, rate-limited). First prod deploy should confirm
 live shapes once; schemas tolerate unknown/missing optional fields.
+
+## 16. Fee Structure V2 (verified 2026-07-15 against official docs + live API)
+
+Source: docs.polymarket.com/trading/fees.
+
+- **Taker-only fees on most categories since 2026-03-30** (the rollout began 2026-01-05
+  on 15-minute crypto markets). **Makers NEVER pay** — a resting order that gets filled
+  is charged nothing; only the crossing (taker) side pays.
+- **Formula:** `fee = shares × rate × (p(1−p))^exponent` — fees peak at p = 0.50 and
+  vanish toward the extremes.
+- **Published per-category rates:** crypto **0.07**, sports **0.05** (raised from 0.03
+  on 2026-07-10), finance/politics/mentions/tech **0.04**,
+  economics/culture/weather/other **0.05**, geopolitics **0**.
+- **Verified LIVE** via our `GET /api/markets/:conditionId/economics` (ADR-0013): a
+  crypto market returned rate 0.07 and a sports market 0.05.
+
+## 17. Fee discovery endpoints (verified 2026-07-15 against official docs + live API)
+
+- **Authoritative per-market schedule:** CLOB `GET /clob-markets/{condition_id}` →
+  `fd = { r, e, to }` (rate, exponent, takerOnly).
+- **Per-token base rate:** CLOB `GET /fee-rate?token_id=<id>` → `{ base_fee }` in bps.
+- **Gamma fallback:** `feesEnabled`, `feeType`,
+  `feeSchedule{ rate, exponent, takerOnly, rebateRate }` on market objects.
+- **Trap:** Gamma's legacy `makerBaseFee`/`takerBaseFee` fields read **1000** and are
+  **NOT usable for cost math** — the fee engine ignores them (ADR-0013). When neither
+  CLOB `fd` nor Gamma `feeSchedule` resolves, the fee is `null` and displayed as
+  unknown, never zero.
+
+## 18. Maker Rebates Program (verified 2026-07-15 against official docs)
+
+- A **daily redistribution of `rebateRate` (15–25%) of collected taker fees**, paid
+  pro-rata to executed **maker volume** on that market.
+- **Distinct from Liquidity Rewards** (§19): rebates pay for being filled as a maker;
+  liquidity rewards pay for resting quotes near the midpoint whether or not they fill.
+
+## 19. Liquidity Rewards (verified 2026-07-15 against official docs + live API)
+
+- **Scoring:** minutely sampling of resting orders; a **quadratic midpoint-proximity
+  score**; two-sided quoting favored — a single-sided quoter gets **1/3 weight** when
+  mid ∈ [0.10, 0.90] and **zero outside** that band. A **NO bid counts as a YES ask**
+  (complementary-side equivalence, §22). Daily USDC payout with a **$1/day minimum**
+  (accruals below it pay nothing).
+- **Per-market configs are READABLE:** CLOB `GET /rewards/markets/current` and
+  `GET /rewards/markets/{condition_id}` return `rewards_config[].rate_per_day` etc.;
+  authenticated `GET /rewards/user/*` returns the user's accruals.
+- **Verified live:** a geopolitics market returned `rewards_min_size` 50,
+  `rewards_max_spread` 4.5, `rate_per_day` 20. Consumed by
+  `GET /api/markets/:conditionId/economics` and the MakerEstimator (resolves A-050).
+
+## 20. CLOB order types & flags (verified 2026-07-15 against official docs)
+
+- **Order types:** `GTC`, `GTD`, `FOK`, `FAK`.
+- **GTD trap:** orders expire **~1 minute BEFORE the stated timestamp**, and the
+  effective minimum lifetime is **≈ 3 minutes**. Our GTD entry windows therefore wire
+  `expiration = trigger + window + 60 s` and validation floors the window at 180 s —
+  sub-3-minute windows must use FAK (ADR-0013).
+- **`POST /order` flags:** `postOnly` (GTC/GTD only — rejects instead of crossing) and
+  `deferExec`.
+
+## 21. CTF merge via the builder relayer (verified 2026-07-15; adapter addresses UNRESOLVED)
+
+- **Merge:** burning equal YES + NO amounts through the **adapter contracts** returns
+  collateral (USDC). Gasless through the builder relayer:
+  `relayer-v2.polymarket.com` via `@polymarket/builder-relayer-client`
+  `execute({ to, data, value }[])` batches.
+- **🔴 CRITICAL DISCREPANCY:** the official docs contracts page and the
+  `ctf-exchange-v2` README **disagree on the adapter addresses**. The addresses are
+  therefore **config-required with NO defaults** (`CTF_ADAPTER_ADDRESS`,
+  `NEG_RISK_CTF_ADAPTER_ADDRESS`); a read-only verification script exists at
+  `apps/api/src/scripts/verify-ctf-adapters.ts` (`getCode` + a simulated merge) and
+  **MUST pass before `FEATURE_MAKER_LOOP_LIVE`** — config refuses to boot without the
+  addresses (R-028, RFC-0003 checkpoint 2).
+
+## 22. Two-sided quoting equivalence (verified 2026-07-15 against official docs)
+
+- Bidding YES @ `p` and NO @ `q` with `p + q < 1` **IS two-sided quoting**: the unified
+  book crosses complementary orders via MINT/MERGE, so a NO bid is functionally a YES
+  ask at `1 − q`.
+- The official market-making docs teach split/merge as **inventory management**;
+  wash-trading rules target **self-dealing**, not two-sided quoting on complementary
+  outcomes. This is the basis of the maker loop's delta-neutral quote shape
+  (ADR-0014, RFC-0003 §1).

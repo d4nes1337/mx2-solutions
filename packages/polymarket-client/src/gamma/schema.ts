@@ -52,8 +52,23 @@ export const GammaMarketSchema = z
     outcomePrices: z.string().default("[]"),
     clobTokenIds: z.string().default("[]"),
     neg_risk: z.boolean().default(false).optional(),
+    // LEGACY caps — read 1000 even where the real taker curve peaks ~1%.
+    // Never use for cost math; the fee source of truth is feeSchedule / CLOB fd.
     maker_base_fee: z.number().default(0).optional(),
     taker_base_fee: z.number().default(0).optional(),
+    // Fee Structure V2 (verified live 2026-07-15): taker-only fee curve
+    // fee = shares · rate · (p(1−p))^exponent, plus the maker-rebate share.
+    feesEnabled: z.boolean().nullish(),
+    feeType: z.string().nullish(),
+    feeSchedule: z
+      .object({
+        rate: z.coerce.number(),
+        exponent: z.coerce.number().default(1),
+        takerOnly: z.boolean().default(true),
+        rebateRate: z.coerce.number().nullish(),
+      })
+      .passthrough()
+      .nullish(),
     // Maker-rewards program parameters (verified live 2026-07-09, A-050):
     // minimum resting size and max distance from mid (in cents) to qualify.
     rewardsMinSize: z.number().nullish(),

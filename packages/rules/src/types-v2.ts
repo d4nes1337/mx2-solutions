@@ -73,12 +73,29 @@ export interface TimeWindowConditionV2 {
   readonly endMs: number | null;
 }
 
+/**
+ * Momentum: the price moved by ≥ deltaThreshold within the trailing windowMs
+ * (drop = from the window's max down to now; rise = from the min up to now).
+ * Fail-closed: without full window coverage in the host-attached priceHistory
+ * the condition is unsatisfied AND stale (so NOT can't exploit missing data).
+ */
+export interface PriceMoveConditionV2 {
+  readonly kind: "price_move";
+  readonly market: MarketRef;
+  readonly direction: "drop" | "rise" | "either";
+  /** Move size in probability units (0.05 = 5¢). */
+  readonly deltaThreshold: number;
+  /** Trailing lookback, ms. Validated to [60s, 1h] (worker window bound). */
+  readonly windowMs: number;
+}
+
 export type ConditionV2 =
   | PriceConditionV2
   | SpreadConditionV2
   | CumulativeNotionalConditionV2
   | VisibleLevelsConditionV2
-  | TimeWindowConditionV2;
+  | TimeWindowConditionV2
+  | PriceMoveConditionV2;
 
 // ── Expression tree ─────────────────────────────────────────────────────────
 
@@ -114,9 +131,18 @@ export interface AlertAction {
 }
 
 /**
- * Place a limit order. execution "prepare" = trigger awaits the user's
- * signature (v1 manual flow); "auto" = the worker signs + submits from the
- * user's trading wallet (requires per-strategy limits + feature gates).
+ * Place an order when the strategy triggers. execution "prepare" = trigger
+ * awaits the user's signature (v1 manual flow); "auto" = the worker signs +
+ * submits from the user's trading wallet (requires per-strategy limits +
+ * feature gates).
+ *
+ * Execution styles (all CLOB orders are limit orders; ADR-0013):
+ * - GTC: rest until cancelled (maker path; postOnly optionally enforces it).
+ * - GTD: rest until an expiration — expiresAfterMs is the ENTRY WINDOW after
+ *   the trigger (wire expiration compensates Polymarket's ~1-min early expiry;
+ *   upstream floor ≈3 min, validated).
+ * - FOK/FAK: immediate taker execution at up to the stated price (all-or-none /
+ *   partial). Pays the market's taker fee where fees are enabled.
  */
 export interface OrderActionV2 {
   readonly kind: "order";
@@ -124,7 +150,11 @@ export interface OrderActionV2 {
   readonly side: Side;
   readonly price: number;
   readonly size: number;
-  readonly orderType: "GTC";
+  readonly orderType: "GTC" | "GTD" | "FOK" | "FAK";
+  /** Resting-only (GTC/GTD): the CLOB rejects the order if it would cross. */
+  readonly postOnly?: boolean;
+  /** GTD only: expiration = trigger time + expiresAfterMs (the entry window). */
+  readonly expiresAfterMs?: number;
   readonly execution: "prepare" | "auto";
   readonly negRisk?: boolean;
   readonly tickSize?: TickSize;
@@ -136,7 +166,41 @@ export interface StopStrategyAction {
   readonly targetStrategyId: string;
 }
 
-export type ActionV2 = AlertAction | OrderActionV2 | StopStrategyAction;
+/**
+ * Delta-neutral maker loop (RFC-0003, ADR-0014): rest post-only bids on BOTH
+ * outcome tokens near mid (a NO bid is a YES ask in the unified book), merge
+ * completed YES+NO pairs back to collateral via the relayer, re-quote as the
+ * mid drifts. The expression tree acts as an optional GATE — quotes rest only
+ * while it holds (empty tree = always on); the trigger state machine does not
+ * apply. Runs ONLY under FEATURE_MAKER_LOOP, shadow-mode first; the worker
+ * routes these rows to the QuoterManager, never the rule evaluator.
+ */
+export interface QuoteLoopAction {
+  readonly kind: "quote_loop";
+  readonly market: {
+    readonly conditionId: string;
+    readonly yesTokenId: string;
+    readonly noTokenId: string;
+    /** Display-only. */
+    readonly title?: string;
+    readonly negRisk?: boolean;
+    readonly tickSize?: TickSize;
+  };
+  /** Resting size per side, shares (≥ the market's rewards_min_size to earn). */
+  readonly sizeShares: number;
+  /** Half-spread from mid for each quote, cents (≤ rewards_max_spread to earn). */
+  readonly targetSpreadCents: number;
+  /** Re-quote when the mid drifts beyond this many cents from the quoted mid. */
+  readonly requoteToleranceCents: number;
+  /** Halt when |YES − NO| inventory exceeds this many shares (one-sided fills). */
+  readonly maxInventoryShares: number;
+  /** Halt when resting quotes + held inventory would commit more than this. */
+  readonly maxCapitalUsd: number;
+  /** Halt (terminal until user resume) when realized daily loss exceeds this. */
+  readonly maxDailyLossUsd: number;
+}
+
+export type ActionV2 = AlertAction | OrderActionV2 | StopStrategyAction | QuoteLoopAction;
 
 // ── Recurrence and limits ───────────────────────────────────────────────────
 

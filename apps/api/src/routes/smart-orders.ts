@@ -84,6 +84,13 @@ const ConditionSchema = z.discriminatedUnion("kind", [
     startMs: z.number().int().nullable(),
     endMs: z.number().int().nullable(),
   }),
+  z.object({
+    kind: z.literal("price_move"),
+    market: MarketRefSchema,
+    direction: z.enum(["drop", "rise", "either"]),
+    deltaThreshold: z.number().gt(0).lt(1),
+    windowMs: z.number().int().min(60_000).max(3_600_000),
+  }),
 ]);
 
 const ExprNodeSchema: z.ZodType<ExprNode> = z.lazy(() =>
@@ -110,12 +117,36 @@ const ActionSchema = z.discriminatedUnion("kind", [
     side: z.enum(["BUY", "SELL"]),
     price: z.number().gt(0).lt(1),
     size: z.number().positive(),
-    orderType: z.literal("GTC"),
+    orderType: z.enum(["GTC", "GTD", "FOK", "FAK"]),
+    postOnly: z.boolean().optional(),
+    expiresAfterMs: z
+      .number()
+      .int()
+      .min(180_000)
+      .max(86_400_000)
+      .optional(),
     execution: z.enum(["prepare", "auto"]),
     negRisk: z.boolean().optional(),
     tickSize: z.enum(["0.1", "0.01", "0.001", "0.0001"]).optional(),
   }),
   z.object({ kind: z.literal("stop_strategy"), targetStrategyId: z.string().uuid() }),
+  z.object({
+    kind: z.literal("quote_loop"),
+    market: z.object({
+      conditionId: z.string().min(1),
+      yesTokenId: z.string().min(1),
+      noTokenId: z.string().min(1),
+      title: z.string().max(200).optional(),
+      negRisk: z.boolean().optional(),
+      tickSize: z.enum(["0.1", "0.01", "0.001", "0.0001"]).optional(),
+    }),
+    sizeShares: z.number().positive(),
+    targetSpreadCents: z.number().gt(0).max(10),
+    requoteToleranceCents: z.number().gt(0).max(10),
+    maxInventoryShares: z.number().positive(),
+    maxCapitalUsd: z.number().positive(),
+    maxDailyLossUsd: z.number().positive(),
+  }),
 ]);
 
 const RecurrenceSchema = z.union([
@@ -194,27 +225,57 @@ const snapshotToView = (row: MarketSnapshotRow): MarketDataView => {
   };
 };
 
+/** Tokens read by price_move leaves — they need priceHistory attached. */
+const priceMoveTokens = (def: StrategyDefinition): ReadonlySet<string> => {
+  const tokens = new Set<string>();
+  for (const { condition } of conditionLeaves(def.expr)) {
+    if (condition.kind === "price_move" && condition.market.tokenId !== "") {
+      tokens.add(condition.market.tokenId);
+    }
+  }
+  return tokens;
+};
+
 /**
  * Load a view per token: worker snapshot first, live CLOB REST as fallback
  * (mirrors /api/markets/:id/orderbook). Tokens that fail both stay absent —
- * the evaluator treats them as stale (fail-closed).
+ * the evaluator treats them as stale (fail-closed). Tokens in `historyTokens`
+ * additionally get a 1-min-fidelity trailing price series attached so
+ * price_move drafts evaluate honestly (coarser than the worker's live window;
+ * disclosed in the builder copy).
  */
 const loadViews = async (
   deps: SmartOrdersRoutesDeps,
   tokenIds: readonly string[],
   nowMs: number,
+  historyTokens?: ReadonlySet<string>,
 ): Promise<ViewsByToken> => {
   const views: Record<string, MarketDataView> = {};
   await Promise.all(
     tokenIds.map(async (tokenId) => {
-      const snapshot = await deps.marketSnapshots.findByTokenId(tokenId);
+      const [snapshot, history] = await Promise.all([
+        deps.marketSnapshots.findByTokenId(tokenId),
+        historyTokens?.has(tokenId)
+          ? deps.clobClient.getPricesHistory({ tokenId, interval: "1d", fidelity: 1 })
+          : Promise.resolve(null),
+      ]);
+      const priceHistory =
+        history !== null && history.ok
+          ? history.value
+              .map((s) => ({ t: s.t < 1e12 ? s.t * 1000 : s.t, p: s.p }))
+              .sort((a, b) => a.t - b.t)
+          : undefined;
+      const withHistory = (v: MarketDataView): MarketDataView =>
+        priceHistory && priceHistory.length > 0 ? { ...v, priceHistory } : v;
+
+      const snapshotView = snapshot !== null ? withHistory(snapshotToView(snapshot)) : null;
       if (snapshot !== null && !snapshot.isStale) {
-        views[tokenId] = snapshotToView(snapshot);
+        views[tokenId] = snapshotView!;
         return;
       }
       const ob = await deps.clobClient.getOrderbook(tokenId);
       if (ob.ok) {
-        views[tokenId] = {
+        views[tokenId] = withHistory({
           tokenId,
           conditionId: "",
           bids: toLevels(ob.value.bids, "bid"),
@@ -222,9 +283,9 @@ const loadViews = async (
           marketStatus: "open",
           sourceTimeMs: nowMs,
           receivedAtMs: nowMs,
-        };
-      } else if (snapshot !== null) {
-        views[tokenId] = snapshotToView(snapshot); // stale — evaluator flags it
+        });
+      } else if (snapshotView !== null) {
+        views[tokenId] = snapshotView; // stale — evaluator flags it
       }
     }),
   );
@@ -282,6 +343,15 @@ export const registerSmartOrdersRoutes = (
     }
     const b = parsed.data;
     const expiresAtMs = b.expiresAt ? new Date(b.expiresAt).getTime() : null;
+    // Maker loops are separately feature-gated (RFC-0003) on top of the
+    // smart-orders flags this route already requires.
+    if (b.action.kind === "quote_loop" && !deps.config.features.makerLoop) {
+      reply.code(503);
+      return {
+        error: "MAKER_LOOP_DISABLED",
+        message: "Maker loops are not enabled on this server.",
+      };
+    }
     // Rebuild the action without explicit-undefined optionals (exactOptionalPropertyTypes).
     const action =
       b.action.kind === "order"
@@ -293,10 +363,36 @@ export const registerSmartOrdersRoutes = (
             size: b.action.size,
             orderType: b.action.orderType,
             execution: b.action.execution,
+            ...(b.action.postOnly !== undefined ? { postOnly: b.action.postOnly } : {}),
+            ...(b.action.expiresAfterMs !== undefined
+              ? { expiresAfterMs: b.action.expiresAfterMs }
+              : {}),
             ...(b.action.negRisk !== undefined ? { negRisk: b.action.negRisk } : {}),
             ...(b.action.tickSize !== undefined ? { tickSize: b.action.tickSize } : {}),
           }
-        : b.action;
+        : b.action.kind === "quote_loop"
+          ? {
+              kind: "quote_loop" as const,
+              market: {
+                conditionId: b.action.market.conditionId,
+                yesTokenId: b.action.market.yesTokenId,
+                noTokenId: b.action.market.noTokenId,
+                ...(b.action.market.title !== undefined ? { title: b.action.market.title } : {}),
+                ...(b.action.market.negRisk !== undefined
+                  ? { negRisk: b.action.market.negRisk }
+                  : {}),
+                ...(b.action.market.tickSize !== undefined
+                  ? { tickSize: b.action.market.tickSize }
+                  : {}),
+              },
+              sizeShares: b.action.sizeShares,
+              targetSpreadCents: b.action.targetSpreadCents,
+              requoteToleranceCents: b.action.requoteToleranceCents,
+              maxInventoryShares: b.action.maxInventoryShares,
+              maxCapitalUsd: b.action.maxCapitalUsd,
+              maxDailyLossUsd: b.action.maxDailyLossUsd,
+            }
+          : b.action;
     const definition: StrategyDefinition = {
       version: 2,
       name: b.name,
@@ -326,6 +422,10 @@ export const registerSmartOrdersRoutes = (
     }
     if (definition.action.kind === "order")
       refs.set(definition.action.market.tokenId, definition.action.market.conditionId);
+    if (definition.action.kind === "quote_loop") {
+      refs.set(definition.action.market.yesTokenId, definition.action.market.conditionId);
+      refs.set(definition.action.market.noTokenId, definition.action.market.conditionId);
+    }
     for (const [tokenId, conditionId] of refs) {
       const found = await deps.gammaClient.findMarket({ tokenId });
       if (!found.ok) {
@@ -345,13 +445,18 @@ export const registerSmartOrdersRoutes = (
     const primary =
       definition.action.kind === "order"
         ? definition.action.market
-        : (
-            conditionLeaves(definition.expr)
-              .map((l) => l.condition)
-              .find((c) => c.kind !== "time_window") as
-              | { market?: { conditionId: string; tokenId: string } }
-              | undefined
-          )?.market;
+        : definition.action.kind === "quote_loop"
+          ? {
+              conditionId: definition.action.market.conditionId,
+              tokenId: definition.action.market.yesTokenId,
+            }
+          : (
+              conditionLeaves(definition.expr)
+                .map((l) => l.condition)
+                .find((c) => c.kind !== "time_window") as
+                | { market?: { conditionId: string; tokenId: string } }
+                | undefined
+            )?.market;
     if (!primary) {
       reply.code(400);
       return { error: "INVALID_STRATEGY", message: "Strategy must reference at least one market." };
@@ -488,7 +593,7 @@ export const registerSmartOrdersRoutes = (
     const def = normalizeDefinition(row.definition as RuleDefinition | StrategyDefinition);
     const tokens = referencedTokenIds(def);
     const nowMs = Date.now();
-    const views = await loadViews(deps, tokens, nowMs);
+    const views = await loadViews(deps, tokens, nowMs, priceMoveTokens(def));
     const evaluation = evaluateExpression(def, views, nowMs);
     return {
       strategyId: row.id,
@@ -542,7 +647,7 @@ export const registerSmartOrdersRoutes = (
 
       const tokens = referencedTokenIds(draftDef);
       const nowMs = Date.now();
-      const views = await loadViews(deps, tokens, nowMs);
+      const views = await loadViews(deps, tokens, nowMs, priceMoveTokens(draftDef));
       const evaluation = evaluateExpression(draftDef, views, nowMs);
       return {
         satisfied: evaluation.satisfied,

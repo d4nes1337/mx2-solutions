@@ -6,6 +6,7 @@ import { LogoMark } from "@/components/brand/LogoMark";
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
 import { AccountMenu } from "@/components/AccountMenu";
 import { HelpButton } from "@/components/onboarding/HelpButton";
+import { useFeatureFlags } from "@/lib/queries";
 import { cn } from "./ui";
 
 const NAV = [
@@ -14,6 +15,8 @@ const NAV = [
   { href: "/smart-orders", label: "Smart Orders", tour: "nav-smart-orders" },
   { href: "/wallet", label: "Wallet", tour: "nav-wallet" },
 ];
+
+const FARMING = { href: "/farming", label: "Farming", tour: null };
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -60,13 +63,15 @@ function Logo() {
 }
 
 export function Header() {
+  const flags = useFeatureFlags();
+  const nav = flags.data?.makerLoop ? [...NAV, FARMING] : NAV;
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-bg/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-3 py-2.5 sm:px-4">
         <div className="flex items-center gap-5">
           <Logo />
           <nav className="hidden items-center gap-0.5 md:flex">
-            {NAV.map((n) => (
+            {nav.map((n) => (
               <NavLink key={n.href} href={n.href} label={n.label} tour={n.tour} />
             ))}
           </nav>
@@ -79,7 +84,7 @@ export function Header() {
       </div>
       {/* Mobile nav strip */}
       <nav className="no-scrollbar flex items-center gap-0.5 overflow-x-auto border-t border-border px-2 py-1.5 md:hidden">
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <NavLink key={n.href} href={n.href} label={n.label} mobile />
         ))}
       </nav>

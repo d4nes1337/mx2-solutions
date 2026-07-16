@@ -30,6 +30,7 @@ import {
   conditionLeavesOf,
   docMarketRefs,
   isBound,
+  isTokenReferenced,
   marketLabel,
   type StrategyDoc,
 } from "@/lib/smart-orders/doc";
@@ -68,6 +69,11 @@ const conditionSummary = (
       };
     case "time_window":
       return { summary: "Within a time window", detail: null };
+    case "price_move":
+      return {
+        summary: `${c.market.outcome} ${c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves"} ${cents(c.deltaThreshold)}+ in ${Math.round(c.windowMs / 60_000)}m`,
+        detail: marketLabel(doc, c.market),
+      };
   }
 };
 
@@ -86,6 +92,7 @@ const formatActual = (kind: ConditionV2["kind"], actual: number | null): string 
   switch (kind) {
     case "price":
     case "spread":
+    case "price_move":
       return cents(actual);
     case "cumulative_notional":
       return usd(Math.round(actual));
@@ -111,7 +118,7 @@ function buildGraph(
   const edges: Edge[] = [];
   const pos = (id: string, fx: number, fy: number) => doc.positions[id] ?? { x: fx, y: fy };
 
-  // Market nodes.
+  // Market nodes (referenced by blocks + canvas-watched extras).
   docMarketRefs(doc).forEach((ref, i) => {
     const f = freshness.get(ref.tokenId);
     nodes.push({
@@ -125,6 +132,8 @@ function buildGraph(
         bestBid: f?.bestBid ?? null,
         stale: f ? !f.hasData : true,
         bound: true,
+        tokenId: ref.tokenId,
+        deletable: !isTokenReferenced(doc, ref.tokenId),
       },
       selected: doc.selectedNodeId === `market:${ref.tokenId}`,
     });
@@ -216,7 +225,9 @@ function buildGraph(
       ? "Alert me"
       : doc.action.kind === "stop_strategy"
         ? "Stop another Smart Order"
-        : `${doc.action.side === "BUY" ? "Buy" : "Sell"} ${doc.action.size} ${doc.action.market.outcome} at ${cents(doc.action.price)}`;
+        : doc.action.kind === "quote_loop"
+          ? `Quote ${doc.action.sizeShares} both sides at mid ±${doc.action.targetSpreadCents}¢`
+          : `${doc.action.side === "BUY" ? "Buy" : "Sell"} ${doc.action.size} ${doc.action.market.outcome} at ${cents(doc.action.price)}`;
   nodes.push({
     id: "action",
     type: "action",
@@ -368,6 +379,13 @@ export default function BuilderCanvas({
           useBuilderStore.getState().doc.selectedNodeId !== change.id
         ) {
           select(change.id);
+          // Selecting a market node routes the panel to its live preview;
+          // other nodes edit inline on the canvas.
+          if (change.id.startsWith("market:")) {
+            const store = useBuilderStore.getState();
+            store.focusMarket(change.id.slice("market:".length));
+            store.setActiveTab("market");
+          }
         }
       }
     },
@@ -376,7 +394,7 @@ export default function BuilderCanvas({
 
   return (
     <div
-      className="h-[520px] w-full rounded-xl border border-border bg-surface-2/50"
+      className="h-full min-h-[420px] w-full rounded-xl border border-border bg-surface-2/50"
       data-tour="builder-canvas"
     >
       <ReactFlow
@@ -395,7 +413,30 @@ export default function BuilderCanvas({
         fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         proOptions={{ hideAttribution: true }}
         nodesConnectable={false}
-        deleteKeyCode={null}
+        // Keyboard delete works on blocks; React Flow already ignores it while
+        // an input has focus. Root, action and referenced markets are guarded.
+        deleteKeyCode={["Backspace", "Delete"]}
+        onBeforeDelete={async ({ nodes: toDelete }) => {
+          const d = docRef.current;
+          const allowed = toDelete.filter((n) => {
+            if (n.id === "root" || n.id === "action") return false;
+            if (n.id.startsWith("market:")) {
+              return !isTokenReferenced(d, n.id.slice("market:".length));
+            }
+            return true;
+          });
+          return allowed.length > 0 ? { nodes: allowed, edges: [] } : false;
+        }}
+        onNodesDelete={(deleted) => {
+          const store = useBuilderStore.getState();
+          for (const n of deleted) {
+            if (n.id.startsWith("market:")) {
+              store.removeWatchedMarket(n.id.slice("market:".length));
+            } else {
+              store.removeNode(n.id);
+            }
+          }
+        }}
       >
         <Background gap={24} size={1.5} />
         <Controls showInteractive={false} />

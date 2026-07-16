@@ -1,9 +1,12 @@
 /**
  * Reward-aware maker estimator (U8, estimator-first per D-019). Pure and
  * deliberately conservative: it tells the user whether a resting quote WOULD
- * QUALIFY for Polymarket's maker-rewards program and what it costs/locks —
- * it never promises reward amounts (per-market daily pool rates are not
- * public via Gamma) and it never suggests self-trading or wash behavior.
+ * QUALIFY for Polymarket's liquidity-rewards program and what it costs/locks.
+ * Per-market daily pool rates ARE readable (CLOB /rewards/markets — surfaced
+ * by the economics endpoint and shown alongside this estimate), but the
+ * user's SHARE of a pool depends on competing qualifying liquidity, so no
+ * personal dollar amount is promised. Never suggests self-trading or wash
+ * behavior.
  */
 
 export interface MakerEstimateInput {
@@ -64,7 +67,7 @@ export const estimateMakerQuote = (input: MakerEstimateInput): MakerEstimate => 
   const maxDownsideUsd = capitalUsd;
 
   const notes: string[] = [
-    "Reward amounts vary by market and day — Polymarket does not publish per-market pool rates, so no dollar reward is estimated.",
+    "Your share of a rewards pool depends on competing qualifying liquidity, so no personal dollar amount is promised.",
     "If the quote fills you hold a real position; the downside shown assumes the worst resolution.",
   ];
   if (qualifies === false && meetsMinSize === false)

@@ -57,6 +57,11 @@ const describeCondition = (doc: StrategyDoc, c: ConditionV2): string => {
       if (c.endMs !== null) return `before ${fmt(c.endMs)}`;
       return "at any time";
     }
+    case "price_move": {
+      const verb =
+        c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves";
+      return `${c.market.outcome} price of ${marketLabel(doc, c.market)} ${verb} ${cents(c.deltaThreshold)}+ within ${humanDuration(c.windowMs)}`;
+    }
   }
 };
 
@@ -124,6 +129,15 @@ export const describeStrategy = (doc: StrategyDoc): SentenceSegment[] => {
     case "stop_strategy":
       out.push({ text: "stop another Smart Order", nodeId: "action", tone: "warn" });
       break;
+    case "quote_loop": {
+      const q = doc.action;
+      out.push({
+        text: `quote ${q.sizeShares} shares both sides at mid ±${q.targetSpreadCents}¢, merging pairs`,
+        nodeId: "action",
+        tone: "pos",
+      });
+      break;
+    }
   }
 
   if (doc.recurrence.kind === "repeat") {

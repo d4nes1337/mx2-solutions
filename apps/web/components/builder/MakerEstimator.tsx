@@ -7,7 +7,9 @@
  * clearly labeled as estimates, never as promised rewards.
  */
 import { Badge } from "@/components/ui";
+import { useMarketEconomics } from "@/lib/queries";
 import { estimateMakerQuote } from "@/lib/smart-orders/maker-estimate";
+import { isBound } from "@/lib/smart-orders/doc";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import type { DraftEvaluation } from "@/lib/smart-orders/queries";
 
@@ -24,11 +26,16 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export function MakerEstimator({ evaluation }: { evaluation: DraftEvaluation | undefined }) {
   const doc = useBuilderStore((s) => s.doc);
-  if (doc.templateId !== "maker-reward" || doc.action.kind !== "order") return null;
+  const a = doc.action.kind === "order" ? doc.action : null;
+  const economics = useMarketEconomics(
+    doc.templateId === "maker-reward" && a && isBound(a.market) ? a.market.conditionId : "",
+  );
+  if (doc.templateId !== "maker-reward" || !a) return null;
 
-  const a = doc.action;
   const market = evaluation?.markets.find((m) => m.tokenId === a.market.tokenId);
   const meta = doc.marketMeta[a.market.tokenId];
+  const rewards = economics.data?.rewards ?? null;
+  const rebateRate = economics.data?.feeSchedule?.rebateRate ?? null;
 
   const est = estimateMakerQuote({
     price: a.price,
@@ -36,8 +43,8 @@ export function MakerEstimator({ evaluation }: { evaluation: DraftEvaluation | u
     side: a.side,
     bestBid: market?.bestBid ?? null,
     bestAsk: market?.bestAsk ?? null,
-    rewardsMinSize: meta?.rewardsMinSize ?? null,
-    rewardsMaxSpread: meta?.rewardsMaxSpread ?? null,
+    rewardsMinSize: rewards?.minSize ?? meta?.rewardsMinSize ?? null,
+    rewardsMaxSpread: rewards?.maxSpread ?? meta?.rewardsMaxSpread ?? null,
   });
 
   return (
@@ -73,6 +80,12 @@ export function MakerEstimator({ evaluation }: { evaluation: DraftEvaluation | u
       <Row label="Capital while resting">{money(est.capitalUsd)}</Row>
       <Row label="Fill likelihood">{est.fillLikelihood}</Row>
       <Row label="Worst case if filled">−{money(est.maxDownsideUsd)}</Row>
+      {rewards?.ratePerDayUsd != null ? (
+        <Row label="Market's rewards pool">≈{money(rewards.ratePerDayUsd)}/day (shared)</Row>
+      ) : null}
+      {rebateRate != null && (economics.data?.feeSchedule?.rate ?? 0) > 0 ? (
+        <Row label="Maker rebates">{Math.round(rebateRate * 100)}% of taker fees, pro-rata</Row>
+      ) : null}
 
       <ul className="space-y-1 border-t border-border pt-2">
         {est.notes.map((note, i) => (
