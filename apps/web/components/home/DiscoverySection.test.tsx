@@ -98,9 +98,7 @@ describe("DiscoverySection", () => {
     expect(await screen.findByText("Will it happen?")).toBeInTheDocument();
     expect(screen.getByText("Dip-buy below 45¢")).toBeInTheDocument();
     const build = screen.getByText("Build");
-    expect(String(build.closest("a")?.getAttribute("href"))).toContain(
-      "/smart-orders/new?prompt=",
-    );
+    expect(String(build.closest("a")?.getAttribute("href"))).toContain("/smart-orders/new?prompt=");
 
     // Left column fell back to sample plays (empty showcases) with charts.
     expect(

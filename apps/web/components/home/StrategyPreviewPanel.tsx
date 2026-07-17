@@ -15,7 +15,11 @@ import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { api } from "@/lib/api";
 import type { MarketSearchResult } from "@/lib/smart-orders/queries";
 import type { ScenarioBinding } from "@/lib/home/use-scenario-binding";
-import { makeSyntheticSeries, type DemoScenario, type DiagramChip } from "@/lib/home/demo-scenarios";
+import {
+  makeSyntheticSeries,
+  type DemoScenario,
+  type DiagramChip,
+} from "@/lib/home/demo-scenarios";
 import { Chip } from "./ShowcaseCard";
 
 /** Quantized to the hour so SSR and client render the same synthetic series. */

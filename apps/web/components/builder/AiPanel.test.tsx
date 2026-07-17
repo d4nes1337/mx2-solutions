@@ -134,8 +134,9 @@ const renderPanel = (
 
 /** Calls made to the generate endpoint (URL + init pairs). */
 const genCalls = () =>
-  ((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls as [RequestInfo | URL, RequestInit?][])
-    .filter(([u]) => String(u).includes("/api/ai/generate-strategy"));
+  (
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls as [RequestInfo | URL, RequestInit?][]
+  ).filter(([u]) => String(u).includes("/api/ai/generate-strategy"));
 
 beforeEach(() => {
   useBuilderStore.getState().reset();

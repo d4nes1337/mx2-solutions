@@ -53,12 +53,7 @@ function renderInline(text: string): ReactNode[] {
       // whitespace-adjacent content so "2 * 3 * 4" stays literal.
       const boundaryOk = ch === "*" || i === 0 || /\s/.test(text[i - 1]!);
       const close = text.indexOf(ch, i + 1);
-      if (
-        boundaryOk &&
-        close > i + 1 &&
-        !/\s/.test(text[i + 1]!) &&
-        !/\s/.test(text[close - 1]!)
-      ) {
+      if (boundaryOk && close > i + 1 && !/\s/.test(text[i + 1]!) && !/\s/.test(text[close - 1]!)) {
         flush();
         out.push(<em key={out.length}>{renderInline(text.slice(i + 1, close))}</em>);
         i = close + 1;

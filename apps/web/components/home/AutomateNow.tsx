@@ -15,13 +15,7 @@ import type { GammaEvent } from "@/lib/types";
 
 const MAX_ROWS = 6;
 
-function MarketRow({
-  event,
-  suggestion,
-}: {
-  event: GammaEvent;
-  suggestion: StrategySuggestion;
-}) {
+function MarketRow({ event, suggestion }: { event: GammaEvent; suggestion: StrategySuggestion }) {
   const market = primaryMarket(event);
   const image = market?.image || event.image;
   const priceCents = market ? Math.round(yesProbability(market) * 100) : null;
@@ -67,15 +61,15 @@ export function AutomateNow() {
 
   const rows = sortEventsByScore(events, hottestScore)
     .map((event) => ({ event, suggestion: suggestStrategyFor(event) }))
-    .filter((r): r is { event: GammaEvent; suggestion: StrategySuggestion } => r.suggestion !== null)
+    .filter(
+      (r): r is { event: GammaEvent; suggestion: StrategySuggestion } => r.suggestion !== null,
+    )
     .slice(0, MAX_ROWS);
 
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2.5">
-        <h2 className="text-lg font-semibold tracking-tight text-fg">
-          Automate these markets now
-        </h2>
+        <h2 className="text-lg font-semibold tracking-tight text-fg">Automate these markets now</h2>
         <LiveDot />
       </div>
       {home.isLoading ? (
