@@ -29,8 +29,9 @@ import type {
   AuthenticatedClobClient,
   GeoblockClient,
   DepositWalletRelayer,
+  BridgeClient,
 } from "@mx2/polymarket-client";
-import { createDisabledDepositWalletRelayer } from "@mx2/polymarket-client";
+import { createBridgeClient, createDisabledDepositWalletRelayer } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
 import { registerEventsRoutes } from "./routes/events.js";
@@ -38,6 +39,7 @@ import { registerFeedRoutes } from "./routes/feed.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
+import { registerFundsRoutes } from "./routes/funds.js";
 import { registerTradeRoutes } from "./routes/trade.js";
 import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
@@ -85,6 +87,7 @@ export interface AppDeps {
   tradingSigner: TradingSigner;
   depositWalletRelayer?: DepositWalletRelayer;
   geoblockClient: GeoblockClient;
+  bridgeClient?: BridgeClient;
   /** Optional: injected in tests; otherwise built from POLYGON_RPC_URL. */
   allowanceReader?: AllowanceReader | null;
   /** Null/omitted when FEATURE_AI_CHAT is off — the AI route then 503s. */
@@ -124,6 +127,12 @@ export const buildApp = (deps: AppDeps) => {
       delete: async () => {},
     } satisfies TradingAccountClobCredentialStore);
   const depositWalletRelayer = deps.depositWalletRelayer ?? createDisabledDepositWalletRelayer();
+  const bridgeClient =
+    deps.bridgeClient ??
+    createBridgeClient({
+      baseUrl: deps.config.polymarket.bridgeBaseUrl,
+      builderCode: deps.config.polymarket.builderCode,
+    });
 
   // Expose req.user on every request (null until auth middleware sets it).
   app.decorateRequest("user", null);
@@ -195,6 +204,15 @@ export const buildApp = (deps: AppDeps) => {
     tradingClobClient: deps.tradingClobClient,
     config: deps.config,
     gammaClient: deps.gammaClient,
+  });
+  registerFundsRoutes(fastifyApp, {
+    config: deps.config,
+    sessions: deps.sessions,
+    auditStore: deps.auditStore,
+    tradingAccounts,
+    privyWallets: deps.privyWallets,
+    bridgeClient,
+    geoblockClient: deps.geoblockClient,
   });
   registerTradeRoutes(fastifyApp, {
     config: deps.config,

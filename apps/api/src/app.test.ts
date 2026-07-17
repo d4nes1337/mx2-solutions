@@ -290,6 +290,20 @@ describe("health endpoints", () => {
       liveTrading: false,
       conditionalLiveExecution: false,
       relayer: false,
+      bridgeFunding: false,
+      bridgeWithdrawals: false,
+    });
+    await app.close();
+  });
+
+  it("GET /api/funds/assets is fail-closed when Bridge funding is disabled", async () => {
+    const app = appWith({ ping: async () => true });
+    const res = await app.inject({ method: "GET", url: "/api/funds/assets" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      enabled: false,
+      assets: [],
+      chains: [],
     });
     await app.close();
   });

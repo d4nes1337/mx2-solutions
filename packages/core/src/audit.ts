@@ -46,6 +46,7 @@ export const AUDIT_ACTIONS = [
   "wallet.withdraw.requested",
   "wallet.withdraw.submitted",
   "wallet.withdraw.failed",
+  "wallet.bridge.deposit_addresses_requested",
   "trading_wallet.provisioned",
   "trading_wallet.ghost_detected",
   "trading_wallet.reissued",

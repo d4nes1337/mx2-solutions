@@ -188,6 +188,8 @@ export interface FeatureFlags {
   aiChat: boolean;
   openBeta: boolean;
   walletWithdraw: boolean;
+  bridgeFunding: boolean;
+  bridgeWithdrawals: boolean;
   makerLoop: boolean;
   makerLoopLive: boolean;
 }
@@ -328,6 +330,41 @@ export interface WithdrawResponse {
   amountUsd?: number;
   alreadySubmitted?: boolean;
   relayer?: { transactionId: string; state: string; transactionHash?: string };
+}
+
+export interface FundsAsset {
+  id: string;
+  chainId: string;
+  chainName: string;
+  addressType: "evm" | "svm" | "btc" | "tvm";
+  minCheckoutUsd: number;
+  token: {
+    name: string;
+    symbol: string;
+    address: string;
+    decimals: number;
+  };
+}
+
+export interface FundsChain {
+  chainId: string;
+  chainName: string;
+  addressType: "evm" | "svm" | "btc" | "tvm";
+  assetCount: number;
+  minCheckoutUsd: number;
+}
+
+export interface FundsAssetsResponse {
+  enabled: boolean;
+  assets: FundsAsset[];
+  chains: FundsChain[];
+  note?: string | null;
+}
+
+export interface FundsDepositAddressesResponse {
+  ok: boolean;
+  depositWalletAddress: string;
+  addresses: Partial<Record<FundsAsset["addressType"], string>>;
 }
 
 export interface TradingWalletBalanceResponse {

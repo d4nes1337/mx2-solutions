@@ -15,6 +15,8 @@ export * from "./data/schema.js";
 export * from "./data/client.js";
 export * from "./geoblock/schema.js";
 export * from "./geoblock/client.js";
+export * from "./bridge/schema.js";
+export * from "./bridge/client.js";
 export * from "./wallet/derive.js";
 export * from "./relayer/deposit-wallet.js";
 export * from "./relayer/relayer-factory.js";

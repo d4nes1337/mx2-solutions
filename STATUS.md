@@ -487,6 +487,25 @@ available.
 
 ## In progress
 
+- **Wallet funds rework + Bridge funding scaffold (2026-07-17): Built, pending signed-in/staging acceptance.**
+  - `/wallet` now leads with a guided "Enable trading" panel instead of asking users to choose
+    architecture first. Readiness order is corrected to Create → Activate → Fund → Authorize →
+    Trade, and the Funds sheet/header use pUSD trading-balance language.
+  - Added `@mx2/polymarket-client` Bridge adapter for supported assets + deposit address
+    generation, `POLYMARKET_BRIDGE_BASE_URL`, `FEATURE_BRIDGE_FUNDING`, and
+    `FEATURE_BRIDGE_WITHDRAWALS` (both off by default).
+  - Added `GET /api/funds/assets` and guarded `POST /api/funds/deposit-addresses`; address
+    generation derives the authenticated user's active deposit wallet server-side, geoblocks
+    fail-closed, and audits the request.
+  - Web Funds sheet keeps direct Polygon USDC.e as the default-on path and shows the staged
+    multi-chain Bridge path only when the server flag enables it.
+  - Quality gates: config + Bridge client + API app tests green; web wallet stepper test green;
+    `@mx2/core`, `@mx2/polymarket-client`, and `@mx2/api` builds green; web typecheck green;
+    unauthenticated `/wallet` visually checked in the in-app browser.
+  - Remaining before production Bridge rollout: quote binding, deposit status polling/history,
+    support/recovery copy, low-value staging deposits across one EVM L2 plus one non-EVM route,
+    and Bridge withdrawals ledger/reconciliation.
+
 - **Portfolio PnL refactor (2026-07-01): Built, pending owner visual acceptance.**
   - Backend now resolves the Polymarket public profile/proxy wallet, fetches profile avatar/name,
     account-level all-time PnL from Data API leaderboard, current open positions, recent closed
@@ -563,4 +582,5 @@ durable event log, full failure-mode replay) per RFC-0001 — owner to prioritis
 | 3 — manual trading (staging-only, geo-gated, flagged)   | Gate 4 | **Built** | Owner Gate 4 review + staging creds + A-021 spike |
 | 4 (web) — frontend MVP (read-only + preview-only)       | —      | **Built** | —                                                 |
 | 6 — conditional rules (shadow / alert / manual-confirm) | Gate 5 | **Built** | Owner Gate 5 review                               |
+| 6b — wallet funds + Bridge funding scaffold             | Gate 6 | **Built** | signed-in/staging acceptance                      |
 | 7 — beta hardening / release                            | Gate 6 | Pending   | prior slices                                      |

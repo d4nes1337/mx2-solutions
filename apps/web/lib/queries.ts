@@ -10,6 +10,8 @@ import type {
   EvaluateNowResponse,
   EventsResponse,
   FeatureFlags,
+  FundsAssetsResponse,
+  FundsDepositAddressesResponse,
   HomeFeedResponse,
   HistoryResponse,
   HistoryTypeFilter,
@@ -401,6 +403,21 @@ export function useWithdrawals(enabled = true) {
       api.get<{ withdrawals: WalletWithdrawalItem[] }>("/api/trading-wallet/withdrawals"),
     enabled,
     staleTime: 15_000,
+  });
+}
+
+export function useFundsAssets(enabled = true) {
+  return useQuery({
+    queryKey: ["funds-assets"],
+    queryFn: () => api.get<FundsAssetsResponse>("/api/funds/assets"),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useBridgeDepositAddresses() {
+  return useMutation({
+    mutationFn: () => api.post<FundsDepositAddressesResponse>("/api/funds/deposit-addresses"),
   });
 }
 

@@ -101,7 +101,7 @@ export function WalletsSection({
           </button>
         }
       >
-        Trading wallets
+        Trading account details
       </CardHeader>
 
       <div className="space-y-2 p-4">

@@ -12,7 +12,10 @@ describe("loadConfig", () => {
     expect(cfg.features.liveTrading).toBe(false);
     expect(cfg.features.conditionalLiveExecution).toBe(false);
     expect(cfg.features.relayer).toBe(false);
+    expect(cfg.features.bridgeFunding).toBe(false);
+    expect(cfg.features.bridgeWithdrawals).toBe(false);
     expect(cfg.polymarket.clobBaseUrl).toContain("clob.polymarket.com");
+    expect(cfg.polymarket.bridgeBaseUrl).toBe("https://bridge.polymarket.com");
   });
 
   it("parses boolean flags from strings", () => {
@@ -84,6 +87,10 @@ describe("loadConfig", () => {
 
   it("fails closed if AI chat is enabled without an Anthropic key", () => {
     expect(() => loadConfig({ ...base, FEATURE_AI_CHAT: "true" })).toThrow(ConfigError);
+  });
+
+  it("fails closed if bridge withdrawals are enabled without wallet withdrawals", () => {
+    expect(() => loadConfig({ ...base, FEATURE_BRIDGE_WITHDRAWALS: "true" })).toThrow(ConfigError);
   });
 
   it("accepts AI chat when the key is present and honours AI_MODEL", () => {

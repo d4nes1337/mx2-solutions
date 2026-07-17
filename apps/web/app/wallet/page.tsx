@@ -6,7 +6,7 @@ import { useSession } from "@/lib/auth";
 import { useTradingAccounts, useTradingWallet } from "@/lib/queries";
 import { Empty, Spinner } from "@/components/ui";
 import { WalletsSection } from "@/components/profile/WalletsSection";
-import { TradingModeCards, WalletStepper } from "@/components/wallet/TradingModes";
+import { TradingModeCards, TradingSetupPanel } from "@/components/wallet/TradingModes";
 
 export default function WalletPage() {
   return (
@@ -35,26 +35,15 @@ function WalletPageInner() {
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-fg">Wallet</h1>
         <p className="mt-1 text-sm text-muted">
-          Two ways to trade — pick either, or use both side by side.
+          Enable trading, add pUSD funds, and manage withdrawals from one place.
         </p>
       </div>
 
-      <TradingModeCards />
-
       {signedIn ? (
         <>
-          <div className="space-y-2.5 rounded-xl border border-border bg-surface p-4 shadow-panel">
-            <div className="text-[13px] font-semibold text-fg">Arima trading wallet readiness</div>
-            <WalletStepper account={internal} />
-            {!internal ? (
-              <p className="text-[12px] text-muted">
-                {privyEnabled
-                  ? "Create your trading wallet below to unlock no-popup Smart Orders."
-                  : "Server-managed trading wallets aren't enabled on this build yet — sign each trade from your connected wallet instead."}
-              </p>
-            ) : null}
-          </div>
+          <TradingSetupPanel account={internal} privyEnabled={privyEnabled} />
           <WalletsSection signedIn={signedIn} autoOpenTopUp={autoOpenTopUp} />
+          <TradingModeCards />
           <details className="rounded-xl border border-border bg-surface-2 px-4 py-3">
             <summary className="cursor-pointer text-[13px] font-medium text-muted">
               How is the Arima trading wallet secured?

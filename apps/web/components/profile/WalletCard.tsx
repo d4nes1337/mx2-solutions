@@ -197,7 +197,7 @@ export function WalletCard({
         {isPrivy && depositWalletAddress && (
           <div className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2">
             <div className="text-[10px] uppercase tracking-wide text-muted">
-              Deposit wallet (Polygon)
+              Deposit wallet (pUSD on Polygon)
             </div>
             <div className="mt-0.5 flex items-center gap-1.5">
               <span className="font-mono text-[12px] text-fg">
@@ -252,7 +252,7 @@ export function WalletCard({
             </Button>
           )}
 
-          {/* Privy: top up — always reachable once a deposit wallet exists;
+          {/* Privy: add funds — always reachable once a deposit wallet exists;
               promoted to the primary action when funding is the next step. */}
           {isPrivy && depositWalletAddress && (
             <Button
@@ -260,7 +260,7 @@ export function WalletCard({
               variant={account.nextAction === "top_up" ? "primary" : "ghost"}
               onClick={() => setTopUpOpen(true)}
             >
-              Top up USDC
+              Add funds
             </Button>
           )}
 

@@ -2,12 +2,13 @@
 
 /**
  * The Funds sheet — one place for everything money: balances of both wallets,
- * top-up (browser-signed USDC transfer), owner-only withdrawal, and history.
+ * direct Polygon funding, staged multi-chain Bridge funding, owner-only
+ * withdrawal, and history.
  * Withdrawals can ONLY go to the connected login wallet: the server resolves
  * the destination from the session and the request schema rejects any
  * destination field (R-031). The sheet just states that plainly.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAccount, useBalance, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { parseUnits, formatUnits, erc20Abi } from "viem";
 import {
@@ -22,8 +23,15 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
-import { useFeatureFlags, useWithdraw, useWithdrawals } from "@/lib/queries";
+import {
+  useBridgeDepositAddresses,
+  useFeatureFlags,
+  useFundsAssets,
+  useWithdraw,
+  useWithdrawals,
+} from "@/lib/queries";
 import { ApiError } from "@/lib/api";
+import type { FundsAsset } from "@/lib/types";
 
 // Bridged USDC.e on Polygon mainnet (same constant as allowance-bootstrap.ts)
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" as const;
@@ -113,7 +121,7 @@ export function FundsSheet({
 
         <h2 className="mb-1 text-[15px] font-semibold text-fg">Funds</h2>
         <p className="mb-3 text-xs text-muted">
-          Top up, withdraw, and track transfers for your Arima trading wallet.
+          Add pUSD trading funds, withdraw to your login wallet, and track transfers.
         </p>
 
         {/* Balances strip */}
@@ -160,7 +168,7 @@ export function FundsSheet({
         <div className="mb-3">
           <Segmented
             options={[
-              { value: "topup", label: "Top up" },
+              { value: "topup", label: "Add funds" },
               { value: "withdraw", label: "Withdraw" },
               { value: "history", label: "History" },
             ]}
@@ -172,7 +180,10 @@ export function FundsSheet({
         </div>
 
         {tab === "topup" ? (
-          <TopUpPanel depositWalletAddress={depositWalletAddress} />
+          <TopUpPanel
+            depositWalletAddress={depositWalletAddress}
+            bridgeEnabled={Boolean(flags.data?.bridgeFunding)}
+          />
         ) : tab === "withdraw" ? (
           <WithdrawPanel
             enabled={Boolean(flags.data?.walletWithdraw)}
@@ -187,13 +198,37 @@ export function FundsSheet({
   );
 }
 
-// ── Top up (browser-signed transfer from the connected wallet) ──────────────
+// ── Add funds (direct Polygon transfer + staged Bridge addresses) ───────────
 
-function TopUpPanel({ depositWalletAddress }: { depositWalletAddress: string }) {
+type FundingMode = "direct" | "bridge";
+
+const preferredAsset = (assets: FundsAsset[], chainId: string | null): FundsAsset | null => {
+  const scoped = chainId ? assets.filter((asset) => asset.chainId === chainId) : assets;
+  return (
+    scoped.find((asset) => asset.token.symbol.toUpperCase() === "USDC") ??
+    scoped.find((asset) => asset.token.symbol.toUpperCase().includes("USDC")) ??
+    scoped.find((asset) => asset.token.symbol.toUpperCase() === "USDT") ??
+    scoped[0] ??
+    null
+  );
+};
+
+function TopUpPanel({
+  depositWalletAddress,
+  bridgeEnabled,
+}: {
+  depositWalletAddress: string;
+  bridgeEnabled: boolean;
+}) {
   const { address, chainId } = useAccount();
   const qc = useQueryClient();
   const [amount, setAmount] = useState("");
   const [txError, setTxError] = useState<string | null>(null);
+  const [mode, setMode] = useState<FundingMode>("direct");
+  const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const assets = useFundsAssets(bridgeEnabled);
+  const bridgeDeposit = useBridgeDepositAddresses();
 
   const connectedBalance = useBalance({
     address,
@@ -242,17 +277,208 @@ function TopUpPanel({ depositWalletAddress }: { depositWalletAddress: string }) 
     );
   };
 
-  const wrongChain = !!address && chainId !== POLYGON_CHAIN_ID;
   const connectedBalanceFormatted = connectedBalance.data
     ? Number(formatUnits(connectedBalance.data.value, 6)).toFixed(2)
     : null;
+  const chains = assets.data?.chains ?? [];
+  const assetRows = assets.data?.assets ?? [];
+  const selectedChain = selectedChainId ?? chains[0]?.chainId ?? null;
+  const visibleAssets = selectedChain
+    ? assetRows.filter((asset) => asset.chainId === selectedChain)
+    : assetRows;
+  const selectedAsset =
+    visibleAssets.find((asset) => asset.id === selectedAssetId) ??
+    preferredAsset(assetRows, selectedChain);
+  const bridgeAddress = selectedAsset
+    ? (bridgeDeposit.data?.addresses[selectedAsset.addressType] ?? null)
+    : null;
+  const bridgeError =
+    bridgeDeposit.error instanceof ApiError
+      ? bridgeDeposit.error.message
+      : bridgeDeposit.error instanceof Error
+        ? bridgeDeposit.error.message
+        : assets.error instanceof ApiError
+          ? assets.error.message
+          : assets.error instanceof Error
+            ? assets.error.message
+            : null;
+
+  useEffect(() => {
+    if (!bridgeEnabled || chains.length === 0) return;
+    if (!selectedChainId) setSelectedChainId(chains[0]?.chainId ?? null);
+  }, [bridgeEnabled, chains, selectedChainId]);
+
+  useEffect(() => {
+    if (!selectedAsset || selectedAsset.id === selectedAssetId) return;
+    setSelectedAssetId(selectedAsset.id);
+  }, [selectedAsset, selectedAssetId]);
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border border-border bg-surface-2 p-3">
+      <Segmented<FundingMode>
+        options={[
+          { value: "direct", label: "Polygon USDC.e" },
+          { value: "bridge", label: "Other chains", disabled: !bridgeEnabled },
+        ]}
+        value={mode}
+        onChange={setMode}
+        size="md"
+        grow
+      />
+
+      {!bridgeEnabled ? (
+        <div className="rounded-md border border-dashed border-border bg-surface-2/50 px-3 py-2 text-[12px] leading-relaxed text-muted">
+          Multi-chain deposits are staged behind a server flag. Today, use Polygon USDC.e directly;
+          when Bridge funding is enabled, this sheet will show the live chain and token catalog.
+        </div>
+      ) : null}
+
+      {mode === "direct" ? (
+        <DirectPolygonTopUp
+          address={address}
+          amount={amount}
+          chainId={chainId}
+          connectedBalanceFormatted={connectedBalanceFormatted}
+          depositWalletAddress={depositWalletAddress}
+          handleSend={handleSend}
+          isConfirming={isConfirming}
+          isSending={isSending}
+          resetWrite={resetWrite}
+          setAmount={setAmount}
+          setTxError={setTxError}
+          txConfirmed={txConfirmed}
+          txError={txError}
+          txHash={txHash}
+        />
+      ) : bridgeEnabled ? (
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1 text-[11px] text-muted">
+              <span>Chain</span>
+              <select
+                value={selectedChain ?? ""}
+                onChange={(e) => {
+                  setSelectedChainId(e.target.value);
+                  setSelectedAssetId(null);
+                }}
+                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent/50 focus:outline-none"
+                disabled={assets.isLoading || chains.length === 0}
+              >
+                {chains.map((chain) => (
+                  <option key={chain.chainId} value={chain.chainId}>
+                    {chain.chainName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-[11px] text-muted">
+              <span>Coin</span>
+              <select
+                value={selectedAsset?.id ?? ""}
+                onChange={(e) => setSelectedAssetId(e.target.value)}
+                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent/50 focus:outline-none"
+                disabled={assets.isLoading || visibleAssets.length === 0}
+              >
+                {visibleAssets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    {asset.token.symbol} · {asset.token.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {assets.isLoading ? <Spinner label="Loading supported chains..." /> : null}
+
+          {selectedAsset ? (
+            <div className="rounded-md border border-border bg-surface-2 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-wide text-muted">Bridge route</span>
+                <Badge tone="neutral">min ${selectedAsset.minCheckoutUsd.toFixed(0)}</Badge>
+              </div>
+              <p className="mt-1 text-[12px] leading-relaxed text-muted">
+                Send {selectedAsset.token.symbol} on {selectedAsset.chainName}. Polymarket Bridge
+                converts it into pUSD in your trading deposit wallet.
+              </p>
+            </div>
+          ) : null}
+
+          {!bridgeDeposit.data ? (
+            <Button
+              type="button"
+              className="w-full"
+              variant="outline"
+              disabled={!selectedAsset || bridgeDeposit.isPending}
+              onClick={() => bridgeDeposit.mutate()}
+            >
+              {bridgeDeposit.isPending ? "Generating..." : "Generate deposit address"}
+            </Button>
+          ) : bridgeAddress ? (
+            <div className="rounded-md border border-brand/40 bg-brand-soft/30 p-3">
+              <div className="text-[10px] uppercase tracking-wide text-muted">
+                Send only {selectedAsset?.token.symbol} on {selectedAsset?.chainName}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="flex-1 break-all font-mono text-[12px] text-fg">
+                  {bridgeAddress}
+                </span>
+                <CopyButton text={bridgeAddress} />
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                Sending a different chain or token can delay or fail the deposit. Status tracking is
+                the next backend slice; keep your source wallet transaction hash.
+              </p>
+            </div>
+          ) : (
+            <ErrorNote message="Bridge did not return an address for this chain family." />
+          )}
+
+          {bridgeError ? <ErrorNote message={bridgeError} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DirectPolygonTopUp({
+  address,
+  amount,
+  chainId,
+  connectedBalanceFormatted,
+  depositWalletAddress,
+  handleSend,
+  isConfirming,
+  isSending,
+  resetWrite,
+  setAmount,
+  setTxError,
+  txConfirmed,
+  txError,
+  txHash,
+}: {
+  address: `0x${string}` | undefined;
+  amount: string;
+  chainId: number | undefined;
+  connectedBalanceFormatted: string | null;
+  depositWalletAddress: string;
+  handleSend: () => void;
+  isConfirming: boolean;
+  isSending: boolean;
+  resetWrite: () => void;
+  setAmount: (amount: string) => void;
+  setTxError: (error: string | null) => void;
+  txConfirmed: boolean;
+  txError: string | null;
+  txHash: `0x${string}` | undefined;
+}) {
+  const wrongChain = !!address && chainId !== POLYGON_CHAIN_ID;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-border bg-surface-2 p-3">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wide text-muted">
-            Your deposit wallet (Polygon)
+            Direct deposit wallet
           </span>
           <Badge tone="neutral">USDC.e</Badge>
         </div>
@@ -271,7 +497,6 @@ function TopUpPanel({ depositWalletAddress }: { depositWalletAddress: string }) 
           </a>
         </div>
       </div>
-
       {address ? (
         <div className="space-y-3">
           <div className="text-[11px] text-muted">
@@ -363,12 +588,12 @@ function TopUpPanel({ depositWalletAddress }: { depositWalletAddress: string }) 
           {txError && <ErrorNote message={txError} />}
         </div>
       ) : (
-        <p className="text-sm text-muted">Connect a wallet to send USDC directly from here.</p>
+        <p className="text-sm text-muted">Connect a wallet to send Polygon USDC.e directly.</p>
       )}
 
       <p className="text-[11px] text-muted">
-        You can also bridge USDC from other chains and send it to the deposit wallet address above.
-        After funding, click &ldquo;Check &amp; activate trading&rdquo; on the wallet card.
+        After the transfer confirms and Polymarket converts it to pUSD, click &ldquo;Check
+        funds&rdquo; if the wallet is not marked ready yet.
       </p>
     </div>
   );

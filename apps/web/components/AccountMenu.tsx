@@ -50,14 +50,14 @@ function BalanceBlock() {
       </div>
     );
   }
-  const usdc = balance.data?.depositWalletUsdc;
+  const pusd = balance.data?.depositWalletUsdc;
   return (
     <div className="rounded-md border border-border bg-surface-2 px-2.5 py-2">
       <div className="text-[10px] uppercase tracking-wide text-muted">Trading balance</div>
       <div className="mt-1 flex items-center justify-between gap-2">
         <span className="tabular text-[15px] font-semibold text-fg">
-          {usdc == null ? (balance.isLoading ? "…" : "—") : `$${usdc.toFixed(2)}`}
-          <span className="ml-1 text-[10px] font-medium text-faint">USDC</span>
+          {pusd == null ? (balance.isLoading ? "…" : "—") : `$${pusd.toFixed(2)}`}
+          <span className="ml-1 text-[10px] font-medium text-faint">pUSD</span>
         </span>
         <Link
           href="/wallet?topup=1"
@@ -65,7 +65,7 @@ function BalanceBlock() {
           onClick={(e) => e.currentTarget.closest("details")?.removeAttribute("open")}
         >
           <ArrowUpRight size={11} aria-hidden />
-          Top up
+          Add funds
         </Link>
       </div>
     </div>

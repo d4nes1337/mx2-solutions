@@ -40,6 +40,7 @@ const EnvSchema = z.object({
   POLYMARKET_GEOBLOCK_URL: z.string().url().default("https://polymarket.com/api/geoblock"),
   // A-042: data-api.polymarket.com assumed working; not yet verified against live docs.
   POLYMARKET_DATA_BASE_URL: z.string().url().default("https://data-api.polymarket.com"),
+  POLYMARKET_BRIDGE_BASE_URL: z.string().url().default("https://bridge.polymarket.com"),
   POLYGON_CHAIN_ID: z.coerce.number().int().default(137),
 
   // Non-secret identifier. Optional until provided by the owner.
@@ -125,6 +126,11 @@ const EnvSchema = z.object({
   // login wallet only (destination is never client input). Cross-checked
   // below: requires the relayer stack.
   FEATURE_WALLET_WITHDRAW: boolFromEnv(false),
+  // Polymarket Bridge funding/withdrawals. Funding only generates per-user
+  // deposit addresses; withdrawals would move pUSD to a bridge address and must
+  // remain separately gated until the ledger/reconciliation slice is approved.
+  FEATURE_BRIDGE_FUNDING: boolFromEnv(false),
+  FEATURE_BRIDGE_WITHDRAWALS: boolFromEnv(false),
 
   // Maker loop (RFC-0003): quote_loop creation + SHADOW quoting + cockpit UI.
   // Places no orders and moves no funds by itself.
@@ -160,6 +166,7 @@ export type AppConfig = {
     userWsUrl: string;
     geoblockUrl: string;
     dataBaseUrl: string;
+    bridgeBaseUrl: string;
     chainId: number;
     builderCode: string | undefined;
     relayer: {
@@ -205,6 +212,8 @@ export type AppConfig = {
     aiChat: boolean;
     openBeta: boolean;
     walletWithdraw: boolean;
+    bridgeFunding: boolean;
+    bridgeWithdrawals: boolean;
     makerLoop: boolean;
     makerLoopLive: boolean;
   };
@@ -281,6 +290,13 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     );
   }
 
+  if (e.FEATURE_BRIDGE_WITHDRAWALS && !e.FEATURE_WALLET_WITHDRAW) {
+    throw new ConfigError(
+      "FEATURE_BRIDGE_WITHDRAWALS=true requires FEATURE_WALLET_WITHDRAW=true (bridge " +
+        "withdrawals still execute from the owner-controlled deposit wallet).",
+    );
+  }
+
   // Fail-closed ladder for the maker loop (RFC-0003): live quoting requires
   // every underlying capability plus the ON-CHAIN-VERIFIED adapter addresses.
   if (e.FEATURE_MAKER_LOOP_LIVE) {
@@ -315,6 +331,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       userWsUrl: e.POLYMARKET_USER_WS_URL,
       geoblockUrl: e.POLYMARKET_GEOBLOCK_URL,
       dataBaseUrl: e.POLYMARKET_DATA_BASE_URL,
+      bridgeBaseUrl: e.POLYMARKET_BRIDGE_BASE_URL,
       chainId: e.POLYGON_CHAIN_ID,
       builderCode: e.POLYMARKET_BUILDER_CODE,
       relayer: {
@@ -361,6 +378,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       aiChat: e.FEATURE_AI_CHAT,
       openBeta: e.FEATURE_OPEN_BETA,
       walletWithdraw: e.FEATURE_WALLET_WITHDRAW,
+      bridgeFunding: e.FEATURE_BRIDGE_FUNDING,
+      bridgeWithdrawals: e.FEATURE_BRIDGE_WITHDRAWALS,
       makerLoop: e.FEATURE_MAKER_LOOP,
       makerLoopLive: e.FEATURE_MAKER_LOOP_LIVE,
     },

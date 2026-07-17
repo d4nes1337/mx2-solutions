@@ -26,6 +26,7 @@ import {
   createDataClient,
   createAuthenticatedClobClient,
   createGeoblockClient,
+  createBridgeClient,
 } from "@mx2/polymarket-client";
 import { buildApp } from "./app.js";
 import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
@@ -69,6 +70,10 @@ const main = async (): Promise<void> => {
     baseUrl: config.polymarket.clobBaseUrl,
   });
   const geoblockClient = createGeoblockClient({ baseUrl: config.polymarket.geoblockUrl });
+  const bridgeClient = createBridgeClient({
+    baseUrl: config.polymarket.bridgeBaseUrl,
+    builderCode: config.polymarket.builderCode,
+  });
 
   // Only constructed when the flag AND key are present (loadConfig enforces
   // the pairing); otherwise the AI route serves 503 AI_DISABLED.
@@ -105,6 +110,7 @@ const main = async (): Promise<void> => {
     tradingSigner,
     depositWalletRelayer,
     geoblockClient,
+    bridgeClient,
     aiClient,
   });
 
