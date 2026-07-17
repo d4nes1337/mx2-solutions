@@ -11,7 +11,7 @@ import {
 } from "@mx2/rules";
 import {
   hitFromGammaMarket,
-  searchMarketHits,
+  smartSearchMarketHits,
   type MarketSearchHit,
 } from "../lib/market-search.js";
 import type { AiClient } from "./client.js";
@@ -31,7 +31,8 @@ import {
 // Hard loop caps: a paid upstream on a public endpoint must be bounded.
 const MAX_MODEL_CALLS = 6;
 const MAX_SEARCHES = 4;
-const SEARCH_HITS_PER_QUERY = 5;
+const SEARCH_HITS_PER_QUERY = 8;
+const SEARCH_FAN_OUT = 2;
 
 /** Minimal logging surface (satisfied by both pino and Fastify's req.log). */
 export interface GenerateLogger {
@@ -76,6 +77,8 @@ export type GenerateResult =
       definition: StrategyDefinition;
       summary: string;
       warnings: string[];
+      /** Assumptions/quick questions the model wants shown WITH the draft. */
+      openQuestions: string[];
       /** Display metadata for every bound market, keyed by tokenId. */
       markets: Record<string, GeneratedMarketMeta>;
       modelCalls: number;
@@ -525,7 +528,10 @@ export const generateStrategy = async (
         continue;
       }
       searches++;
-      const hits = await searchMarketHits(deps.gammaClient, query, SEARCH_HITS_PER_QUERY);
+      const hits = await smartSearchMarketHits(deps.gammaClient, query, {
+        limit: SEARCH_HITS_PER_QUERY,
+        maxFanOut: SEARCH_FAN_OUT,
+      });
       if (!hits.ok) {
         results.push({
           type: "tool_result",
@@ -558,6 +564,8 @@ export const generateStrategy = async (
               definition: built.definition,
               summary: parsed.data.summary,
               warnings: built.warnings,
+              // Display-only field: clamp instead of failing the whole draft.
+              openQuestions: parsed.data.open_questions.slice(0, 3).map((s) => s.slice(0, 200)),
               markets: built.markets,
               modelCalls: call,
             };

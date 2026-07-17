@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ShowcasesResponse } from "@/lib/types";
@@ -21,95 +21,84 @@ const flagsResponse = (aiChat: boolean) => ({
   openBeta: aiChat,
 });
 
-const showcase = {
-  id: "cond-btc:5",
-  market: {
-    title: "Will BTC hit $150k in 2026?",
-    image: "",
-    conditionId: "cond-btc",
-    tokenId: "tok-1",
-    outcome: "Yes",
-    currentPriceCents: 50,
-  },
-  sentence: "If Yes dips below 45¢ and holds 15 min → buy $100 at 45¢",
-  definition: {
-    version: 2,
-    name: "Dip-buy: BTC",
-    templateId: "showcase",
-    expr: {
-      type: "group",
-      id: "root",
-      op: "and",
-      children: [
-        {
-          type: "condition",
-          id: "c1",
-          condition: {
-            kind: "price",
-            market: { conditionId: "cond-btc", tokenId: "tok-1", outcome: "Yes" },
-            source: "ask",
-            comparator: "lte",
-            threshold: 0.45,
-          },
-        },
-      ],
+const searchResults = {
+  results: [
+    {
+      eventId: "ev-1",
+      marketId: "m-1",
+      title: "Will France win the World Cup?",
+      eventTitle: "World Cup winner",
+      image: "",
+      conditionId: "cond-france",
+      tokenIds: ["tok-fr-yes", "tok-fr-no"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: ["0.39", "0.61"],
+      volume: "215000000",
+      liquidity: "90000",
+      endDate: null,
+      negRisk: false,
+      rewardsMinSize: null,
+      rewardsMaxSpread: null,
     },
-    holdsForMs: 900_000,
-    maxDataAgeMs: 5_000,
-    action: {
-      kind: "order",
-      market: { conditionId: "cond-btc", tokenId: "tok-1", outcome: "Yes" },
-      side: "BUY",
-      price: 0.45,
-      size: 222,
-      orderType: "GTC",
-      execution: "prepare",
+    {
+      eventId: "ev-2",
+      marketId: "m-2",
+      title: "Will Spain win the World Cup?",
+      eventTitle: "World Cup winner",
+      image: "",
+      conditionId: "cond-spain",
+      tokenIds: ["tok-es-yes", "tok-es-no"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: ["0.22", "0.78"],
+      volume: "150000000",
+      liquidity: "50000",
+      endDate: null,
+      negRisk: false,
+      rewardsMinSize: null,
+      rewardsMaxSpread: null,
     },
-    recurrence: { kind: "once" },
-    limits: null,
-    expiresAtMs: null,
-  },
-  stats: { stakeUsd: 100, hypotheticalPnlUsd: 18.5, triggerCount: 3, windowDays: 30 },
-  series: [
-    { t: 1_750_000_000, p: 0.5 },
-    { t: 1_750_100_000, p: 0.44 },
-    { t: 1_750_200_000, p: 0.6 },
   ],
-  triggers: [{ t: 1_750_100_000_000, price: 0.44 }],
 };
 
-/** Route the fetch mock by URL: flags, showcases, everything else 404s. */
+/**
+ * Route the fetch mock by URL: flags, showcases, market search (mention
+ * dropdown + demo binding) and prices-history (empty → binding stays
+ * synthetic, deterministic). Everything else 404s.
+ */
 const mockApis = (opts: { aiChat: boolean; showcases: ShowcasesResponse | "error" }) =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/feature-flags")) {
-        return new Response(JSON.stringify(flagsResponse(opts.aiChat)), {
-          status: 200,
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
           headers: { "Content-Type": "application/json" },
         });
-      }
+      if (url.includes("/api/feature-flags")) return json(flagsResponse(opts.aiChat));
       if (url.includes("/api/showcases")) {
-        if (opts.showcases === "error") {
-          return new Response(JSON.stringify({ error: "UPSTREAM_ERROR", message: "down" }), {
-            status: 502,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        return new Response(JSON.stringify(opts.showcases), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return opts.showcases === "error"
+          ? json({ error: "UPSTREAM_ERROR", message: "down" }, 502)
+          : json(opts.showcases);
       }
-      return new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404 });
+      if (url.includes("/api/markets/search")) return json(searchResults);
+      if (url.includes("/api/markets/prices-history")) {
+        return json({ tokenId: "tok-fr-yes", history: [] });
+      }
+      return json({ error: "NOT_FOUND" }, 404);
     }),
   );
 
-const oneShowcase: ShowcasesResponse = {
-  generatedAt: new Date().toISOString(),
-  showcases: [showcase as unknown as ShowcasesResponse["showcases"][number]],
-};
+/** Static demo (prefers-reduced-motion) → deterministic renders, no 35ms timer. */
+const stubReducedMotion = () =>
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })),
+  );
 
 const renderHero = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -120,8 +109,10 @@ const renderHero = () => {
   );
 };
 
+beforeEach(() => stubReducedMotion());
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   push.mockReset();
 });
 
@@ -131,9 +122,11 @@ describe("Hero", () => {
     renderHero();
     expect(await screen.findByText("Create Smart Order")).toBeInTheDocument();
     expect(screen.queryByText("Build it")).not.toBeInTheDocument();
+    // The static marketing preview replaces the demo panel.
+    expect(screen.getByText("Smart Order · Re-entry")).toBeInTheDocument();
   });
 
-  it("shows the prompt card when the AI flag is on and deep-links the prompt", async () => {
+  it("renders the chat window and deep-links the prompt on submit", async () => {
     mockApis({ aiChat: true, showcases: "error" });
     renderHero();
 
@@ -154,58 +147,46 @@ describe("Hero", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("falls back to the static preview when showcases are unavailable", async () => {
+  it("@-mention: picking a market pins a chip and rides along in ?pinned=", async () => {
     mockApis({ aiChat: true, showcases: "error" });
     renderHero();
-    // The hardcoded marketing mock is the graceful fallback.
-    expect(await screen.findByText("Smart Order · Re-entry")).toBeInTheDocument();
-    expect(screen.queryByText(/Open this strategy/)).not.toBeInTheDocument();
+
+    const box = await screen.findByLabelText("Describe your trading idea");
+    fireEvent.change(box, { target: { value: "buy the dip on @fra" } });
+
+    // Dropdown row appears from the mocked search (debounced 250ms).
+    const row = await screen.findByText("Will France win the World Cup?");
+    fireEvent.click(row);
+
+    expect((box as HTMLTextAreaElement).value).toContain('@"Will France win the World Cup?"');
+    expect(screen.getByLabelText(/Unpin Will France win/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Build it"));
+    expect(push).toHaveBeenCalledTimes(1);
+    const url = String(push.mock.calls[0]![0]);
+    expect(url).toContain("/smart-orders/new?prompt=");
+    expect(url).toContain(
+      `&pinned=cond-france~${encodeURIComponent("Will France win the World Cup?")}`,
+    );
   });
 
-  it("renders a LIVE showcase with real backtest numbers when available", async () => {
-    mockApis({ aiChat: true, showcases: oneShowcase });
-    renderHero();
-    expect(await screen.findByText(/Open this strategy/)).toBeInTheDocument();
-    expect(screen.getByText("Will BTC hit $150k in 2026?")).toBeInTheDocument();
-    expect(screen.getByText(/\+\$18\.50/)).toBeInTheDocument();
-    expect(screen.getByText(/across 3 × \$100 dip-buys/)).toBeInTheDocument();
-    // The prompt appears both as an example chip and in the carousel bubble.
-    expect(screen.getAllByText(/Buy the dip on Will BTC hit/).length).toBeGreaterThanOrEqual(1);
-    // The honesty label is non-negotiable (R-023).
-    expect(screen.getByText(/past performance doesn/i)).toBeInTheDocument();
-  });
-
-  it("rotates showcases via the carousel and seeds the prompt box on request", async () => {
-    const second = {
-      ...showcase,
-      id: "cond-eth:5",
-      prompt: 'Buy $100 of Yes on "ETH flips BTC?" if the price dips to 30¢',
-      market: { ...showcase.market, title: "ETH flips BTC?", conditionId: "cond-eth" },
-    };
-    mockApis({
-      aiChat: true,
-      showcases: {
-        generatedAt: new Date().toISOString(),
-        showcases: [showcase, second] as unknown as ShowcasesResponse["showcases"],
-      },
-    });
+  it("plays the demo: typed sentence on the left, chips + dots on the right", async () => {
+    mockApis({ aiChat: true, showcases: "error" });
     renderHero();
 
-    // Two showcases → dots + arrows appear; first card is the top showcase.
-    expect(await screen.findByText("Will BTC hit $150k in 2026?")).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Show strategy 2 of 2"));
-    expect(await screen.findByText("ETH flips BTC?")).toBeInTheDocument();
+    // Reduced motion → first scenario fully revealed and static. The market
+    // name shows in the typed bubble, the action chip and the bound-market
+    // line — all derived from the same player state.
+    expect((await screen.findAllByText(/Trump-Iran market/)).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("Demo · News-momentum cross-market")).toBeInTheDocument();
+    expect(screen.getByText("then")).toBeInTheDocument(); // logic chip revealed
+    expect(screen.getByText(/Build this/)).toBeInTheDocument();
+    // Synthetic binding (empty history) is captioned honestly.
+    expect(screen.getByText(/Illustrative price path/)).toBeInTheDocument();
 
-    // Its chat prompt is shown and can be pushed into the prompt box.
-    fireEvent.click(screen.getByText("Try this prompt"));
-    const box = screen.getByLabelText<HTMLTextAreaElement>("Describe your trading idea");
-    expect(box.value).toContain("ETH flips BTC?");
-  });
-
-  it("shows no carousel controls for a single showcase", async () => {
-    mockApis({ aiChat: true, showcases: oneShowcase });
-    renderHero();
-    expect(await screen.findByText(/Open this strategy/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("Next strategy")).not.toBeInTheDocument();
+    // Manual dots swap the scenario on both sides.
+    fireEvent.click(screen.getByLabelText("Show demo 2 of 5"));
+    expect(await screen.findByText("Demo · Maker range farming")).toBeInTheDocument();
+    expect(screen.getAllByText(/Spain wins the World Cup/).length).toBeGreaterThanOrEqual(2);
   });
 });

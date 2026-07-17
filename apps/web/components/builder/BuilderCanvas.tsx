@@ -29,6 +29,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { ConditionV2, ExprNode, ExprResultNode } from "@mx2/rules";
+import { Spinner } from "@/components/ui";
 import {
   UNBOUND,
   conditionLeavesOf,
@@ -372,6 +373,7 @@ function BuilderCanvasInner({
   const select = useBuilderStore((s) => s.select);
   const setPosition = useBuilderStore((s) => s.setPosition);
   const revealTick = useBuilderStore((s) => s.revealTick);
+  const aiStatus = useBuilderStore((s) => s.aiStatus);
   const { getIntersectingNodes } = useReactFlow();
 
   // Connection UX state: the last refusal reason (shown as a transient hint)
@@ -687,6 +689,24 @@ function BuilderCanvasInner({
       {hint ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[320px] rounded-lg border border-warn/40 bg-warn/10 px-3 py-1.5 text-[12px] leading-snug text-warn shadow-panel">
           {hint}
+        </div>
+      ) : null}
+      {/* Deep-link drafting: the canvas is never silently blank while the AI
+          works (or after it fails) — only over an empty doc, never real work. */}
+      {doc.expr.children.length === 0 && doc.watchedMarkets.length === 0 && aiStatus !== "idle" ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          {aiStatus === "drafting" ? (
+            <div className="flex items-center gap-2 rounded-lg border border-brand/30 bg-surface px-4 py-2.5 shadow-panel">
+              <Spinner />
+              <span className="text-[13px] font-medium text-accent">
+                AI is drafting your strategy…
+              </span>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-neg/40 bg-surface px-4 py-2.5 text-[13px] font-medium text-neg shadow-panel">
+              Draft failed — see the AI panel
+            </div>
+          )}
         </div>
       ) : null}
     </div>

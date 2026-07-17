@@ -46,6 +46,28 @@ const BuilderCanvas = dynamic(() => import("./BuilderCanvas"), {
   loading: () => <Skeleton className="h-full w-full rounded-xl" />,
 });
 
+/**
+ * Parse ?pinned= — comma-separated `conditionId~encodedTitle` entries, capped
+ * at 4 (the API's pinnedConditionIds limit). Malformed entries are dropped.
+ */
+export function parsePinnedParam(raw: string | null): { conditionId: string; title: string }[] {
+  if (!raw) return [];
+  const out: { conditionId: string; title: string }[] = [];
+  for (const entry of raw.split(",")) {
+    if (out.length >= 4) break;
+    const sep = entry.indexOf("~");
+    if (sep <= 0 || sep === entry.length - 1) continue;
+    try {
+      const title = decodeURIComponent(entry.slice(sep + 1));
+      if (title.trim().length === 0) continue;
+      out.push({ conditionId: entry.slice(0, sep), title });
+    } catch {
+      // Broken percent-encoding — drop the entry.
+    }
+  }
+  return out;
+}
+
 /** Debounce the store revision so draft evaluation isn't spammed per keystroke. */
 function useDebouncedRevision(revision: number, delayMs = 1_200): number {
   const [debounced, setDebounced] = useState(revision);
@@ -112,12 +134,15 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const revision = useBuilderStore((s) => s.revision);
   const reset = useBuilderStore((s) => s.reset);
   const setName = useBuilderStore((s) => s.setName);
+  const setActiveTab = useBuilderStore((s) => s.setActiveTab);
 
   const [initialized, setInitialized] = useState(false);
   const panel = usePanelWidth();
 
   const flags = useFeatureFlags();
   const aiPrompt = params.get("prompt");
+  const pinnedParam = params.get("pinned");
+  const initialPinned = useMemo(() => parsePinnedParam(pinnedParam), [pinnedParam]);
   const showcaseId = params.get("showcase");
   const showcases = useShowcases(Boolean(showcaseId));
   const scenarioId = params.get("scenario");
@@ -175,7 +200,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       if (flags.isLoading) return; // wait to know whether the AI panel exists
       if (flags.data?.aiChat) {
         // Start blank — the AiPanel auto-fires the prompt and fills the canvas.
+        // The tab store survives navigation, so force the AI tab into view.
         reset(emptyDoc());
+        setActiveTab("ai");
         setInitialized(true);
         return;
       }
@@ -208,6 +235,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     initialized,
     params,
     reset,
+    setActiveTab,
     editOf,
     editing.data,
     aiPrompt,
@@ -364,6 +392,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           evaluation={evaluation.data}
           aiChatEnabled={Boolean(flags.data?.aiChat)}
           aiPrompt={aiPrompt}
+          aiPinned={initialPinned}
           footer={
             <div
               className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"

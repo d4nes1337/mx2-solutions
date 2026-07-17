@@ -32,11 +32,14 @@ export function WorkspacePanel({
   evaluation,
   aiChatEnabled,
   aiPrompt,
+  aiPinned,
   footer,
 }: {
   evaluation: DraftEvaluation | undefined;
   aiChatEnabled: boolean;
   aiPrompt?: string | null;
+  /** Deep-link market pins (?pinned=) forwarded to the AI chat. */
+  aiPinned?: { conditionId: string; title: string }[];
   footer: ReactNode;
 }) {
   const activeTab = useBuilderStore((s) => s.activeTab);
@@ -82,7 +85,7 @@ export function WorkspacePanel({
             (and a generation in flight) survives; other tabs mount on demand. */}
         {aiChatEnabled ? (
           <div className={cn("h-full", effectiveTab !== "ai" && "hidden")}>
-            <AiPanel initialPrompt={aiPrompt} />
+            <AiPanel initialPrompt={aiPrompt} {...(aiPinned ? { initialPinned: aiPinned } : {})} />
           </div>
         ) : null}
         {effectiveTab === "simulate" ? (

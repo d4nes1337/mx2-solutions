@@ -31,6 +31,8 @@ export type AiGenerateResponse =
       summary: string;
       warnings: string[];
       markets: Record<string, AiGeneratedMarketMeta>;
+      /** Assumptions/follow-ups the model recorded while drafting (≤3). */
+      openQuestions?: string[];
     }
   | { status: "clarify"; question: string };
 

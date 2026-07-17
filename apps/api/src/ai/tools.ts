@@ -273,6 +273,13 @@ export const CREATE_STRATEGY_TOOL = {
           },
         },
       },
+      open_questions: {
+        type: "array",
+        maxItems: 3,
+        items: { type: "string", maxLength: 200 },
+        description:
+          "OPTIONAL: up to 3 short assumptions you made or quick questions for the user, shown WITH the draft (e.g. 'Assumed a $100 stake — how much do you want to trade?'). Omit when the request was fully specified.",
+      },
     },
   },
 } as const;
@@ -280,7 +287,7 @@ export const CREATE_STRATEGY_TOOL = {
 export const CLARIFY_TOOL = {
   name: "clarify",
   description:
-    "Use INSTEAD of create_strategy when the request is not about a Polymarket trading strategy, is too ambiguous to build, or no matching market exists. Ask exactly one question, or politely explain what you can help with.",
+    "Use INSTEAD of create_strategy ONLY when the message is gibberish, empty, or clearly not about a prediction-market strategy — never merely because details are missing. Ask exactly one question, or politely explain what you can help with.",
   strict: true,
   input_schema: {
     type: "object" as const,
@@ -360,6 +367,9 @@ export const CreateStrategyInputZ = z.object({
     maxRepeats: z.number().int().nullable(),
     cooldownMs: z.number().int().nullable(),
   }),
+  // Defaulted (not required) so old few-shots/repair rounds stay valid; the
+  // generator clamps length/count — a display field must never fail a draft.
+  open_questions: z.array(z.string()).default([]),
 });
 export type CreateStrategyInput = z.infer<typeof CreateStrategyInputZ>;
 

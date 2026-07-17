@@ -1,8 +1,53 @@
 # Project Status
 
-_Last updated: 2026-07-16_
+_Last updated: 2026-07-17_
 
 ## Recent
+
+- **AI-first UX pivot: smart search, draft-first AI, hero demo player, discovery section
+  (built; D-027, ADR-0015/0016).** Owner's pivot brief (2026-07-17 Q&A) executed as six
+  vertical slices:
+  - **Smart pass-through search (ADR-0015).** Pure `understandQuery` (filler stripping;
+    `19.07`/`July 19`/`today` date parsing, year-rollover safe, matched ±36h against hit
+    `endDate`; static synonym/entity table) fans out ≤3 parallel Gamma `/public-search`
+    queries with a widening `status:"any"` retry when hits < 3, deterministic re-rank
+    (3·lexical + 2·dateFit + log-liquidity, dedup by conditionId) and a 30s module-level TTL
+    cache (200 keys, single-inflight). Route serves 15 hits (was 8); the AI `search_markets`
+    tool uses the same helper (`maxFanOut: 2`, 8 hits/query, `MAX_SEARCHES` unchanged). Web:
+    250ms debounce; @-mentions accept internal spaces ("@world cup"); dropdown shows 8.
+    Budget: ≤4 Gamma calls per uncached search, ≤12 per AI generation (R-034).
+  - **Draft-first AI + handoff hardening (ADR-0016).** System prompt tool-protocol step
+    rewritten: any plausible trading intent MUST end in `create_strategy` with sensible
+    defaults; assumptions/follow-ups ride along in the new optional `open_questions` tool
+    field (≤3 × ≤200 chars, zod mirror `.default([])` — old few-shots stay valid); `clarify`
+    reserved for gibberish/non-strategy input. `?prompt=` deep links always activate the AI
+    tab; the empty canvas shows a drafting/error overlay (`aiStatus` in the builder store)
+    instead of staying silently blank; failures keep the last prompt and render Retry beside
+    the template chips; open-question chips prefill the composer for refinement.
+  - **Chat rendering + composer.** Dependency-free `Markdown` renderer for assistant bubbles
+    (builds React nodes — no `dangerouslySetInnerHTML`, XSS-safe by construction); autogrow
+    composer (52–160px) replaces the fixed `rows={2}` in the cockpit and hero.
+  - **Home hero = big AI chat with @-mentions.** `HeroChat` replaces the plain textarea
+    (mention machinery extracted from AiPanel into a shared hook, behavior-identical); pinned
+    markets survive the handoff via `?pinned=` → `seedPins()` before auto-fire. The **demo
+    player** auto-types 5 curated scenarios (news-momentum cross-market, maker range farming,
+    trailing-stop protection, live-match dip-buy, confirmed threshold entry) from ONE state
+    machine so chat text, diagram chips, chart markers and dots stay in lockstep; each
+    scenario binds a live market at render (real title + real price series via smart search)
+    and falls back to a deterministic seeded synthetic series captioned "illustrative"
+    (honesty bar, R-035); hover/typing pauses; reduced-motion gets a static reveal.
+  - **Discovery section.** Left: **Proven plays** — backtested showcase carousel (real PnL
+    entry markers, hypothetical-results disclaimer kept on every card); an empty
+    `/api/showcases` now renders 3 curated sample cards ("Sample plays — live backtests
+    refresh every 15 min") instead of silently swapping to the chartless template gallery.
+    Right: **Automate these markets now** — top feed markets + best-fit strategy suggestion
+    (deterministic heuristics: dip-buy / trailing-stop protect / momentum alert / threshold
+    entry) + one-click Build into a drafting canvas.
+  - **Maker loop enabled locally** (`FEATURE_MAKER_LOOP=true` in the gitignored root `.env`):
+    shadow-only — signs nothing per RFC-0003 §2; `FEATURE_MAKER_LOOP_LIVE` stays false; the
+    "Rebate farming isn't enabled" dead-end when adding a loop condition is gone.
+  - Governance: ADR-0015/0016 new; ADR-0011 amended (`create_strategy` non-strict since
+    `a6ebac7`; draft-first supersedes clarify-co-equal); risks R-034..R-036 registered.
 
 - **Round 6: withdrawal path, live farming execution, canvas wiring (built; D-026).**
   - **pUSD discovery (load-bearing, verified on-chain — INTEGRATION §23):** both V2 exchanges

@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, Sparkles, X } from "lucide-react";
 import { Badge, Spinner } from "@/components/ui";
+import { Markdown } from "@/components/ui/Markdown";
 import { ApiError } from "@/lib/api";
 import {
   useGenerateStrategy,
@@ -24,9 +25,10 @@ import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
 import { compileDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
-import { useMarketSearch, type MarketSearchResult } from "@/lib/smart-orders/queries";
+import { useMarketMention } from "@/lib/smart-orders/use-mention";
 import { TEMPLATES } from "@/lib/smart-orders/templates";
-import { cents, usdCompact, toNum } from "@/lib/format";
+import { useAutogrowTextarea } from "@/lib/use-autogrow";
+import { MentionDropdown } from "./MentionDropdown";
 
 /** Progress theater: honest-ish stage copy while the model works. */
 const STAGES = [
@@ -40,34 +42,27 @@ const STAGE_AT_MS = [0, 1_800, 5_000, 11_000];
 /** Display-log cap — plenty for a session without unbounded growth. */
 const MAX_MESSAGES = 40;
 
-interface PinnedMarket {
-  conditionId: string;
-  title: string;
-  image: string;
-}
-
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   /** Engine warnings attached to an assistant turn. */
   warnings?: string[];
+  /** "I assumed / quick questions" chips — tap to prefill the composer. */
+  openQuestions?: string[];
 }
 
-/**
- * Claude-Code-style @-mention: the token under the caret (`@fra…`) drives a
- * live market search. No spaces inside the query — a space ends the token.
- */
-const detectMention = (value: string, caret: number): { query: string; start: number } | null => {
-  const head = value.slice(0, caret);
-  const m = /(?:^|\s)@([^\s@]{1,40})$/.exec(head);
-  if (!m) return null;
-  return { query: m[1]!, start: caret - m[1]!.length - 1 };
-};
-
-export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
+export function AiPanel({
+  initialPrompt,
+  initialPinned,
+}: {
+  initialPrompt?: string | null;
+  /** Deep-link pins (?pinned=) — seeded before the auto-fired prompt submits. */
+  initialPinned?: { conditionId: string; title: string }[];
+}) {
   const doc = useBuilderStore((s) => s.doc);
   const reset = useBuilderStore((s) => s.reset);
   const revealAll = useBuilderStore((s) => s.revealAll);
+  const setAiStatus = useBuilderStore((s) => s.setAiStatus);
   const generate = useGenerateStrategy();
 
   const [input, setInput] = useState("");
@@ -75,33 +70,33 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [stage, setStage] = useState(0);
   const autoFired = useRef(false);
+  /** Last submitted prompt — powers the Retry button and deep-link error copy. */
+  const lastPrompt = useRef<{ text: string; fromDeepLink: boolean } | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const [pinned, setPinned] = useState<PinnedMarket[]>([]);
-  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const mentionSearch = useMarketSearch(mention?.query ?? "");
-  const mentionResults =
-    mention && mention.query.length >= 2 ? (mentionSearch.data?.results ?? []).slice(0, 5) : [];
+  useAutogrowTextarea(textareaRef, input);
+  const {
+    mention,
+    results: mentionResults,
+    pick: pickMention,
+    dismiss: dismissMention,
+    syncFromCaret,
+    pinned,
+    unpin,
+    seedPins,
+  } = useMarketMention({ value: input, setValue: setInput, textareaRef });
+  /** Keyboard cursor in the mention dropdown (arrows move, Enter picks). */
+  const [mentionIndex, setMentionIndex] = useState(0);
 
-  const syncMention = (value: string) => {
-    const caret = textareaRef.current?.selectionStart ?? value.length;
-    setMention(detectMention(value, caret));
-  };
-
-  const pickMention = (r: MarketSearchResult) => {
-    if (!mention) return;
-    const caret = textareaRef.current?.selectionStart ?? input.length;
-    const inserted = `@"${r.title}" `;
-    setInput(`${input.slice(0, mention.start)}${inserted}${input.slice(caret)}`.slice(0, 500));
-    setPinned((p) =>
-      p.length >= 4 || p.some((x) => x.conditionId === r.conditionId)
-        ? p
-        : [...p, { conditionId: r.conditionId, title: r.title, image: r.image }],
-    );
-    setMention(null);
-    textareaRef.current?.focus();
-  };
+  // Seed deep-link pins during the first render (render-phase state update):
+  // the first committed render already has them, so the auto-fire effect's
+  // submit closure sends pinnedConditionIds with the ?prompt= request.
+  const seededRef = useRef(false);
+  if (!seededRef.current && initialPinned && initialPinned.length > 0) {
+    seededRef.current = true;
+    seedPins(initialPinned);
+  }
 
   const pushMessage = (msg: ChatMessage) => setMessages((m) => [...m, msg].slice(-MAX_MESSAGES));
 
@@ -126,7 +121,14 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     );
     reset(next);
     revealAll();
-    pushMessage({ role: "assistant", content: res.summary, warnings: res.warnings });
+    pushMessage({
+      role: "assistant",
+      content: res.summary,
+      warnings: res.warnings,
+      ...(res.openQuestions && res.openQuestions.length > 0
+        ? { openQuestions: res.openQuestions }
+        : {}),
+    });
     setHistory((h) =>
       [
         ...h,
@@ -136,12 +138,14 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     );
   };
 
-  const submit = (raw: string) => {
+  const submit = (raw: string, opts?: { fromDeepLink?: boolean }) => {
     const prompt = raw.trim().slice(0, 500);
     if (prompt.length < 3 || generate.isPending) return;
+    lastPrompt.current = { text: prompt, fromDeepLink: Boolean(opts?.fromDeepLink) };
     setInput("");
-    setMention(null);
+    syncFromCaret(""); // plain clear (not an Escape-dismiss of the token)
     pushMessage({ role: "user", content: prompt });
+    setAiStatus("drafting");
     const hasConditions = conditionLeavesOf(doc.expr).length > 0;
     generate.mutate(
       {
@@ -150,7 +154,13 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
         currentDefinition: hasConditions ? compileDoc(doc) : null,
         ...(pinned.length > 0 ? { pinnedConditionIds: pinned.map((p) => p.conditionId) } : {}),
       },
-      { onSuccess: (res) => applyResult(prompt, res) },
+      {
+        onSuccess: (res) => {
+          applyResult(prompt, res);
+          setAiStatus("idle");
+        },
+        onError: () => setAiStatus("error"),
+      },
     );
   };
 
@@ -164,7 +174,7 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     const t = setTimeout(() => {
       if (autoFired.current) return;
       autoFired.current = true;
-      submit(initialPrompt);
+      submit(initialPrompt, { fromDeepLink: true });
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,6 +195,9 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
     logEndRef.current?.scrollIntoView?.({ block: "end" });
   }, [messages.length, generate.isPending]);
 
+  // A new mention query restarts keyboard navigation at the top row.
+  useEffect(() => setMentionIndex(0), [mention?.query]);
+
   const err = generate.error;
   const errorCopy = !err
     ? null
@@ -192,9 +205,11 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
       ? "You've hit today's free AI limit — pick a template below or come back tomorrow."
       : err instanceof ApiError && err.code === "AI_DISABLED"
         ? "AI generation is off right now — templates still work."
-        : err instanceof ApiError && err.code === "AI_GENERATION_FAILED"
-          ? "I couldn't turn that into a valid strategy — try naming a market and a price."
-          : "The AI is unreachable right now — try again in a moment, or start from a template.";
+        : lastPrompt.current?.fromDeepLink
+          ? "I couldn't draft that — retry, or start from a template."
+          : err instanceof ApiError && err.code === "AI_GENERATION_FAILED"
+            ? "I couldn't turn that into a valid strategy — try naming a market and a price."
+            : "The AI is unreachable right now — try again in a moment, or start from a template.";
 
   const showTemplates = Boolean(errorCopy);
   const hasConversation = messages.length > 0;
@@ -230,11 +245,11 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
             <div
               className={
                 m.role === "user"
-                  ? "max-w-[85%] rounded-lg rounded-br-sm bg-brand-soft px-3 py-2 text-[12px] leading-relaxed text-fg"
-                  : "max-w-[92%] rounded-lg rounded-bl-sm bg-surface-2 px-3 py-2 text-[12px] leading-relaxed text-fg"
+                  ? "w-fit max-w-[85%] rounded-lg rounded-br-sm bg-brand-soft px-3 py-2 text-[12px] leading-relaxed text-fg"
+                  : "w-fit max-w-[92%] rounded-lg rounded-bl-sm bg-surface-2 px-3 py-2 text-[12px] leading-relaxed text-fg"
               }
             >
-              {m.content}
+              {m.role === "assistant" ? <Markdown text={m.content} /> : m.content}
               {m.warnings && m.warnings.length > 0 ? (
                 <ul className="mt-1.5 space-y-1 border-t border-border pt-1.5">
                   {m.warnings.map((w, j) => (
@@ -243,6 +258,26 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {m.openQuestions && m.openQuestions.length > 0 ? (
+                <div className="mt-1.5 space-y-1 border-t border-border pt-1.5">
+                  <p className="text-[11px] font-medium text-muted">I assumed / quick questions</p>
+                  <div className="flex flex-wrap gap-1">
+                    {m.openQuestions.map((q, j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        onClick={() => {
+                          setInput(q);
+                          textareaRef.current?.focus();
+                        }}
+                        className="rounded-full border border-brand/40 bg-brand-soft px-2 py-0.5 text-left text-[11px] font-medium text-accent transition-colors hover:border-brand"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ) : null}
             </div>
           </div>
@@ -261,6 +296,18 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
 
         {showTemplates ? (
           <div className="flex flex-wrap gap-1.5 px-1">
+            {lastPrompt.current ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const last = lastPrompt.current!;
+                  submit(last.text, { fromDeepLink: last.fromDeepLink });
+                }}
+                className="rounded-full border border-brand/50 bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-accent transition-colors hover:border-brand"
+              >
+                Retry
+              </button>
+            ) : null}
             {TEMPLATES.map((t) => (
               <button
                 key={t.id}
@@ -296,9 +343,7 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
                 <button
                   type="button"
                   aria-label={`Unpin ${p.title}`}
-                  onClick={() =>
-                    setPinned((cur) => cur.filter((x) => x.conditionId !== p.conditionId))
-                  }
+                  onClick={() => unpin(p.conditionId)}
                   className="text-accent/70 transition-colors hover:text-accent"
                 >
                   <X size={11} aria-hidden />
@@ -320,26 +365,34 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
             value={input}
             onChange={(e) => {
               setInput(e.target.value);
-              syncMention(e.target.value);
+              syncFromCaret(e.target.value);
             }}
-            onSelect={() => syncMention(input)}
+            onSelect={() => syncFromCaret(input)}
             onKeyDown={(e) => {
               if (e.key === "Escape" && mention) {
                 e.preventDefault();
-                setMention(null);
+                dismissMention();
+                return;
+              }
+              if (mentionResults.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                e.preventDefault();
+                const max = mentionResults.length - 1;
+                setMentionIndex((cur) => {
+                  const i = Math.min(cur, max);
+                  return e.key === "ArrowDown" ? (i >= max ? 0 : i + 1) : i <= 0 ? max : i - 1;
+                });
                 return;
               }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                // Enter while the @-dropdown is open picks the top match.
+                // Enter while the @-dropdown is open picks the active match.
                 if (mentionResults.length > 0) {
-                  pickMention(mentionResults[0]!);
+                  pickMention(mentionResults[Math.min(mentionIndex, mentionResults.length - 1)]!);
                   return;
                 }
                 submit(input);
               }
             }}
-            rows={2}
             maxLength={500}
             placeholder={
               hasConversation
@@ -358,36 +411,11 @@ export function AiPanel({ initialPrompt }: { initialPrompt?: string | null }) {
             <Send size={15} aria-hidden />
           </button>
 
-          {mentionResults.length > 0 ? (
-            <div className="absolute bottom-full left-0 right-10 z-30 mb-1 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-pop">
-              {mentionResults.map((r) => (
-                <button
-                  key={r.conditionId}
-                  type="button"
-                  onClick={() => pickMention(r)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
-                >
-                  {r.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={r.image}
-                      alt=""
-                      className="h-6 w-6 shrink-0 rounded-md object-cover"
-                    />
-                  ) : (
-                    <div className="h-6 w-6 shrink-0 rounded-md bg-surface-3" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="line-clamp-1 text-[12px] font-medium text-fg">{r.title}</span>
-                    <span className="tabular text-[10px] text-faint">
-                      {r.outcomes[0] ?? "Yes"} {cents(Number(r.outcomePrices[0] ?? 0))} ·{" "}
-                      {usdCompact(toNum(r.volume))} Vol
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <MentionDropdown
+            results={mentionResults}
+            activeIndex={Math.min(mentionIndex, Math.max(0, mentionResults.length - 1))}
+            onPick={pickMention}
+          />
         </form>
 
         <p className="text-[10px] leading-snug text-faint">

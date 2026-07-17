@@ -30,7 +30,7 @@ import {
 } from "@mx2/rules";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
-import { searchMarketHits } from "../lib/market-search.js";
+import { smartSearchMarketHits } from "../lib/market-search.js";
 
 export interface SmartOrdersRoutesDeps {
   config: AppConfig;
@@ -677,7 +677,7 @@ export const registerSmartOrdersRoutes = (
       reply.code(400);
       return { error: "INVALID_REQUEST", message: "q must be 2–80 characters." };
     }
-    const result = await searchMarketHits(deps.gammaClient, q, 8);
+    const result = await smartSearchMarketHits(deps.gammaClient, q, { limit: 15 });
     if (!result.ok) {
       reply.code(502);
       return { error: result.error.code, message: result.error.message };

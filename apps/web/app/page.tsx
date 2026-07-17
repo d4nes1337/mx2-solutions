@@ -1,8 +1,7 @@
 "use client";
 
 import { Hero } from "@/components/home/Hero";
-import { ShowcaseGallery } from "@/components/home/ShowcaseGallery";
-import { HotMarkets } from "@/components/home/HotMarkets";
+import { DiscoverySection } from "@/components/home/DiscoverySection";
 import { HomeTour } from "@/components/onboarding/tours";
 
 export default function HomePage() {
@@ -10,8 +9,7 @@ export default function HomePage() {
     <div className="space-y-8">
       <HomeTour />
       <Hero />
-      <ShowcaseGallery />
-      <HotMarkets />
+      <DiscoverySection />
     </div>
   );
 }

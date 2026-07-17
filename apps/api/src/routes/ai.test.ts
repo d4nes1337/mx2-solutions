@@ -31,6 +31,7 @@ import type {
 import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
 import { resetRateLimits } from "../middleware/rate-limit.js";
+import { resetSmartSearchCache } from "../lib/market-search.js";
 import type { AiClient } from "../ai/client.js";
 
 const logger = createLogger({ name: "ai-test", level: "silent" });
@@ -344,7 +345,10 @@ const buildAiApp = (opts: {
 const post = (app: ReturnType<typeof buildAiApp>["app"], payload: unknown) =>
   app.inject({ method: "POST", url: "/api/ai/generate-strategy", payload: payload as object });
 
-beforeEach(() => resetRateLimits());
+beforeEach(() => {
+  resetRateLimits();
+  resetSmartSearchCache();
+});
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -383,6 +387,8 @@ describe("POST /api/ai/generate-strategy", () => {
     expect(body.definition.expr.children[0].condition.market.tokenId).toBe(TOKEN_YES);
     expect(body.markets[TOKEN_YES].title).toContain("BTC");
     expect(body.summary).toContain("dips");
+    // open_questions absent from the tool input → defaults to [].
+    expect(body.openQuestions).toEqual([]);
     expect(audits.map((a) => a.action)).toContain("ai.strategy_generated");
 
     // The model must never see real ids: the search tool_result (sent on the
@@ -390,6 +396,35 @@ describe("POST /api/ai/generate-strategy", () => {
     const secondCallMessages = JSON.stringify(aiCalls[1]!.messages);
     expect(secondCallMessages).not.toContain(TOKEN_YES);
     expect(secondCallMessages).not.toContain("cond-btc");
+    await app.close();
+  });
+
+  it("passes open_questions through with the draft, clamped to 3 items", async () => {
+    const { app } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("search_markets", { query: "btc 150k" }, "t1")]),
+        modelTurn([
+          toolUse(
+            "create_strategy",
+            createInput({
+              open_questions: [
+                "Assumed a $100 stake — how much do you want to trade?",
+                "Assumed the December market — did you mean another date?",
+                "Alert only for now — want a prepared order instead?",
+                "A fourth question that must be dropped",
+              ],
+            }),
+            "t2",
+          ),
+        ]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy the dip on btc 150k" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.openQuestions).toHaveLength(3);
+    expect(body.openQuestions[0]).toContain("$100 stake");
     await app.close();
   });
 

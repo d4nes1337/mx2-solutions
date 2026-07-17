@@ -25,6 +25,9 @@ import {
 /** Tabs of the right-hand workspace panel (editor-only UI state). */
 export type WorkspaceTab = "ai" | "simulate" | "market" | "settings" | "block";
 
+/** AI generation lifecycle — drives the canvas "drafting…" overlay. */
+export type AiStatus = "idle" | "drafting" | "error";
+
 export interface BuilderState {
   doc: StrategyDoc;
   /** Bumped on every semantic change — drives draft re-evaluation. */
@@ -40,9 +43,12 @@ export interface BuilderState {
   lastNonBlockTab: Exclude<WorkspaceTab, "block">;
   /** Token whose preview the Market tab shows (null = first referenced market). */
   focusedMarketToken: string | null;
+  /** What the AI panel is doing right now (editor-only — canvas overlay). */
+  aiStatus: AiStatus;
 
   reset: (doc?: StrategyDoc) => void;
   setActiveTab: (tab: WorkspaceTab) => void;
+  setAiStatus: (status: AiStatus) => void;
   focusMarket: (tokenId: string | null) => void;
   revealAll: () => void;
   setName: (name: string) => void;
@@ -83,6 +89,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   activeTab: "ai",
   lastNonBlockTab: "ai",
   focusedMarketToken: null,
+  aiStatus: "idle",
 
   reset: (doc) => set({ doc: doc ?? emptyDoc(), revision: get().revision + 1 }),
 
@@ -91,6 +98,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   setActiveTab: (activeTab) =>
     set(activeTab === "block" ? { activeTab } : { activeTab, lastNonBlockTab: activeTab }),
   focusMarket: (focusedMarketToken) => set({ focusedMarketToken }),
+  setAiStatus: (aiStatus) => set({ aiStatus }),
 
   setName: (name) => set((s) => bump({ ...s.doc, name }, s)),
 

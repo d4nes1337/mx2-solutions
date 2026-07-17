@@ -82,3 +82,19 @@ highest intent.
   automatically, endpoint 503s) and/or `FEATURE_OPEN_BETA=false`; no migrations to revert.
 - The in-memory rate limiter remains single-process (D-001); revisit with any
   multi-instance deployment. Anthropic spend should be watched in the console during beta.
+
+## Amendments
+
+- **Amended 2026-07-17 — `create_strategy` is no longer strict** (supersedes decision §2's
+  "All tools use `strict: true`"). Verified live: the flattened nullable condition shape
+  now carries 21 union-typed parameters (19 pre-trailing) and Anthropic's strict-mode
+  grammar compilation caps at 16 unions, so strict compilation 400s — non-strict since
+  commit `a6ebac7`. `search_markets` and `clarify` stay strict; the `create_strategy`
+  safety net is unchanged in kind: zod mirror parse + one repair round +
+  `validateStrategyDefinition` still gate every generated definition.
+- **Amended 2026-07-17 — draft-first supersedes clarify-co-equal** (ADR-0016, D-027).
+  Decision §1's "must finish with exactly one `create_strategy` or `clarify`" still holds
+  mechanically, but `clarify` is no longer a co-equal terminal: any plausible trading
+  intent must end in a `create_strategy` draft with assumptions/follow-ups riding along in
+  the new optional `open_questions` field; `clarify` is reserved for gibberish/empty/
+  non-prediction-market input.

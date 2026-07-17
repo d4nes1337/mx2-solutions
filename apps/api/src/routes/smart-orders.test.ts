@@ -33,6 +33,7 @@ import type { ExprNode } from "@mx2/rules";
 import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
 import { resetRateLimits } from "../middleware/rate-limit.js";
+import { resetSmartSearchCache } from "../lib/market-search.js";
 
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const COOKIE = "mx2_session=tok";
@@ -382,7 +383,10 @@ const validBody = {
   recurrence: { kind: "once" },
 };
 
-beforeEach(() => resetRateLimits());
+beforeEach(() => {
+  resetRateLimits();
+  resetSmartSearchCache();
+});
 
 describe("POST /api/smart-orders", () => {
   it("fails closed when the v2 flag is off", async () => {

@@ -50,9 +50,15 @@ export interface GammaClient {
   /**
    * Full-text event search (Gamma /public-search, verified live 2026-07-08:
    * returns { events, tags }). Falls back to a title-filtered listEvents scan
-   * if the search endpoint errors or changes shape.
+   * if the search endpoint errors or changes shape. status "any" omits the
+   * events_status filter (widening retry for events Gamma no longer flags
+   * active); default "active".
    */
-  searchMarkets(query: string, limit?: number): Promise<Result<GammaEvent[], PolymarketError>>;
+  searchMarkets(
+    query: string,
+    limit?: number,
+    opts?: { status?: "active" | "any" },
+  ): Promise<Result<GammaEvent[], PolymarketError>>;
 }
 
 export interface GammaClientOptions {
@@ -183,12 +189,12 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
       return result;
     },
 
-    searchMarkets: async (query, limit = 10) => {
+    searchMarkets: async (query, limit = 10, opts) => {
       const bySearch = await fetchJson(
         buildUrl(baseUrl, "/public-search", {
           q: query,
           limit_per_type: limit,
-          events_status: "active",
+          ...(opts?.status === "any" ? {} : { events_status: "active" }),
         }),
         PublicSearchSchema,
         timeoutMs,

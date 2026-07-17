@@ -7,6 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { POLL } from "../queries";
+import { useDebouncedValue } from "../use-debounced-value";
 import type { ExprNode, ExprResultNode, StrategyDefinition } from "@mx2/rules";
 
 // ── Response shapes (mirror apps/api/src/routes/smart-orders.ts) ────────────
@@ -149,7 +150,8 @@ export function useDraftEvaluation(
 }
 
 export function useMarketSearch(q: string) {
-  const query = q.trim();
+  // Debounced internally so every consumer gets keystroke-safe fetching.
+  const query = useDebouncedValue(q.trim(), 250);
   return useQuery({
     queryKey: ["market-search", query],
     queryFn: () =>

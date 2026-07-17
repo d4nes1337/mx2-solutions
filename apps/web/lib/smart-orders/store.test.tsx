@@ -107,4 +107,18 @@ describe("useBuilderStore: editor-only state", () => {
     expect(s.activeTab).toBe("block");
     expect(s.lastNonBlockTab).toBe("simulate");
   });
+
+  it("aiStatus starts idle and transitions without bumping the revision", () => {
+    expect(useBuilderStore.getState().aiStatus).toBe("idle");
+    const before = useBuilderStore.getState().revision;
+
+    useBuilderStore.getState().setAiStatus("drafting");
+    expect(useBuilderStore.getState().aiStatus).toBe("drafting");
+    useBuilderStore.getState().setAiStatus("error");
+    expect(useBuilderStore.getState().aiStatus).toBe("error");
+    useBuilderStore.getState().setAiStatus("idle");
+    expect(useBuilderStore.getState().aiStatus).toBe("idle");
+
+    expect(useBuilderStore.getState().revision).toBe(before);
+  });
 });
