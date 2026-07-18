@@ -42,16 +42,24 @@ describe("createBridgeClient", () => {
     expect(result.value.supportedAssets[0]?.token.symbol).toBe("USDC");
   });
 
-  it("omits malformed builder attribution before calling Bridge", async () => {
+  it("createDepositAddresses sends { address } and unwraps the live { address: {...} } map", async () => {
+    // Live Bridge shape (verified 2026-07-18): request field is `address`, the
+    // response nests the family map under `address` (singular), and the Tron
+    // family key is `tron` — normalized to our canonical `tvm`.
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      makeResponse({
-        addresses: {
-          evm: "0x1111111111111111111111111111111111111111",
-          svm: "solana-address",
-          btc: "bc1address",
-          tvm: "tron-address",
+      makeResponse(
+        {
+          address: {
+            evm: "0x1111111111111111111111111111111111111111",
+            svm: "solana-address",
+            tron: "tron-address",
+            btc: "bc1address",
+          },
+          note: "Only certain chains and tokens are supported.",
+          warnings: [{ code: "missing_builder_code", message: "..." }],
         },
-      }),
+        201,
+      ),
     );
 
     const result = await createBridgeClient({
@@ -62,7 +70,19 @@ describe("createBridgeClient", () => {
     });
 
     expect(result.ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[0] ?? [];
+    if (!result.ok) return;
+    expect(result.value.evm).toBe("0x1111111111111111111111111111111111111111");
+    expect(result.value.svm).toBe("solana-address");
+    expect(result.value.btc).toBe("bc1address");
+    // `tron` folded into the canonical `tvm` family key.
+    expect(result.value.tvm).toBe("tron-address");
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/deposit");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      address: "0x2222222222222222222222222222222222222222",
+    });
+    // Malformed builder attribution is dropped, not forwarded.
     expect((init?.headers as Record<string, string>)["X-Builder-Code"]).toBeUndefined();
   });
 

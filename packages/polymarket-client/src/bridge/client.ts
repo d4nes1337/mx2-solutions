@@ -81,6 +81,19 @@ const BUILDER_CODE_RE = /^0x[0-9a-fA-F]{64}$/;
 
 const buildUrl = (base: string, path: string): string => new URL(path, base).toString();
 
+// The Bridge response keys wallet families as evm/svm/tron/btc; the rest of the
+// app uses the canonical set evm/svm/btc/tvm (BridgeAddressTypeSchema). Fold the
+// known alias so a Tron address is stored/looked-up under one consistent key.
+const FAMILY_ALIASES: Record<string, string> = { tron: "tvm" };
+
+const normalizeAddressFamilies = (addresses: BridgeDepositAddresses): BridgeDepositAddresses => {
+  const out: Record<string, string> = {};
+  for (const [family, address] of Object.entries(addresses)) {
+    if (typeof address === "string") out[FAMILY_ALIASES[family] ?? family] = address;
+  }
+  return out as BridgeDepositAddresses;
+};
+
 const fetchJson = async <T>(
   url: string,
   init: RequestInit | undefined,
@@ -131,15 +144,20 @@ export const createBridgeClient = (opts?: BridgeClientOptions): BridgeClient => 
         {
           method: "POST",
           headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify({ polymarketWalletAddress: params.polymarketWalletAddress }),
+          // The Bridge API requires the field name `address` (the Polymarket
+          // wallet that will receive pUSD); anything else returns 400.
+          body: JSON.stringify({ address: params.polymarketWalletAddress }),
         },
         BridgeDepositResponseSchema,
         timeoutMs,
       );
       if (!result.ok) return result;
-      const addresses = result.value.addresses ?? result.value.depositAddresses;
+      // Live shape is `{ address: {evm,svm,tron,btc} }`; keep the older
+      // `addresses`/`depositAddresses` fallbacks for resilience to provider drift.
+      const addresses =
+        result.value.address ?? result.value.addresses ?? result.value.depositAddresses;
       if (!addresses) return err(parseError("Bridge deposit response did not include addresses"));
-      return ok(addresses);
+      return ok(normalizeAddressFamilies(addresses));
     },
 
     getQuote: (params) =>
@@ -173,7 +191,7 @@ export const createBridgeClient = (opts?: BridgeClientOptions): BridgeClient => 
       if (!result.ok) return result;
       const addresses = result.value.address ?? result.value.addresses;
       if (!addresses) return err(parseError("Bridge withdraw response did not include addresses"));
-      return ok(addresses);
+      return ok(normalizeAddressFamilies(addresses));
     },
 
     getStatus: (bridgeAddress) =>

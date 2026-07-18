@@ -436,7 +436,10 @@ function TopUpPanel({
             <QrBadge value={bridgeAddress} />
           </div>
         </div>
-      ) : create.isPending || needsCreate ? (
+      ) : create.isPending || (needsCreate && !create.isError) ? (
+        // Spinner only while the create is actually in flight (or about to
+        // auto-fire). A failed create falls through to the error + Retry below
+        // instead of hanging here forever.
         <Spinner label="Preparing your deposit address…" />
       ) : selectedAsset && saved.isSuccess && !loadError ? (
         <ErrorNote

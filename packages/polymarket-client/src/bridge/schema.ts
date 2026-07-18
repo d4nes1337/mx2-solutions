@@ -28,16 +28,23 @@ export const BridgeDepositAddressesSchema = z
     evm: z.string().optional(),
     svm: z.string().optional(),
     btc: z.string().optional(),
+    // The live API emits `tron`; we normalize it to `tvm` at the client boundary.
+    // Keep both here so parsing never drops a family the provider sends.
+    tron: z.string().optional(),
     tvm: z.string().optional(),
   })
   .catchall(z.string());
 
-export const BridgeDepositResponseSchema = z.object({
-  // Docs describe an address map keyed by wallet family. Keep passthrough so a
-  // provider-added family does not break staging reads.
-  addresses: BridgeDepositAddressesSchema.optional(),
-  depositAddresses: BridgeDepositAddressesSchema.optional(),
-});
+export const BridgeDepositResponseSchema = z
+  .object({
+    // Live API returns the family map under `address` (singular). The older
+    // `addresses`/`depositAddresses` keys are kept as fallbacks. Passthrough so
+    // sibling fields (note, warnings) and provider-added families don't break reads.
+    address: BridgeDepositAddressesSchema.optional(),
+    addresses: BridgeDepositAddressesSchema.optional(),
+    depositAddresses: BridgeDepositAddressesSchema.optional(),
+  })
+  .passthrough();
 
 // ── Quotes (POST /quote) ────────────────────────────────────────────────────
 // Shapes observed in official docs 2026-07-17; everything optional/passthrough
