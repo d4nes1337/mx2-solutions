@@ -8,7 +8,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
@@ -20,11 +20,14 @@ import {
   useShowcases,
 } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
-import { conditionLeavesOf, docFromDefinition, emptyDoc } from "@/lib/smart-orders/doc";
+import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
+import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/smart-orders/drafts";
+import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/smart-orders/drafts-sync";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
 import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
+import { useDraftAutosave } from "@/lib/smart-orders/use-draft-autosave";
 import {
   useCreateStrategy,
   useDraftEvaluation,
@@ -36,6 +39,7 @@ import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
 import { AddPalette } from "./AddPalette";
 import { CanvasToolbar } from "./CanvasToolbar";
+import { DraftSwitcher } from "./DraftSwitcher";
 import { CANVAS_HEIGHT_CLASS } from "./layout-constants";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { SentenceBar } from "./SentenceBar";
@@ -132,39 +136,97 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
 
   const doc = useBuilderStore((s) => s.doc);
   const revision = useBuilderStore((s) => s.revision);
-  const reset = useBuilderStore((s) => s.reset);
+  const spawnDraft = useBuilderStore((s) => s.spawnDraft);
+  const loadDraft = useBuilderStore((s) => s.loadDraft);
   const setName = useBuilderStore((s) => s.setName);
   const setActiveTab = useBuilderStore((s) => s.setActiveTab);
 
   const [initialized, setInitialized] = useState(false);
+  // Ref twin of `initialized`: store updates inside the init effect force a
+  // synchronous re-render before the state update flushes, so the state guard
+  // alone can re-enter the effect. The ref closes that window.
+  const initializedRef = useRef(false);
+  const routerRef = useRef(router);
+  routerRef.current = router;
   const panel = usePanelWidth();
+  useDraftAutosave();
+  // Pull the account's drafts into localStorage once per mount (fail-soft when
+  // signed out) — cross-device drafts then show up in the switcher/resume.
+  useEffect(() => {
+    void importServerDrafts();
+  }, []);
+
+  // Entry params are captured once per mount: after the entry is consumed the
+  // URL is rewritten to the canonical ?draft=<id> form, and captured values
+  // keep the deep-link props (AI prompt, pins) stable through that replace.
+  const [entry] = useState(() => ({
+    draft: params.get("draft"),
+    template: params.get("template"),
+    prompt: params.get("prompt"),
+    pinned: params.get("pinned"),
+    showcase: params.get("showcase"),
+    scenario: params.get("scenario"),
+    scenarioMarket: params.get("scenarioMarket"),
+    outcome: params.get("outcome"),
+    tokenId: params.get("tokenId"),
+    conditionId: params.get("conditionId"),
+    title: params.get("title"),
+    size: params.get("size"),
+  }));
 
   const flags = useFeatureFlags();
-  const aiPrompt = params.get("prompt");
-  const pinnedParam = params.get("pinned");
-  const initialPinned = useMemo(() => parsePinnedParam(pinnedParam), [pinnedParam]);
-  const showcaseId = params.get("showcase");
+  const aiPrompt = entry.prompt;
+  const initialPinned = useMemo(() => parsePinnedParam(entry.pinned), [entry.pinned]);
+  const showcaseId = entry.showcase;
   const showcases = useShowcases(Boolean(showcaseId));
-  const scenarioId = params.get("scenario");
-  const scenarioMarket = params.get("scenarioMarket");
-  const scenarioOutcome = Number(params.get("outcome") ?? "0");
+  const scenarioId = entry.scenario;
+  const scenarioMarket = entry.scenarioMarket;
+  const scenarioOutcome = Number(entry.outcome ?? "0");
   const scenarios = useMarketScenarios(
     scenarioMarket ?? "",
     Number.isFinite(scenarioOutcome) ? scenarioOutcome : 0,
     Boolean(scenarioMarket && scenarioId),
   );
 
-  // Entry modes: edit an existing strategy, a backtested showcase deep link
-  // (?showcase=…), a cockpit entry-scenario deep link (?scenarioMarket=&scenario=…),
-  // AI prompt deep link (landing hero, ?prompt=…), or template-first creation.
-  // A ?conditionId=&tokenId=&outcome=&title= set pre-binds the template to a
-  // market (the cockpit's deep link).
+  // Entry modes: resume a draft (?draft=…), edit an existing strategy, a
+  // backtested showcase deep link (?showcase=…), a cockpit entry-scenario deep
+  // link (?scenarioMarket=&scenario=…), AI prompt deep link (landing hero,
+  // ?prompt=…), or template-first creation. A ?conditionId=&tokenId=&outcome=
+  // &title= set pre-binds the template to a market (the cockpit's deep link).
+  //
+  // Every path SPAWNS a draft instead of resetting in place: in-progress work
+  // is flushed to its own draft first, so no preset/AI/deep-link entry can
+  // overwrite a custom strategy. The URL is then canonicalized to ?draft=<id>
+  // so remounts resume the same draft instead of re-running the entry.
   useEffect(() => {
-    if (initialized) return;
-    if (editOf) {
-      if (!editing.data) return; // wait for the strategy to load
-      reset(layoutDoc(docFromDefinition(editing.data.definitionV2)));
+    if (initializedRef.current) return;
+    const finish = (draftId?: string) => {
+      initializedRef.current = true;
       setInitialized(true);
+      if (draftId && !editOf) {
+        routerRef.current.replace(`/smart-orders/new?draft=${draftId}`, { scroll: false });
+      }
+    };
+    if (entry.draft && !editOf) {
+      if (useBuilderStore.getState().draftId === entry.draft || loadDraft(entry.draft)) {
+        finish();
+        return;
+      }
+      // Unknown/evicted draft id → fall through to the default path.
+    }
+    if (editOf) {
+      // Resume an in-progress edit of this strategy, else seed a stable
+      // per-strategy draft slot from its (immutable) definition.
+      if (loadDraft(`edit-${editOf}`)) {
+        finish();
+        return;
+      }
+      if (!editing.data) return; // wait for the strategy to load
+      spawnDraft(layoutDoc(docFromDefinition(editing.data.definitionV2)), {
+        id: `edit-${editOf}`,
+        origin: `edit:${editOf}`,
+      });
+      finish();
       return;
     }
     if (showcaseId) {
@@ -180,8 +242,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
             rewardsMaxSpread: null,
           },
         };
-        reset(next);
-        setInitialized(true);
+        finish(spawnDraft(next, { origin: `showcase:${sc.id}` }));
         return;
       }
       // Unknown/expired showcase id → fall through to the template path.
@@ -190,8 +251,11 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       if (scenarios.isLoading) return; // wait for the per-market scenario list
       const sc = scenarios.data?.scenarios.find((s) => s.id === scenarioId);
       if (sc) {
-        reset(layoutDoc(docFromDefinition(sc.definition)));
-        setInitialized(true);
+        finish(
+          spawnDraft(layoutDoc(docFromDefinition(sc.definition)), {
+            origin: `scenario:${sc.id}`,
+          }),
+        );
         return;
       }
       // Unknown/expired scenario id → fall through to the template path.
@@ -201,40 +265,53 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       if (flags.data?.aiChat) {
         // Start blank — the AiPanel auto-fires the prompt and fills the canvas.
         // The tab store survives navigation, so force the AI tab into view.
-        reset(emptyDoc());
+        const id = spawnDraft(undefined, { origin: "ai" });
         setActiveTab("ai");
-        setInitialized(true);
+        finish(id);
         return;
       }
       // Flag off → fall through to the template path (graceful degradation).
     }
-    const t = params.get("template");
-    const template = (t ? templateById(t) : null) ?? TEMPLATES[0]!;
-    const tokenId = params.get("tokenId");
-    const conditionId = params.get("conditionId");
+    const explicitTemplate = Boolean(entry.template || (entry.tokenId && entry.conditionId));
+    if (!explicitTemplate) {
+      // Bare /smart-orders/new: keep this session's live canvas, else resume
+      // the most recent draft. A first-ever visit falls through to the
+      // default template scaffold.
+      const live = useBuilderStore.getState().draftId;
+      if (live) {
+        finish(live);
+        return;
+      }
+      const recent = listDraftsLocal()[0];
+      if (recent && loadDraft(recent.id)) {
+        finish(recent.id);
+        return;
+      }
+    }
+    const template = (entry.template ? templateById(entry.template) : null) ?? TEMPLATES[0]!;
     const market =
-      tokenId && conditionId
+      entry.tokenId && entry.conditionId
         ? {
-            conditionId,
-            tokenId,
-            outcome: params.get("outcome") ?? "YES",
-            ...(params.get("title") ? { title: params.get("title")! } : {}),
+            conditionId: entry.conditionId,
+            tokenId: entry.tokenId,
+            outcome: entry.outcome ?? "YES",
+            ...(entry.title ? { title: entry.title } : {}),
           }
         : undefined;
-    const meta = params.get("title") ? { title: params.get("title")! } : undefined;
+    const meta = entry.title ? { title: entry.title } : undefined;
     const doc = template.build(market, meta);
     // ?size= (portfolio "Protect this position"): size the prepared order to
     // the caller's actual position instead of the template default.
-    const sizeParam = Number(params.get("size"));
+    const sizeParam = Number(entry.size);
     if (doc.action.kind === "order" && Number.isFinite(sizeParam) && sizeParam >= 1) {
       doc.action = { ...doc.action, size: Math.round(sizeParam) };
     }
-    reset(doc);
-    setInitialized(true);
+    finish(spawnDraft(doc, { origin: `template:${template.id}` }));
   }, [
     initialized,
-    params,
-    reset,
+    entry,
+    spawnDraft,
+    loadDraft,
     setActiveTab,
     editOf,
     editing.data,
@@ -296,9 +373,18 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
 
   // Definitions are immutable once armed (evidence stays tied to the exact
   // version), so "editing" = create the new version, then cancel the old one.
+  // The consumed draft is tombstoned (linked to the created strategy) and the
+  // canvas moves to a fresh blank draft, so returning to the builder doesn't
+  // resurrect already-armed work.
   const save = () => {
     create.mutate(compileDoc(doc), {
-      onSuccess: () => {
+      onSuccess: (created) => {
+        const consumedId = useBuilderStore.getState().draftId;
+        useBuilderStore.getState().spawnDraft();
+        if (consumedId) {
+          markDraftConsumedLocal(consumedId, created.id);
+          void markDraftConsumedOnServer(consumedId, created.id);
+        }
         if (editOf) control.mutate({ id: editOf, action: "cancel" });
         router.push("/smart-orders");
       },
@@ -324,11 +410,20 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           aria-label="Strategy name"
         />
         <div className="flex items-center gap-2">
+          <DraftSwitcher
+            onOpenDraft={(id) => {
+              if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
+            }}
+          />
           {TEMPLATES.map((t) => (
             <button
               key={t.id}
               type="button"
-              onClick={() => reset(t.build())}
+              onClick={() => {
+                // Spawn (not reset): edited work survives as its own draft.
+                const id = spawnDraft(t.build(), { origin: `template:${t.id}` });
+                if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
+              }}
               className={cn(
                 "rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
                 doc.templateId === t.id

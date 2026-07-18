@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
 import { Empty, Skeleton, ErrorNote } from "@/components/ui";
 import { TriggerAlert } from "@/components/TriggerAlert";
+import { DraftsSection } from "@/components/smart-orders/DraftsSection";
+import { EMPTY_FILTERS, FilterBar } from "@/components/smart-orders/FilterBar";
 import { StrategyCard } from "@/components/smart-orders/StrategyCard";
 import { useStrategies } from "@/lib/smart-orders/queries";
 import { userStatus, GROUP_TITLES, STATUS_GROUP_ORDER } from "@/lib/smart-orders/status";
@@ -18,13 +21,46 @@ const groupOf = (row: StrategyRow) =>
       row.definitionV2.action.kind === "order" ? row.definitionV2.action.execution : undefined,
   }).group;
 
+const matchesQuery = (row: StrategyRow, q: string): boolean => {
+  const needle = q.toLowerCase();
+  return (
+    (row.name ?? "").toLowerCase().includes(needle) ||
+    (row.definitionV2.name ?? "").toLowerCase().includes(needle) ||
+    (row.tags ?? []).some((t) => t.includes(needle))
+  );
+};
+
 export default function SmartOrdersPage() {
   const session = useSession();
   const flags = useFeatureFlags();
   const signedIn = Boolean(session.data);
-  const strategies = useStrategies(signedIn);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const strategies = useStrategies(signedIn, filters.showArchived);
 
-  const rows = strategies.data?.strategies ?? [];
+  const allRows = useMemo(() => strategies.data?.strategies ?? [], [strategies.data]);
+  const liveRows = allRows.filter((r) => !r.archivedAt);
+  const archivedRows = allRows.filter((r) => r.archivedAt);
+
+  // Filter chips describe the UNfiltered data; filtering narrows the sections.
+  const availableGroups = STATUS_GROUP_ORDER.map((g) => ({
+    group: g,
+    count: liveRows.filter((r) => groupOf(r) === g).length,
+  })).filter((g) => g.count > 0);
+  const tagVocabulary = useMemo(
+    () => [...new Set(allRows.flatMap((r) => r.tags ?? []))].sort(),
+    [allRows],
+  );
+
+  const applyFilters = (source: StrategyRow[]) =>
+    source.filter(
+      (r) =>
+        (filters.group === null || groupOf(r) === filters.group) &&
+        (filters.tags.length === 0 || (r.tags ?? []).some((t) => filters.tags.includes(t))) &&
+        (filters.query.trim() === "" || matchesQuery(r, filters.query.trim())),
+    );
+
+  const rows = applyFilters(liveRows);
+  const archived = filters.showArchived ? applyFilters(archivedRows) : [];
   const groups = STATUS_GROUP_ORDER.map((g) => ({
     group: g,
     rows: rows.filter((r) => groupOf(r) === g),
@@ -49,6 +85,9 @@ export default function SmartOrdersPage() {
         </Link>
       </div>
 
+      {/* Local in-progress canvases — visible signed-out too (drafts are per-device). */}
+      <DraftsSection />
+
       {flags.data && !flags.data.conditionalRules ? (
         <Empty>Smart Orders are disabled on this server.</Empty>
       ) : !signedIn ? (
@@ -67,7 +106,7 @@ export default function SmartOrdersPage() {
         </div>
       ) : strategies.error ? (
         <ErrorNote message={(strategies.error as Error).message} />
-      ) : rows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <Empty>
           No Smart Orders yet.{" "}
           <Link href="/smart-orders/new" className="text-accent hover:underline">
@@ -78,6 +117,16 @@ export default function SmartOrdersPage() {
       ) : (
         <>
           <TriggerAlert />
+          <FilterBar
+            filters={filters}
+            onChange={setFilters}
+            groups={availableGroups}
+            tags={tagVocabulary}
+            archivedCount={archivedRows.length}
+          />
+          {rows.length === 0 && archived.length === 0 ? (
+            <Empty>Nothing matches the current filters.</Empty>
+          ) : null}
           {groups.map(({ group, rows }) => (
             <section key={group} className="space-y-2">
               <div className="flex items-center gap-2">
@@ -91,6 +140,19 @@ export default function SmartOrdersPage() {
               ))}
             </section>
           ))}
+          {archived.length > 0 ? (
+            <section className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="h-3.5 w-0.5 rounded-full bg-border-strong" />
+                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-faint">
+                  Archived · {archived.length}
+                </h2>
+              </div>
+              {archived.map((row) => (
+                <StrategyCard key={row.id} row={row} />
+              ))}
+            </section>
+          ) : null}
         </>
       )}
     </div>

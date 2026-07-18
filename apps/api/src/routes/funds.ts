@@ -1,7 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import type { AppConfig } from "@mx2/config";
-import type { AuditStore, PrivyWalletStore, SessionStore, TradingAccountStore } from "@mx2/db";
-import type { BridgeClient, GeoblockClient } from "@mx2/polymarket-client";
+import type {
+  AuditStore,
+  BridgeStore,
+  PrivyWalletStore,
+  SessionStore,
+  TradingAccountStore,
+} from "@mx2/db";
+import { PUSD_ADDRESS, type BridgeClient, type GeoblockClient } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeGeoblockCheck } from "../middleware/geoblock.js";
 
@@ -12,8 +19,22 @@ export interface FundsRoutesDeps {
   tradingAccounts: TradingAccountStore;
   privyWallets: PrivyWalletStore;
   bridgeClient: BridgeClient;
+  bridgeStore: BridgeStore;
   geoblockClient: GeoblockClient;
 }
+
+/** POST /api/funds/quote body — deposit-direction estimate. */
+const QuoteSchema = z
+  .object({
+    fromChainId: z.string().min(1).max(32),
+    fromTokenAddress: z.string().min(1).max(128),
+    /** Source-token base units (e.g. 5 USDC = "5000000"). */
+    fromAmountBaseUnit: z.string().regex(/^\d{1,30}$/),
+  })
+  .strict();
+
+/** Addresses refreshed per on-request status pull (bounds Bridge traffic). */
+const REFRESH_ADDRESS_LIMIT = 5;
 
 const addressTypeForChain = (chainName: string): "evm" | "svm" | "btc" | "tvm" => {
   const normalized = chainName.toLowerCase();
@@ -99,6 +120,38 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
     };
   });
 
+  /** Resolve the caller's internal deposit wallet, or send the failure reply. */
+  const resolveDepositWallet = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<{ depositWalletAddress: string; accountId: string } | null> => {
+    const user = req.user!;
+    const wallet = await deps.privyWallets.find(user.walletAddress);
+    if (!wallet) {
+      reply.code(400);
+      void reply.send({
+        error: "TRADING_WALLET_NOT_PROVISIONED",
+        message: "Create an Arima trading wallet before using Bridge funding.",
+      });
+      return null;
+    }
+    const internal = (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
+      (account) =>
+        account.kind === "internal_privy" &&
+        account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
+        account.depositWalletAddress,
+    );
+    if (!internal?.depositWalletAddress) {
+      reply.code(409);
+      void reply.send({
+        error: "DEPOSIT_WALLET_REQUIRED",
+        message: "Activate the deposit wallet before requesting Bridge deposit addresses.",
+      });
+      return null;
+    }
+    return { depositWalletAddress: internal.depositWalletAddress, accountId: internal.id };
+  };
+
   app.post(
     "/api/funds/deposit-addresses",
     { preHandler: requireAuth },
@@ -108,48 +161,148 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
       if (reply.sent) return reply;
 
       const user = req.user!;
-      const wallet = await deps.privyWallets.find(user.walletAddress);
-      if (!wallet) {
-        reply.code(400);
-        return {
-          error: "TRADING_WALLET_NOT_PROVISIONED",
-          message: "Create an Arima trading wallet before using Bridge funding.",
-        };
-      }
-
-      const internal = (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
-        (account) =>
-          account.kind === "internal_privy" &&
-          account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
-          account.depositWalletAddress,
-      );
-      if (!internal?.depositWalletAddress) {
-        reply.code(409);
-        return {
-          error: "DEPOSIT_WALLET_REQUIRED",
-          message: "Activate the deposit wallet before requesting Bridge deposit addresses.",
-        };
-      }
+      const resolved = await resolveDepositWallet(req, reply);
+      if (!resolved) return reply;
 
       const result = await deps.bridgeClient.createDepositAddresses({
-        polymarketWalletAddress: internal.depositWalletAddress,
+        polymarketWalletAddress: resolved.depositWalletAddress,
       });
       if (!result.ok) {
         reply.code(result.error.code === "RATE_LIMIT" ? 429 : 502);
         return { error: result.error.code, message: result.error.message };
       }
 
+      // Persist each family address: the sheet reuses them across opens and
+      // the status poller learns what to watch.
+      for (const [addressType, address] of Object.entries(result.value)) {
+        if (!address) continue;
+        await deps.bridgeStore.saveAddress({
+          walletAddress: user.walletAddress,
+          depositWalletAddress: resolved.depositWalletAddress,
+          kind: "deposit",
+          addressType,
+          address,
+        });
+      }
+
       await deps.auditStore.emit({
         actor: user.walletAddress,
         action: "wallet.bridge.deposit_addresses_requested",
-        subject: `trading_account:${internal.id}`,
-        metadata: { depositWalletAddress: internal.depositWalletAddress },
+        subject: `trading_account:${resolved.accountId}`,
+        metadata: { depositWalletAddress: resolved.depositWalletAddress },
       });
 
       return {
         ok: true,
-        depositWalletAddress: internal.depositWalletAddress,
+        depositWalletAddress: resolved.depositWalletAddress,
         addresses: result.value,
+      };
+    },
+  );
+
+  // ── POST /api/funds/quote — deposit-direction fee/ETA estimate ────────────
+  app.post(
+    "/api/funds/quote",
+    { preHandler: requireAuth },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!ensureBridgeFundingEnabled(deps.config, reply)) return reply;
+
+      const parsed = QuoteSchema.safeParse(req.body);
+      if (!parsed.success) {
+        reply.code(400);
+        return {
+          error: "INVALID_REQUEST",
+          message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+        };
+      }
+      const resolved = await resolveDepositWallet(req, reply);
+      if (!resolved) return reply;
+
+      // Server fills the pUSD leg: destination is always the user's own
+      // deposit wallet on Polygon — the browser never supplies it.
+      const result = await deps.bridgeClient.getQuote({
+        fromAmountBaseUnit: parsed.data.fromAmountBaseUnit,
+        fromChainId: parsed.data.fromChainId,
+        fromTokenAddress: parsed.data.fromTokenAddress,
+        recipientAddress: resolved.depositWalletAddress,
+        toChainId: "137",
+        toTokenAddress: PUSD_ADDRESS,
+      });
+      if (!result.ok) {
+        reply.code(result.error.code === "RATE_LIMIT" ? 429 : 502);
+        return { error: result.error.code, message: result.error.message };
+      }
+      const q = result.value;
+      return {
+        quoteId: q.quoteId ?? null,
+        estCheckoutTimeMs: q.estCheckoutTimeMs ?? null,
+        estToTokenBaseUnit: q.estToTokenBaseUnit ?? null,
+        estInputUsd: q.estInputUsd ?? null,
+        estOutputUsd: q.estOutputUsd ?? null,
+        fees: {
+          appFeeLabel: q.estFeeBreakdown?.appFeeLabel ?? null,
+          appFeeUsd: q.estFeeBreakdown?.appFeeUsd ?? null,
+          gasUsd: q.estFeeBreakdown?.gasUsd ?? null,
+          totalImpactUsd: q.estFeeBreakdown?.totalImpactUsd ?? null,
+          minReceived: q.estFeeBreakdown?.minReceived ?? null,
+        },
+      };
+    },
+  );
+
+  // ── GET /api/funds/deposits — tracked bridge deposits (+ live refresh) ────
+  app.get(
+    "/api/funds/deposits",
+    { preHandler: requireAuth },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!ensureBridgeFundingEnabled(deps.config, reply)) return reply;
+      const user = req.user!;
+
+      if ((req.query as Record<string, string>)["refresh"] === "1") {
+        // Bounded on-request status pull — covers deployments where the
+        // worker poller is off, without unbounded Bridge traffic.
+        const addresses = (await deps.bridgeStore.listAddresses(user.walletAddress, "deposit"))
+          .slice(0, REFRESH_ADDRESS_LIMIT);
+        for (const address of addresses) {
+          const status = await deps.bridgeClient.getStatus(address.address);
+          if (!status.ok) continue; // fail-soft: stale rows beat a hard error
+          const { changed } = await deps.bridgeStore.upsertDepositsFromStatus(
+            address,
+            status.value.transactions.map((tx) => ({
+              fromChainId: tx.fromChainId,
+              fromTokenAddress: tx.fromTokenAddress,
+              fromAmountBaseUnit: tx.fromAmountBaseUnit,
+              status: tx.status,
+              txHash: tx.txHash,
+              createdTimeMs: tx.createdTimeMs,
+              raw: tx,
+            })),
+          );
+          await deps.bridgeStore.markAddressChecked(address.id);
+          for (const change of changed) {
+            await deps.auditStore.emit({
+              actor: user.walletAddress,
+              action: "wallet.bridge.deposit_state_changed",
+              subject: `bridge_deposit:${change.row.id}`,
+              metadata: { from: change.previousState, to: change.row.state },
+            });
+          }
+        }
+      }
+
+      const deposits = await deps.bridgeStore.listDepositsByWallet(user.walletAddress);
+      return {
+        deposits: deposits.map((d) => ({
+          id: d.id,
+          fromChainId: d.fromChainId,
+          fromTokenAddress: d.fromTokenAddress,
+          fromAmountBaseUnit: d.fromAmountBaseUnit,
+          state: d.state,
+          providerStatus: d.providerStatus,
+          txHash: d.txHash,
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+        })),
       };
     },
   );

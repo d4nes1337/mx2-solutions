@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { StrategyDefinition } from "@mx2/rules";
 import { AiPanel } from "./AiPanel";
 import { useBuilderStore } from "@/lib/smart-orders/store";
+import { loadDraftLocal } from "@/lib/smart-orders/drafts";
 
 const definition: StrategyDefinition = {
   version: 2,
@@ -139,7 +140,17 @@ const genCalls = () =>
   ).filter(([u]) => String(u).includes("/api/ai/generate-strategy"));
 
 beforeEach(() => {
+  window.localStorage.clear();
   useBuilderStore.getState().reset();
+  // Chat + draft identity live in the module store now — reset per test.
+  useBuilderStore.setState({
+    draftId: null,
+    draftOrigin: "blank",
+    pristine: true,
+    dirty: false,
+    aiMessages: [],
+    aiHistory: [],
+  });
   useBuilderStore.getState().setAiStatus("idle");
 });
 afterEach(() => vi.restoreAllMocks());
@@ -282,6 +293,35 @@ describe("AiPanel", () => {
     renderPanel("buy the dip on btc");
     await waitFor(() => expect(useBuilderStore.getState().aiStatus).toBe("idle"));
     expect(useBuilderStore.getState().doc.expr.children).toHaveLength(1);
+  });
+
+  // Draft isolation: the first AI turn over a hand-edited canvas must fork
+  // into a new draft (manual work survives on its own) instead of replacing it.
+  it("first AI turn over hand-edited work forks; the manual draft survives", async () => {
+    mockFetch(200, okResponse);
+    const handBuiltId = useBuilderStore.getState().spawnDraft();
+    useBuilderStore.getState().setName("Hand built");
+    useBuilderStore.getState().addCondition({
+      kind: "price",
+      market: { conditionId: "cond-x", tokenId: "tok-x", outcome: "YES" },
+      source: "ask",
+      comparator: "lte",
+      threshold: 0.5,
+    });
+    renderPanel();
+
+    const box = screen.getByLabelText("Describe your strategy");
+    fireEvent.change(box, { target: { value: "buy the dip on btc" } });
+    fireEvent.click(screen.getByLabelText("Generate strategy"));
+
+    await waitFor(() => expect(useBuilderStore.getState().draftId).not.toBe(handBuiltId));
+    // The manual draft was flushed intact before the AI result took over.
+    const rec = loadDraftLocal(handBuiltId);
+    expect(rec?.doc.name).toBe("Hand built");
+    expect(rec?.doc.expr.children).toHaveLength(1);
+    // The conversation moved with the fork (user + assistant turns visible).
+    expect(useBuilderStore.getState().aiMessages.length).toBeGreaterThanOrEqual(2);
+    expect(useBuilderStore.getState().doc.name).toBe("Buy the dip");
   });
 
   it("seeds initialPinned before the auto-fired deep link submits", async () => {

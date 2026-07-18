@@ -26,6 +26,8 @@ import type {
   TradingAccountClobCredentialStore,
   TradingAccountClobCredentialRow,
   WithdrawalStore,
+  BridgeStore,
+  BridgeWithdrawalRow,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -35,6 +37,7 @@ import type {
   GeoblockClient,
   PolymarketError,
   DepositWalletRelayer,
+  BridgeClient,
 } from "@mx2/polymarket-client";
 import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
@@ -235,6 +238,9 @@ const mockRuleStore: RuleStore = {
   markExecuting: async () => null,
   markAutoExecuted: async () => null,
   markExecutionFailed: async () => null,
+  setTags: async () => null,
+  archive: async () => null,
+  unarchive: async () => null,
   addExecutedNotional: async () => {},
 };
 
@@ -411,6 +417,8 @@ const buildTestApp = (
     allowanceReader?: AllowanceReader | null;
     auditStore?: AuditStore;
     withdrawals?: WithdrawalStore;
+    bridgeClient?: BridgeClient;
+    bridgeStore?: BridgeStore;
   } = {},
 ) => {
   const deps: Parameters<typeof buildApp>[0] = {
@@ -436,6 +444,8 @@ const buildTestApp = (
     privyWallets: overrides.privyWallets ?? mockPrivyWallets,
     delegations: overrides.delegations ?? mockDelegations,
     ...(overrides.withdrawals ? { withdrawals: overrides.withdrawals } : {}),
+    ...(overrides.bridgeClient ? { bridgeClient: overrides.bridgeClient } : {}),
+    ...(overrides.bridgeStore ? { bridgeStore: overrides.bridgeStore } : {}),
     tradingClobClient: overrides.tradingClobClient ?? mockTradingClobClient,
     tradingSigner: overrides.tradingSigner ?? mockTradingSigner,
     geoblockClient: overrides.geoblockClient ?? mockGeoblockClient,
@@ -2390,6 +2400,231 @@ describe("POST /api/trading-wallet/withdraw", () => {
     const res = await post(app, { amountUsd: 2, idempotencyKey: "k-fail-1234" });
     expect(res.statusCode).toBe(502);
     expect(events).toContain("wallet.withdraw.failed");
+    await app.close();
+  });
+
+  // ── Cross-chain (bridge) withdrawals — chain choice, login wallet only ─────
+
+  const BRIDGE_HOP = "0x5555555555555555555555555555555555555555";
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+  const configBridgeWithdraw = loadConfig({
+    DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+    APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
+    TRADING_ADMIN_SECRET: "test-admin-secret-123",
+    FEATURE_LIVE_TRADING: "true",
+    FEATURE_PRIVY_SIGNING: "true",
+    FEATURE_RELAYER: "true",
+    FEATURE_WALLET_WITHDRAW: "true",
+    FEATURE_BRIDGE_WITHDRAWALS: "true",
+    MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+    POLYGON_RPC_URL: "https://polygon.example.test",
+    POLYMARKET_RELAYER_URL: "https://relayer.example.test",
+    POLYMARKET_BUILDER_API_KEY: "builder-key",
+    POLYMARKET_BUILDER_SECRET: "builder-secret",
+    POLYMARKET_BUILDER_PASSPHRASE: "builder-passphrase",
+  });
+
+  const makeBridgeStoreMock = () => {
+    const rows = new Map<string, BridgeWithdrawalRow>();
+    const store: BridgeStore = {
+      saveAddress: async (row) =>
+        ({
+          id: "baddr-1",
+          walletAddress: row.walletAddress,
+          depositWalletAddress: row.depositWalletAddress,
+          kind: row.kind ?? "deposit",
+          addressType: row.addressType,
+          address: row.address,
+          toChainId: row.toChainId ?? null,
+          toTokenAddress: row.toTokenAddress ?? null,
+          recipientAddress: row.recipientAddress ?? null,
+          lastCheckedAt: null,
+          createdAt: new Date(),
+        }) as never,
+      listAddresses: async () => [],
+      listPollableAddresses: async () => [],
+      markAddressChecked: async () => {},
+      upsertDepositsFromStatus: async () => ({ changed: [] }),
+      listDepositsByWallet: async () => [],
+      createWithdrawal: async (row) => {
+        if (rows.has(row.idempotencyKey)) return null;
+        const created = {
+          id: `bw-${rows.size + 1}`,
+          walletAddress: row.walletAddress,
+          depositWalletAddress: row.depositWalletAddress,
+          destinationAddress: row.destinationAddress,
+          toChainId: row.toChainId,
+          toTokenAddress: row.toTokenAddress,
+          bridgeAddressId: null,
+          amountUsd: row.amountUsd,
+          quoteId: null,
+          estToTokenBaseUnit: null,
+          state: "requested",
+          relayerTransactionId: null,
+          polygonTxHash: null,
+          bridgeTxHash: null,
+          error: null,
+          idempotencyKey: row.idempotencyKey,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as BridgeWithdrawalRow;
+        rows.set(row.idempotencyKey, created);
+        return created;
+      },
+      findWithdrawalByIdempotencyKey: async (_w, key) => rows.get(key) ?? null,
+      listWithdrawalsByWallet: async () => [...rows.values()],
+      updateWithdrawalState: async (id, state, patch) => {
+        for (const row of rows.values()) {
+          if (row.id === id) {
+            Object.assign(row, { state, ...(patch ?? {}) });
+            return row;
+          }
+        }
+        return null;
+      },
+      updateWithdrawalsFromStatus: async () => ({ changed: [] }),
+    };
+    return { store, rows };
+  };
+
+  const makeBridgeClientMock = (over: { minReceived?: number } = {}): BridgeClient => ({
+    getSupportedAssets: async () =>
+      ok({
+        supportedAssets: [
+          {
+            chainId: "8453",
+            chainName: "Base",
+            token: { name: "USDC", symbol: "USDC", address: BASE_USDC, decimals: 6 },
+            minCheckoutUsd: 2,
+          },
+        ],
+      }),
+    createDepositAddresses: async () => ok({ evm: BRIDGE_HOP }),
+    getQuote: async () =>
+      ok({
+        quoteId: "q-9",
+        estCheckoutTimeMs: 60_000,
+        estOutputUsd: over.minReceived ?? 4.97,
+        estFeeBreakdown: { minReceived: over.minReceived ?? 4.97 },
+      }),
+    createWithdrawalAddresses: async () => ok({ evm: BRIDGE_HOP }),
+    getStatus: async () => ok({ transactions: [] }),
+  });
+
+  const bridgeApp = (over: { minReceived?: number; cfg?: ReturnType<typeof loadConfig> } = {}) => {
+    const bridge = makeBridgeStoreMock();
+    const events: string[] = [];
+    const batches: { calls: { target: string; value: string; data: string }[] }[] = [];
+    const relayer: DepositWalletRelayer = {
+      enabled: true,
+      deriveDepositWalletAddress: async (owner) =>
+        ok({ ownerAddress: owner.ownerAddress, depositWalletAddress: DEPOSIT }),
+      getDeploymentStatus: async (owner) =>
+        ok({
+          ownerAddress: owner.ownerAddress,
+          depositWalletAddress: DEPOSIT,
+          deployed: true,
+          state: "STATE_CONFIRMED",
+        }),
+      deployDepositWallet: async () => {
+        throw new Error("not needed");
+      },
+      executeBatch: async (_owner, calls) => {
+        batches.push({ calls });
+        return ok({
+          depositWalletAddress: DEPOSIT,
+          transactionId: "batch-88",
+          state: "STATE_EXECUTED",
+        });
+      },
+      getTransactionState: async () => ok({ state: "STATE_CONFIRMED" }),
+    };
+    const app = buildTestApp({
+      cfg: over.cfg ?? configBridgeWithdraw,
+      sessions: mockSessionsAuthed,
+      auditStore: {
+        ...mockAuditStore,
+        emit: async (e: Parameters<AuditStore["emit"]>[0]) => {
+          events.push(e.action);
+          return mockAuditStore.emit(e);
+        },
+      } as AuditStore,
+      privyWallets: { ...mockPrivyWallets, find: async () => makePrivyWalletRow() },
+      tradingAccounts: { ...mockTradingAccounts, listByOwner: async () => [internalAccount()] },
+      depositWalletRelayer: relayer,
+      withdrawals: makeWithdrawalStoreMock().store,
+      bridgeClient: makeBridgeClientMock(over),
+      bridgeStore: bridge.store,
+      allowanceReader: {
+        erc20Allowance: async () => 0n,
+        isApprovedForAll: async () => false,
+        erc20Balance: async () => 100_000_000n, // $100
+      },
+    });
+    return { app, events, batches, bridge };
+  };
+
+  it("503s cross-chain withdrawals when the bridge flag is off", async () => {
+    const { app } = bridgeApp({ cfg: configWithdraw });
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-000000", toChainId: "8453" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe("BRIDGE_WITHDRAWALS_DISABLED");
+    await app.close();
+  });
+
+  it("routes the Polygon leg to the BRIDGE address, destination stays the session wallet", async () => {
+    const { app, events, batches, bridge } = bridgeApp();
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-111111", toChainId: "8453" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.toChainId).toBe("8453");
+    expect(body.destination).toBe(WALLET); // login wallet — never client input
+    expect(body.quote.minReceived).toBe(4.97);
+
+    // pUSD.transfer(bridgeHopAddress, 5e6): funds go to the bridge hop, and
+    // the bridge delivers USDC to the login wallet on Base.
+    expect(batches).toHaveLength(1);
+    const call = batches[0]!.calls[0]!;
+    expect(call.target.toLowerCase()).toBe("0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb");
+    expect(call.data.slice(10, 74).toLowerCase()).toContain(BRIDGE_HOP.slice(2).toLowerCase());
+
+    const row = [...bridge.rows.values()][0]!;
+    expect(row.state).toBe("polygon_submitted");
+    expect(events).toContain("wallet.bridge.withdraw_requested");
+    expect(events).toContain("wallet.bridge.withdraw_address_created");
+    expect(events).toContain("wallet.bridge.withdraw_submitted");
+    await app.close();
+  });
+
+  it("refuses when the quote's minReceived drops more than 1% below the amount", async () => {
+    const { app, batches, bridge } = bridgeApp({ minReceived: 4.5 });
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-222222", toChainId: "8453" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("QUOTE_TOO_LOW");
+    expect(batches).toHaveLength(0); // funds never moved
+    expect([...bridge.rows.values()][0]!.state).toBe("failed_address");
+    await app.close();
+  });
+
+  it("is idempotent per key across the bridge path", async () => {
+    const { app, batches } = bridgeApp();
+    const first = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-333333", toChainId: "8453" });
+    expect(first.statusCode).toBe(200);
+    const second = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-333333", toChainId: "8453" });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().alreadySubmitted).toBe(true);
+    expect(batches).toHaveLength(1);
+    await app.close();
+  });
+
+  it("400s for a chain the bridge has no USD asset on", async () => {
+    const { app, batches } = bridgeApp();
+    const res = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-444444", toChainId: "999" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("UNSUPPORTED_CHAIN");
+    expect(batches).toHaveLength(0);
     await app.close();
   });
 });

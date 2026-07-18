@@ -19,6 +19,8 @@ import {
   createTriggerStore,
   createPrivyWalletStore,
   createDelegationStore,
+  createBridgeStore,
+  createDraftStore,
 } from "@mx2/db";
 import {
   createGammaClient,
@@ -57,6 +59,8 @@ const main = async (): Promise<void> => {
   const ruleStore = createRuleStore(dbHandle.db);
   const quoterStore = createQuoterStore(dbHandle.db);
   const withdrawals = createWithdrawalStore(dbHandle.db);
+  const bridgeStore = createBridgeStore(dbHandle.db);
+  const draftStore = createDraftStore(dbHandle.db);
   const triggerStore = createTriggerStore(dbHandle.db);
   const privyWallets = createPrivyWalletStore(dbHandle.db);
   const delegations = createDelegationStore(dbHandle.db);
@@ -100,6 +104,8 @@ const main = async (): Promise<void> => {
     ruleStore,
     quoterStore,
     withdrawals,
+    bridgeStore,
+    draftStore,
     triggerStore,
     privyWallets,
     delegations,

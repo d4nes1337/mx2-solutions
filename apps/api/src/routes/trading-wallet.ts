@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppConfig } from "@mx2/config";
 import type {
   AuditStore,
+  BridgeStore,
   SessionStore,
   PrivyWalletStore,
   DelegationStore,
@@ -13,10 +14,13 @@ import {
   PUSD_ADDRESS,
   buildPusdTransfer,
   isDepositWalletConfirmed,
+  type BridgeClient,
   type DepositWalletRelayer,
+  type GeoblockClient,
 } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth } from "../middleware/require-auth.js";
+import { makeGeoblockCheck } from "../middleware/geoblock.js";
 import { USDC_ADDRESS, type AllowanceReader } from "../trade/allowance-bootstrap.js";
 import { ensureDepositWalletAllowances } from "../trade/deposit-wallet-allowances.js";
 import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
@@ -31,9 +35,20 @@ export interface TradingWalletRoutesDeps {
   delegations: DelegationStore;
   depositWalletRelayer: DepositWalletRelayer;
   withdrawals: WithdrawalStore;
+  /** Bridge legs of cross-chain withdrawals (flag-gated; Polygon path unaffected). */
+  bridgeClient: BridgeClient;
+  bridgeStore: BridgeStore;
+  geoblockClient: GeoblockClient;
   /** null when POLYGON_RPC_URL is not configured (allowance bootstrap unavailable). */
   allowanceReader: AllowanceReader | null;
 }
+
+/**
+ * Quote binding for bridge withdrawals: refuse when the quoted min-received
+ * falls more than this many basis points below the requested amount. Surfaced
+ * to the user as QUOTE_TOO_LOW with the actual quote attached.
+ */
+const BRIDGE_WITHDRAW_MAX_DEVIATION_BPS = 100;
 
 /**
  * Withdrawal body — deliberately STRICT: a smuggled `destination` (or any
@@ -44,6 +59,15 @@ const WithdrawSchema = z
   .object({
     amountUsd: z.number().positive().min(1).max(1_000_000),
     idempotencyKey: z.string().min(8).max(128),
+    /**
+     * Destination CHAIN choice ("137" = direct Polygon transfer, default;
+     * others route through the Polymarket Bridge). The destination ADDRESS is
+     * still always the login wallet — chain choice never weakens D-026.
+     */
+    toChainId: z
+      .string()
+      .regex(/^\d{1,10}$/)
+      .optional(),
   })
   .strict();
 
@@ -61,6 +85,10 @@ export const registerTradingWalletRoutes = (
   deps: TradingWalletRoutesDeps,
 ): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
+  const geoblockCheck = makeGeoblockCheck({
+    geoblockClient: deps.geoblockClient,
+    auditStore: deps.auditStore,
+  });
 
   const ensureEnabled = (reply: FastifyReply): boolean => {
     if (!deps.config.features.privySigning) {
@@ -450,6 +478,14 @@ export const registerTradingWalletRoutes = (
       };
     }
     const { amountUsd, idempotencyKey } = parsed.data;
+    const toChainId = parsed.data.toChainId ?? "137";
+    if (toChainId !== "137" && !deps.config.features.bridgeWithdrawals) {
+      reply.code(503);
+      return {
+        error: "BRIDGE_WITHDRAWALS_DISABLED",
+        message: "Cross-chain withdrawals are not enabled on this build.",
+      };
+    }
 
     const wallet = await deps.privyWallets.find(user.walletAddress);
     if (!wallet) {
@@ -498,6 +534,181 @@ export const registerTradingWalletRoutes = (
         error: "INSUFFICIENT_BALANCE",
         message: `Withdrawal exceeds the deposit wallet's balance.`,
         availableUsd,
+      };
+    }
+
+    // ── Cross-chain path: two legs via the Polymarket Bridge ────────────────
+    // Leg 1 (here): gasless pUSD transfer deposit wallet → generated bridge
+    // address on Polygon. Leg 2 (bridge): converts and delivers native USDC to
+    // the LOGIN WALLET on the chosen chain — the destination address is still
+    // never client input (D-026). Quote-bound: refuse when minReceived quotes
+    // below amount − BRIDGE_WITHDRAW_MAX_DEVIATION_BPS.
+    if (toChainId !== "137") {
+      await geoblockCheck(req, reply); // money movement — fail-closed
+      if (reply.sent) return reply;
+
+      const assets = await deps.bridgeClient.getSupportedAssets();
+      if (!assets.ok) {
+        reply.code(502);
+        return { error: assets.error.code, message: assets.error.message };
+      }
+      const destAsset =
+        assets.value.supportedAssets.find(
+          (a) => a.chainId === toChainId && a.token.symbol.toUpperCase() === "USDC",
+        ) ??
+        assets.value.supportedAssets.find(
+          (a) => a.chainId === toChainId && a.token.symbol.toUpperCase().includes("USD"),
+        );
+      if (!destAsset) {
+        reply.code(400);
+        return {
+          error: "UNSUPPORTED_CHAIN",
+          message: "The bridge has no USD asset on that chain.",
+        };
+      }
+      if (amountUsd < destAsset.minCheckoutUsd) {
+        reply.code(400);
+        return {
+          error: "BELOW_MINIMUM",
+          message: `Minimum for this route is $${destAsset.minCheckoutUsd.toFixed(2)}.`,
+        };
+      }
+
+      const bridgeRow = await deps.bridgeStore.createWithdrawal({
+        walletAddress: user.walletAddress,
+        depositWalletAddress: internal.depositWalletAddress,
+        destinationAddress: destination,
+        toChainId,
+        toTokenAddress: destAsset.token.address,
+        amountUsd: String(amountUsd),
+        idempotencyKey,
+      });
+      if (!bridgeRow) {
+        // Same idempotency key seen before — never re-submit either leg.
+        const existing = await deps.bridgeStore.findWithdrawalByIdempotencyKey(
+          user.walletAddress,
+          idempotencyKey,
+        );
+        return { ok: true, alreadySubmitted: true, bridgeWithdrawal: existing };
+      }
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "wallet.bridge.withdraw_requested",
+        subject: `bridge_withdrawal:${bridgeRow.id}`,
+        metadata: { amountUsd, destination, toChainId },
+      });
+
+      const quote = await deps.bridgeClient.getQuote({
+        fromAmountBaseUnit: String(Math.round(amountUsd * 1e6)),
+        fromChainId: "137",
+        fromTokenAddress: PUSD_ADDRESS,
+        recipientAddress: destination,
+        toChainId,
+        toTokenAddress: destAsset.token.address,
+      });
+      if (!quote.ok) {
+        await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "failed_address", {
+          error: quote.error.code,
+        });
+        reply.code(502);
+        return { error: quote.error.code, message: quote.error.message };
+      }
+      const minReceived = quote.value.estFeeBreakdown?.minReceived ?? null;
+      const floorUsd = amountUsd * (1 - BRIDGE_WITHDRAW_MAX_DEVIATION_BPS / 10_000);
+      if (minReceived !== null && minReceived < floorUsd) {
+        await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "failed_address", {
+          error: "QUOTE_TOO_LOW",
+        });
+        reply.code(409);
+        return {
+          error: "QUOTE_TOO_LOW",
+          message: `Bridge quote returned $${minReceived.toFixed(2)} minimum received for $${amountUsd.toFixed(2)} — try again or use the direct Polygon withdrawal.`,
+          quote: { minReceived, estOutputUsd: quote.value.estOutputUsd ?? null },
+        };
+      }
+
+      const addresses = await deps.bridgeClient.createWithdrawalAddresses({
+        polymarketWalletAddress: internal.depositWalletAddress,
+        toChainId,
+        toTokenAddress: destAsset.token.address,
+        recipientAddr: destination,
+      });
+      if (!addresses.ok || !addresses.value.evm) {
+        await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "failed_address", {
+          error: addresses.ok ? "NO_EVM_ADDRESS" : addresses.error.code,
+        });
+        reply.code(502);
+        return addresses.ok
+          ? { error: "NO_EVM_ADDRESS", message: "Bridge returned no Polygon hop address." }
+          : { error: addresses.error.code, message: addresses.error.message };
+      }
+      const savedAddress = await deps.bridgeStore.saveAddress({
+        walletAddress: user.walletAddress,
+        depositWalletAddress: internal.depositWalletAddress,
+        kind: "withdrawal",
+        addressType: "evm",
+        address: addresses.value.evm,
+        toChainId,
+        toTokenAddress: destAsset.token.address,
+        recipientAddress: destination,
+      });
+      await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "address_created", {
+        bridgeAddressId: savedAddress.id,
+        quoteId: quote.value.quoteId ?? null,
+        estToTokenBaseUnit: quote.value.estToTokenBaseUnit ?? null,
+      });
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "wallet.bridge.withdraw_address_created",
+        subject: `bridge_withdrawal:${bridgeRow.id}`,
+        metadata: { bridgeAddress: addresses.value.evm, toChainId },
+      });
+
+      const bridgeBatch = await deps.depositWalletRelayer.executeBatch(owner, [
+        buildPusdTransfer({ to: addresses.value.evm, amountUsd }),
+      ]);
+      if (!bridgeBatch.ok) {
+        // Funds never left the deposit wallet — fully recoverable.
+        await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "failed_polygon", {
+          error: bridgeBatch.error.code,
+        });
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "wallet.bridge.withdraw_failed",
+          subject: `bridge_withdrawal:${bridgeRow.id}`,
+          metadata: { leg: "polygon", error: bridgeBatch.error.code },
+        });
+        reply.code(502);
+        return { error: bridgeBatch.error.code, message: bridgeBatch.error.message };
+      }
+      await deps.bridgeStore.updateWithdrawalState(bridgeRow.id, "polygon_submitted", {
+        relayerTransactionId: bridgeBatch.value.transactionId,
+        ...(bridgeBatch.value.transactionHash
+          ? { polygonTxHash: bridgeBatch.value.transactionHash }
+          : {}),
+      });
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "wallet.bridge.withdraw_submitted",
+        subject: `bridge_withdrawal:${bridgeRow.id}`,
+        metadata: {
+          amountUsd,
+          destination,
+          toChainId,
+          relayerTransactionId: bridgeBatch.value.transactionId,
+        },
+      });
+      return {
+        ok: true,
+        bridgeWithdrawalId: bridgeRow.id,
+        destination,
+        toChainId,
+        amountUsd,
+        quote: {
+          minReceived,
+          estOutputUsd: quote.value.estOutputUsd ?? null,
+          estCheckoutTimeMs: quote.value.estCheckoutTimeMs ?? null,
+        },
       };
     }
 
@@ -603,6 +814,7 @@ export const registerTradingWalletRoutes = (
       }
     }
 
+    const bridgeRows = await deps.bridgeStore.listWithdrawalsByWallet(user.walletAddress, 50);
     return {
       withdrawals: rows.map((r) => ({
         id: r.id,
@@ -610,6 +822,16 @@ export const registerTradingWalletRoutes = (
         destination: r.destinationAddress,
         state: r.state,
         transactionHash: r.transactionHash,
+        createdAt: r.createdAt.toISOString(),
+      })),
+      bridgeWithdrawals: bridgeRows.map((r) => ({
+        id: r.id,
+        amountUsd: Number(r.amountUsd),
+        destination: r.destinationAddress,
+        toChainId: r.toChainId,
+        state: r.state,
+        polygonTxHash: r.polygonTxHash,
+        bridgeTxHash: r.bridgeTxHash,
         createdAt: r.createdAt.toISOString(),
       })),
     };

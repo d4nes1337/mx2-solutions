@@ -86,6 +86,8 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         triggerCount: 0,
         cooldownUntil: null,
         runtimeWatermarks: null,
+        tags: [],
+        archivedAt: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -98,7 +100,8 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       const r = find(id);
       return r && r.walletAddress === w ? r : null;
     },
-    listByWallet: async (w) => rows.filter((r) => r.walletAddress === w),
+    listByWallet: async (w, _limit, opts) =>
+      rows.filter((r) => r.walletAddress === w && (opts?.includeArchived || !r.archivedAt)),
     listEvaluable: async () => rows.filter((r) => evaluable(r.status)),
     updateEvaluationState: async () => null,
     pause: async (id, w) => {
@@ -157,6 +160,25 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         return r;
       }
       return null;
+    },
+    setTags: async (id, w, tags) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.tags = [...tags];
+      return r;
+    },
+    archive: async (id, w) => {
+      const r = find(id);
+      const terminal = ["CANCELLED","COMPLETED","EXECUTED_MANUALLY","EXECUTED_AUTO","EXECUTION_FAILED","EXPIRED","INVALIDATED","ERROR"].includes(r?.status ?? "");
+      if (!r || r.walletAddress !== w || !terminal || r.archivedAt) return null;
+      r.archivedAt = new Date();
+      return r;
+    },
+    unarchive: async (id, w) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.archivedAt = null;
+      return r;
     },
     addExecutedNotional: async () => {},
   };

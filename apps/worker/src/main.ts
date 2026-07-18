@@ -4,6 +4,7 @@ import {
   createDb,
   createMarketSnapshotStore,
   createAuditStore,
+  createBridgeStore,
   createRuleStore,
   createTriggerStore,
   createPrivyWalletStore,
@@ -16,10 +17,12 @@ import {
 } from "@mx2/db";
 import {
   createAuthenticatedClobClient,
+  createBridgeClient,
   createConfiguredDepositWalletRelayer,
   createPusdBalanceReader,
 } from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
+import { createBridgePoller, type BridgePoller } from "./bridge-poller.js";
 import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
@@ -230,9 +233,25 @@ const main = async (): Promise<void> => {
   });
   feedRef.current = marketFeed;
 
+  // Bridge status polling (deposits + withdrawal legs) — read-only against
+  // the Bridge, so it needs no signing/relayer prerequisites.
+  let bridgePoller: BridgePoller | null = null;
+  if (config.features.bridgeFunding || config.features.bridgeWithdrawals) {
+    bridgePoller = createBridgePoller({
+      logger,
+      bridgeStore: createBridgeStore(dbHandle.db),
+      bridgeClient: createBridgeClient({
+        baseUrl: config.polymarket.bridgeBaseUrl,
+        builderCode: config.polymarket.builderCode,
+      }),
+      auditStore: createAuditStore(dbHandle.db),
+    });
+  }
+
   evaluator?.start();
   quoter?.start();
   rewardsPoller?.start();
+  bridgePoller?.start();
 
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
@@ -244,6 +263,7 @@ const main = async (): Promise<void> => {
     evaluator?.stop();
     quoter?.stop();
     rewardsPoller?.stop();
+    bridgePoller?.stop();
     marketFeed.close();
     await dbHandle.close();
     process.exit(0);

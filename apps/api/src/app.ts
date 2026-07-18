@@ -21,6 +21,8 @@ import type {
   PrivyWalletStore,
   DelegationStore,
   WithdrawalStore,
+  BridgeStore,
+  DraftStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -40,6 +42,7 @@ import { registerMarketsRoutes } from "./routes/markets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerFundsRoutes } from "./routes/funds.js";
+import { registerDraftsRoutes } from "./routes/drafts.js";
 import { registerTradeRoutes } from "./routes/trade.js";
 import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
@@ -80,6 +83,10 @@ export interface AppDeps {
   delegations: DelegationStore;
   /** Withdrawal ledger; omitted only in tests that never touch withdraw routes. */
   withdrawals?: WithdrawalStore;
+  /** Bridge address/deposit ledger; omitted only in tests that never touch funds routes. */
+  bridgeStore?: BridgeStore;
+  /** Server-synced builder drafts; omitted only in tests that never touch draft routes. */
+  draftStore?: DraftStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
@@ -147,7 +154,9 @@ export const buildApp = (deps: AppDeps) => {
         ? (origin, cb) => cb(null, origin ?? true)
         : [deps.config.baseUrl],
     credentials: true,
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    // PATCH (strategy tags) and PUT (draft sync) joined in the organization/
+    // drafts slices — split deploys break without them.
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
 
   // Cookie support — required before any route that reads/sets the session cookie.
@@ -205,6 +214,23 @@ export const buildApp = (deps: AppDeps) => {
     config: deps.config,
     gammaClient: deps.gammaClient,
   });
+  const bridgeStore =
+    deps.bridgeStore ??
+    ({
+      saveAddress: async () => {
+        throw new Error("bridgeStore not wired");
+      },
+      listAddresses: async () => [],
+      listPollableAddresses: async () => [],
+      markAddressChecked: async () => {},
+      upsertDepositsFromStatus: async () => ({ changed: [] }),
+      listDepositsByWallet: async () => [],
+      createWithdrawal: async () => null,
+      findWithdrawalByIdempotencyKey: async () => null,
+      listWithdrawalsByWallet: async () => [],
+      updateWithdrawalState: async () => null,
+      updateWithdrawalsFromStatus: async () => ({ changed: [] }),
+    } satisfies BridgeStore);
   registerFundsRoutes(fastifyApp, {
     config: deps.config,
     sessions: deps.sessions,
@@ -212,8 +238,16 @@ export const buildApp = (deps: AppDeps) => {
     tradingAccounts,
     privyWallets: deps.privyWallets,
     bridgeClient,
+    bridgeStore,
     geoblockClient: deps.geoblockClient,
   });
+  if (deps.draftStore) {
+    registerDraftsRoutes(fastifyApp, {
+      config: deps.config,
+      sessions: deps.sessions,
+      draftStore: deps.draftStore,
+    });
+  }
   registerTradeRoutes(fastifyApp, {
     config: deps.config,
     sessions: deps.sessions,
@@ -248,6 +282,9 @@ export const buildApp = (deps: AppDeps) => {
     allowanceReader,
     depositWalletRelayer,
     withdrawals,
+    bridgeClient,
+    bridgeStore,
+    geoblockClient: deps.geoblockClient,
   });
   registerTradingAccountsRoutes(fastifyApp, {
     sessions: deps.sessions,

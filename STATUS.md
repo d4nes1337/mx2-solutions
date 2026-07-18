@@ -628,4 +628,8 @@ durable event log, full failure-mode replay) per RFC-0001 — owner to prioritis
 | 4 (web) — frontend MVP (read-only + preview-only)       | —      | **Built** | —                                                 |
 | 6 — conditional rules (shadow / alert / manual-confirm) | Gate 5 | **Built** | Owner Gate 5 review                               |
 | 6b — wallet funds + Bridge funding scaffold             | Gate 6 | **Built** | signed-in/staging acceptance                      |
+| 6c — bridge deposit tracking + cross-chain withdrawals  | Gate 6 | **Built** | staging acceptance (ADR-0018 OQ-1/OQ-2), flags off |
+| 6d — hybrid canvas drafts + per-draft AI chat           | —      | **Built** | —                                                 |
+| 6e — event-grouped search / event pages / siblings      | —      | **Built** | —                                                 |
+| 6f — smart-orders tags/archive/restart + filter bar     | —      | **Built** | migration 0013 on deploy                          |
 | 7 — beta hardening / release                            | Gate 6 | Pending   | prior slices                                      |

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type {
   ReasonCode,
   RuleDefinition,
@@ -17,6 +17,21 @@ import {
 
 /** Statuses the worker may transition. PAUSED and all terminals are excluded. */
 const EVALUABLE: readonly RuleStatus[] = ["ACTIVE_WAITING", "ACTIVE_ACCUMULATING"];
+
+/**
+ * Terminal statuses — the only ones that may be archived. An active or paused
+ * strategy can never be hidden from monitoring.
+ */
+const ARCHIVABLE: readonly RuleStatus[] = [
+  "CANCELLED",
+  "COMPLETED",
+  "EXECUTED_MANUALLY",
+  "EXECUTED_AUTO",
+  "EXECUTION_FAILED",
+  "EXPIRED",
+  "INVALIDATED",
+  "ERROR",
+];
 
 export type TriggerStatus =
   | "awaiting_user"
@@ -63,7 +78,20 @@ export interface RuleStore {
   create(opts: CreateRuleOpts): Promise<ConditionalRuleRow>;
   findById(id: string): Promise<ConditionalRuleRow | null>;
   findByIdForWallet(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
-  listByWallet(walletAddress: string, limit?: number): Promise<ConditionalRuleRow[]>;
+  listByWallet(
+    walletAddress: string,
+    limit?: number,
+    opts?: { includeArchived?: boolean },
+  ): Promise<ConditionalRuleRow[]>;
+  /** Replace the strategy's freeform tags (validated/normalized by the route). */
+  setTags(
+    id: string,
+    walletAddress: string,
+    tags: readonly string[],
+  ): Promise<ConditionalRuleRow | null>;
+  /** Soft-hide a TERMINAL strategy (null when not terminal / already archived). */
+  archive(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
+  unarchive(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
   /** Rules the worker should evaluate (status ACTIVE_WAITING | ACTIVE_ACCUMULATING). */
   listEvaluable(): Promise<ConditionalRuleRow[]>;
   /**
@@ -134,13 +162,56 @@ export const createRuleStore = (db: Database): RuleStore => ({
     return row ?? null;
   },
 
-  async listByWallet(walletAddress, limit = 100) {
+  async listByWallet(walletAddress, limit = 100, opts) {
     return db
       .select()
       .from(conditionalRules)
-      .where(eq(conditionalRules.walletAddress, walletAddress))
+      .where(
+        and(
+          eq(conditionalRules.walletAddress, walletAddress),
+          ...(opts?.includeArchived ? [] : [isNull(conditionalRules.archivedAt)]),
+        ),
+      )
       .orderBy(desc(conditionalRules.createdAt))
       .limit(limit);
+  },
+
+  async setTags(id, walletAddress, tags) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ tags: [...tags], updatedAt: sql`now()` })
+      .where(
+        and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)),
+      )
+      .returning();
+    return row ?? null;
+  },
+
+  async archive(id, walletAddress) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ archivedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(conditionalRules.id, id),
+          eq(conditionalRules.walletAddress, walletAddress),
+          inArray(conditionalRules.status, ARCHIVABLE as RuleStatus[]),
+          isNull(conditionalRules.archivedAt),
+        ),
+      )
+      .returning();
+    return row ?? null;
+  },
+
+  async unarchive(id, walletAddress) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ archivedAt: null, updatedAt: sql`now()` })
+      .where(
+        and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)),
+      )
+      .returning();
+    return row ?? null;
   },
 
   async listEvaluable() {

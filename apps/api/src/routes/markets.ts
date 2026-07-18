@@ -8,6 +8,7 @@ import type {
 import type { MarketSnapshotStore } from "@mx2/db";
 import { makeRateLimit } from "../middleware/rate-limit.js";
 import { getMarketScenarios } from "../lib/scenarios.js";
+import { groupedEventByToken } from "../lib/event-siblings.js";
 
 export interface MarketsRoutesDeps {
   gammaClient: GammaClient;
@@ -245,6 +246,27 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
   });
 
   // Market detail: Gamma metadata + live orderbook (DB WS snapshot or REST fallback).
+  // ── GET /api/markets/siblings?tokenId= — event siblings for a token ───────
+  // The builder's "Also in this event" section: token → parent event → the
+  // grouped DTO (ordered sub-markets). 30s cached per token/event.
+  app.get(
+    "/api/markets/siblings",
+    { preHandler: [makeRateLimit({ scope: "market-siblings", limit: 60, windowMs: 60_000 })] },
+    async (req, reply) => {
+      const tokenId = ((req.query as Record<string, string>)["tokenId"] ?? "").trim();
+      if (tokenId.length < 4 || tokenId.length > 128) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "tokenId is required." };
+      }
+      const result = await groupedEventByToken(deps.gammaClient, tokenId);
+      if (!result.ok) {
+        reply.code(502);
+        return { error: result.error.code, message: result.error.message };
+      }
+      return { event: result.value };
+    },
+  );
+
   app.get("/api/markets/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const marketResult = await deps.gammaClient.getMarket(id);

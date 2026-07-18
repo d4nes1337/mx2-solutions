@@ -2,8 +2,13 @@ import type { Result } from "@mx2/core";
 import { err, ok } from "@mx2/core";
 import {
   BridgeDepositResponseSchema,
+  BridgeQuoteResponseSchema,
+  BridgeStatusResponseSchema,
   BridgeSupportedAssetsResponseSchema,
+  BridgeWithdrawResponseSchema,
   type BridgeDepositAddresses,
+  type BridgeQuoteResponse,
+  type BridgeStatusResponse,
   type BridgeSupportedAssetsResponse,
 } from "./schema.js";
 import {
@@ -20,11 +25,41 @@ export interface CreateBridgeDepositAddressesParams {
   polymarketWalletAddress: string;
 }
 
+export interface BridgeQuoteParams {
+  fromAmountBaseUnit: string;
+  fromChainId: string;
+  fromTokenAddress: string;
+  recipientAddress: string;
+  toChainId: string;
+  toTokenAddress: string;
+}
+
+export interface CreateBridgeWithdrawalAddressesParams {
+  /** Polymarket deposit/proxy wallet the funds leave from (Polygon). */
+  polymarketWalletAddress: string;
+  toChainId: string;
+  toTokenAddress: string;
+  /** Final recipient on the destination chain (the user's own login wallet). */
+  recipientAddr: string;
+}
+
 export interface BridgeClient {
   getSupportedAssets(): Promise<Result<BridgeSupportedAssetsResponse, PolymarketError>>;
   createDepositAddresses(
     params: CreateBridgeDepositAddressesParams,
   ): Promise<Result<BridgeDepositAddresses, PolymarketError>>;
+  /** Fee/ETA/min-received estimate for a route (both directions). */
+  getQuote(params: BridgeQuoteParams): Promise<Result<BridgeQuoteResponse, PolymarketError>>;
+  /**
+   * Withdrawal is address-based like deposits: the returned bridge address is
+   * the Polygon hop — send pUSD/USDC.e there and the bridge delivers
+   * toTokenAddress to recipientAddr on toChainId.
+   */
+  createWithdrawalAddresses(
+    params: CreateBridgeWithdrawalAddressesParams,
+  ): Promise<Result<BridgeDepositAddresses, PolymarketError>>;
+  /** Transfer statuses for a generated bridge address (deposit or withdrawal). */
+  getStatus(bridgeAddress: string): Promise<Result<BridgeStatusResponse, PolymarketError>>;
 }
 
 export interface BridgeClientOptions {
@@ -106,5 +141,47 @@ export const createBridgeClient = (opts?: BridgeClientOptions): BridgeClient => 
       if (!addresses) return err(parseError("Bridge deposit response did not include addresses"));
       return ok(addresses);
     },
+
+    getQuote: (params) =>
+      fetchJson(
+        buildUrl(baseUrl, "/quote"),
+        {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        },
+        BridgeQuoteResponseSchema,
+        timeoutMs,
+      ),
+
+    async createWithdrawalAddresses(params) {
+      const result = await fetchJson(
+        buildUrl(baseUrl, "/withdraw"),
+        {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            address: params.polymarketWalletAddress,
+            toChainId: params.toChainId,
+            toTokenAddress: params.toTokenAddress,
+            recipientAddr: params.recipientAddr,
+          }),
+        },
+        BridgeWithdrawResponseSchema,
+        timeoutMs,
+      );
+      if (!result.ok) return result;
+      const addresses = result.value.address ?? result.value.addresses;
+      if (!addresses) return err(parseError("Bridge withdraw response did not include addresses"));
+      return ok(addresses);
+    },
+
+    getStatus: (bridgeAddress) =>
+      fetchJson(
+        buildUrl(baseUrl, `/status/${encodeURIComponent(bridgeAddress)}`),
+        { headers },
+        BridgeStatusResponseSchema,
+        timeoutMs,
+      ),
   };
 };

@@ -37,13 +37,16 @@ export function useSession() {
  * recovery.
  */
 export function useSignIn() {
-  const { address, connector, chainId } = useAccount();
+  const { address, connector } = useAccount();
   const qc = useQueryClient();
 
   return useMutation({
     mutationFn: async () => {
       if (!address || !connector) throw new Error("Connect a wallet first.");
-      const cid = chainId ?? 137;
+      // The login domain is PINNED to Polygon (ADR-0002 / migration 0003) even
+      // though wagmi now carries extra chains for bridge-funding sends —
+      // typed-data signing works regardless of the wallet's active chain.
+      const cid = 137;
 
       const challenge = await api.get<LoginChallenge>(
         `/api/auth/challenge?address=${address}&chainId=${cid}`,

@@ -326,10 +326,38 @@ export interface WalletWithdrawalItem {
 export interface WithdrawResponse {
   ok: boolean;
   withdrawalId?: string;
+  bridgeWithdrawalId?: string;
   destination?: string;
+  toChainId?: string;
   amountUsd?: number;
   alreadySubmitted?: boolean;
   relayer?: { transactionId: string; state: string; transactionHash?: string };
+  quote?: {
+    minReceived: number | null;
+    estOutputUsd: number | null;
+    estCheckoutTimeMs?: number | null;
+  };
+}
+
+/** Cross-chain (bridge) withdrawal — two legs, destination = login wallet. */
+export interface BridgeWithdrawalItem {
+  id: string;
+  amountUsd: number;
+  destination: string;
+  toChainId: string;
+  state:
+    | "requested"
+    | "address_created"
+    | "polygon_submitted"
+    | "polygon_confirmed"
+    | "bridging"
+    | "completed"
+    | "failed_address"
+    | "failed_polygon"
+    | "failed_bridge";
+  polygonTxHash: string | null;
+  bridgeTxHash: string | null;
+  createdAt: string;
 }
 
 export interface FundsAsset {
@@ -365,6 +393,35 @@ export interface FundsDepositAddressesResponse {
   ok: boolean;
   depositWalletAddress: string;
   addresses: Partial<Record<FundsAsset["addressType"], string>>;
+}
+
+/** POST /api/funds/quote — deposit-direction fee/ETA estimate. */
+export interface FundsQuoteResponse {
+  quoteId: string | null;
+  estCheckoutTimeMs: number | null;
+  estToTokenBaseUnit: string | null;
+  estInputUsd: number | null;
+  estOutputUsd: number | null;
+  fees: {
+    appFeeLabel: string | null;
+    appFeeUsd: number | null;
+    gasUsd: number | null;
+    totalImpactUsd: number | null;
+    minReceived: number | null;
+  };
+}
+
+/** GET /api/funds/deposits — tracked bridge deposit transfers. */
+export interface BridgeDepositItem {
+  id: string;
+  fromChainId: string;
+  fromTokenAddress: string;
+  fromAmountBaseUnit: string;
+  state: "detected" | "processing" | "origin_confirmed" | "submitted" | "completed" | "failed";
+  providerStatus: string;
+  txHash: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TradingWalletBalanceResponse {

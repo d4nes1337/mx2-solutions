@@ -30,7 +30,7 @@ import {
 } from "@mx2/rules";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
-import { smartSearchMarketHits } from "../lib/market-search.js";
+import { smartSearchEventHits, smartSearchMarketHits } from "../lib/market-search.js";
 
 export interface SmartOrdersRoutesDeps {
   config: AppConfig;
@@ -184,6 +184,11 @@ export const StrategyDefinitionSchema = z.object({
   limits: LimitsSchema.nullable(),
   expiresAtMs: z.number().int().nullable(),
 });
+
+/** PATCH /:id/tags body — ≤10 freeform labels, 1–24 chars each. */
+const TagsSchema = z
+  .object({ tags: z.array(z.string().min(1).max(24)).max(10) })
+  .strict();
 
 const CreateSmartOrderSchema = z.object({
   name: z.string().min(1).max(120),
@@ -500,9 +505,11 @@ export const registerSmartOrdersRoutes = (
   });
 
   // ── GET /api/smart-orders — every strategy incl. v1 rules (normalized) ─────
+  // Archived rows are hidden unless ?includeArchived=1 (reversible soft-hide).
   app.get("/api/smart-orders", guard, async (req) => {
     const user = req.user!;
-    const rows = await deps.ruleStore.listByWallet(user.walletAddress);
+    const includeArchived = (req.query as Record<string, string>)["includeArchived"] === "1";
+    const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100, { includeArchived });
     return { strategies: rows.map(serializeStrategy) };
   });
 
@@ -545,6 +552,66 @@ export const registerSmartOrdersRoutes = (
   control("pause", (id, w) => deps.ruleStore.pause(id, w));
   control("resume", (id, w) => deps.ruleStore.resume(id, w));
   control("cancel", (id, w) => deps.ruleStore.cancel(id, w));
+
+  // ── Organization: tags + reversible archive ────────────────────────────────
+  app.patch("/api/smart-orders/:id/tags", guard, async (req, reply) => {
+    const user = req.user!;
+    const { id } = req.params as { id: string };
+    const parsed = TagsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "INVALID_REQUEST",
+        message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      };
+    }
+    // Normalize: lowercase, trim, dedupe — the shared vocabulary with drafts.
+    const tags = [...new Set(parsed.data.tags.map((t) => t.trim().toLowerCase()))].filter(
+      (t) => t.length > 0,
+    );
+    const row = await deps.ruleStore.setTags(id, user.walletAddress, tags);
+    if (!row) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Smart Order not found" };
+    }
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "rule.state_changed",
+      subject: `rule:${id}`,
+      metadata: { control: "tags", tags },
+    });
+    return serializeStrategy(row);
+  });
+
+  const archiveControl = (label: "archive" | "unarchive") =>
+    app.post(`/api/smart-orders/:id/${label}`, guard, async (req, reply) => {
+      const user = req.user!;
+      const { id } = req.params as { id: string };
+      const row =
+        label === "archive"
+          ? await deps.ruleStore.archive(id, user.walletAddress)
+          : await deps.ruleStore.unarchive(id, user.walletAddress);
+      if (!row) {
+        reply.code(409);
+        return {
+          error: "INVALID_STATE",
+          message:
+            label === "archive"
+              ? "Only ended Smart Orders can be archived."
+              : "Smart Order not found.",
+        };
+      }
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "rule.state_changed",
+        subject: `rule:${id}`,
+        metadata: { control: label },
+      });
+      return serializeStrategy(row);
+    });
+
+  archiveControl("archive");
+  archiveControl("unarchive");
 
   // ── Disarm / re-arm auto execution (per-strategy kill, W8) ────────────────
   // Flips a runtime flag the auto-executor checks pre-flight. The definition
@@ -684,4 +751,29 @@ export const registerSmartOrdersRoutes = (
     }
     return { results: result.value };
   });
+
+  // ── GET /api/markets/search/grouped — PUBLIC (Markets tab + builder) ──────
+  // Event-granularity results: each hit keeps ALL its sub-markets (totals,
+  // spreads, candidates). Shares the flat search's cache AND its rate-limit
+  // scope, so the two endpoints draw from one Gamma budget.
+  app.get(
+    "/api/markets/search/grouped",
+    publicGuard("market-search", 120),
+    async (req, reply) => {
+      const q = ((req.query as Record<string, string>)["q"] ?? "").trim();
+      if (q.length < 2 || q.length > 80) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "q must be 2–80 characters." };
+      }
+      const result = await smartSearchEventHits(deps.gammaClient, q, {
+        limit: 10,
+        marketsPerEvent: 20,
+      });
+      if (!result.ok) {
+        reply.code(502);
+        return { error: result.error.code, message: result.error.message };
+      }
+      return { results: result.value };
+    },
+  );
 };

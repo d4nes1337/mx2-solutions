@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { GammaClient, ListEventsParams } from "@mx2/polymarket-client";
+import { groupedEvent } from "../lib/event-siblings.js";
 
 export interface EventsRoutesDeps {
   gammaClient: GammaClient;
@@ -35,6 +36,23 @@ export const registerEventsRoutes = (app: FastifyInstance, deps: EventsRoutesDep
       const code = result.error.statusCode === 404 ? 404 : 502;
       reply.code(code);
       return { error: result.error.code, message: result.error.message };
+    }
+    return result.value;
+  });
+
+  // ── GET /api/events/:id/markets — event with ordered sub-markets ──────────
+  // Same grouped DTO as /api/markets/search/grouped: powers the event page and
+  // the market-detail "More from this event" panel. 30s cache.
+  app.get("/api/events/:id/markets", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const result = await groupedEvent(deps.gammaClient, id);
+    if (!result.ok) {
+      reply.code(result.error.statusCode === 404 ? 404 : 502);
+      return { error: result.error.code, message: result.error.message };
+    }
+    if (!result.value) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Event not found or has no markets." };
     }
     return result.value;
   });

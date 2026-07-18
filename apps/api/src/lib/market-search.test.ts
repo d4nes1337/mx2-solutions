@@ -6,7 +6,12 @@ import {
   type GammaEvent,
   type PolymarketError,
 } from "@mx2/polymarket-client";
-import { resetSmartSearchCache, searchMarketHits, smartSearchMarketHits } from "./market-search.js";
+import {
+  resetSmartSearchCache,
+  searchMarketHits,
+  smartSearchEventHits,
+  smartSearchMarketHits,
+} from "./market-search.js";
 
 const upstreamErr: PolymarketError = { code: "UPSTREAM_ERROR", message: "x", statusCode: 502 };
 
@@ -215,5 +220,104 @@ describe("smartSearchMarketHits", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toHaveLength(3);
+  });
+});
+
+// ── Event-grouped search (sub-markets: totals, spreads, candidates) ──────────
+
+const subMarket = (conditionId: string, over: Record<string, unknown> = {}) => ({
+  id: `m-${conditionId}`,
+  question: `${conditionId}?`,
+  conditionId,
+  active: true,
+  closed: false,
+  outcomes: '["Yes","No"]',
+  outcomePrices: '["0.5","0.5"]',
+  clobTokenIds: `["${conditionId}-yes","${conditionId}-no"]`,
+  ...over,
+});
+
+const sportsEvent = GammaEventSchema.parse({
+  id: "ev-match",
+  title: "Real Madrid vs Barcelona",
+  markets: [
+    subMarket("c-total", { groupItemTitle: "Over 2.5", sportsMarketType: "totals" }),
+    subMarket("c-closed", { groupItemTitle: "First half", active: false, closed: true }),
+    subMarket("c-money", { groupItemTitle: "Moneyline", sportsMarketType: "moneyline" }),
+    subMarket("c-spread", { groupItemTitle: "Spread -1.5", sportsMarketType: "spreads" }),
+  ],
+});
+
+const electionEvent = GammaEventSchema.parse({
+  id: "ev-election",
+  title: "Presidential Election Winner",
+  negRisk: true,
+  markets: [
+    subMarket("c-underdog", { groupItemTitle: "Underdog", outcomePrices: '["0.08","0.92"]' }),
+    subMarket("c-favorite", { groupItemTitle: "Favorite", outcomePrices: '["0.61","0.39"]' }),
+    subMarket("c-second", { groupItemTitle: "Runner-up", outcomePrices: '["0.27","0.73"]' }),
+  ],
+});
+
+describe("smartSearchEventHits", () => {
+  it("returns events with ALL sub-markets, ordered: open first, sports by type", async () => {
+    const { gamma } = makeGamma(async () => ok([sportsEvent]));
+    const result = await smartSearchEventHits(gamma, "real madrid", { limit: 10 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(1);
+    const event = result.value[0]!;
+    expect(event.title).toBe("Real Madrid vs Barcelona");
+    expect(event.markets.map((m) => m.conditionId)).toEqual([
+      "c-money",
+      "c-spread",
+      "c-total",
+      "c-closed", // closed sinks to the bottom
+    ]);
+    expect(event.markets[0]!.groupItemTitle).toBe("Moneyline");
+  });
+
+  it("orders neg-risk candidates by price, favorite first", async () => {
+    const { gamma } = makeGamma(async () => ok([electionEvent]));
+    const result = await smartSearchEventHits(gamma, "election", { limit: 10 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]!.negRisk).toBe(true);
+    expect(result.value[0]!.markets.map((m) => m.conditionId)).toEqual([
+      "c-favorite",
+      "c-second",
+      "c-underdog",
+    ]);
+  });
+
+  it("shares one cache entry with the flat search (no extra Gamma traffic)", async () => {
+    const { gamma, calls } = makeGamma(async () => ok([sportsEvent]));
+    await smartSearchMarketHits(gamma, "real madrid", { limit: 15 });
+    const before = calls.length;
+    const grouped = await smartSearchEventHits(gamma, "real madrid", { limit: 10 });
+    expect(calls.length).toBe(before); // served from the shared cache
+    expect(grouped.ok).toBe(true);
+  });
+
+  it("collapses the flat view to the ordered head market of each event", async () => {
+    const { gamma } = makeGamma(async () => ok([sportsEvent, electionEvent, ...threeEvents]));
+    const flat = await smartSearchMarketHits(gamma, "anything at all", { limit: 15 });
+    expect(flat.ok).toBe(true);
+    if (!flat.ok) return;
+    const byEvent = new Map(flat.value.map((h) => [h.eventId, h]));
+    expect(byEvent.get("ev-match")?.conditionId).toBe("c-money");
+    expect(byEvent.get("ev-election")?.conditionId).toBe("c-favorite");
+  });
+
+  it("caps sub-markets per event via marketsPerEvent", async () => {
+    const { gamma } = makeGamma(async () => ok([electionEvent]));
+    const result = await smartSearchEventHits(gamma, "election", {
+      limit: 10,
+      marketsPerEvent: 2,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]!.markets).toHaveLength(2);
+    expect(result.value[0]!.markets[0]!.conditionId).toBe("c-favorite");
   });
 });

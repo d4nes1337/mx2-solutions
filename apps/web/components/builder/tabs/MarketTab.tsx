@@ -6,12 +6,14 @@
  * focused — clicking a market node on the canvas lands here.
  */
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import { Segmented, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { OrderbookTable } from "@/components/OrderbookTable";
 import { useOrderbookByToken, useTokenPricesHistory } from "@/lib/queries";
 import { cents } from "@/lib/format";
 import { docMarketRefs, marketLabel } from "@/lib/smart-orders/doc";
+import { useMarketSiblings } from "@/lib/smart-orders/queries";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 
 const RANGES: { value: string; label: string }[] = [
@@ -20,6 +22,68 @@ const RANGES: { value: string; label: string }[] = [
   { value: "1w", label: "1W" },
   { value: "1m", label: "1M" },
 ];
+
+/**
+ * "Also in this event": the focused market's event siblings (totals, spreads,
+ * other candidates), one click from joining the canvas — the seam for
+ * cross-market strategies inside one match or election.
+ */
+function EventSiblings({ tokenId }: { tokenId: string }) {
+  const doc = useBuilderStore((s) => s.doc);
+  const addWatchedMarket = useBuilderStore((s) => s.addWatchedMarket);
+  const siblings = useMarketSiblings(tokenId);
+  const event = siblings.data?.event;
+  if (!event) return null;
+
+  const usedTokens = new Set(docMarketRefs(doc).map((m) => m.tokenId));
+  const others = event.markets.filter(
+    (m) => m.active && !m.closed && !m.tokenIds.some((t) => usedTokens.has(t)),
+  );
+  if (others.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-[11px] uppercase tracking-wide text-muted">Also in this event</span>
+      <div className="flex flex-wrap gap-1.5">
+        {others.slice(0, 8).map((m) => {
+          const label = m.groupItemTitle.trim() !== "" ? m.groupItemTitle : m.title;
+          const yes = m.outcomePrices[0];
+          return (
+            <button
+              key={m.marketId}
+              type="button"
+              title={`Add “${label}” to the canvas`}
+              onClick={() =>
+                addWatchedMarket(
+                  {
+                    conditionId: m.conditionId,
+                    tokenId: m.tokenIds[0] ?? "",
+                    outcome: m.outcomes[0] ?? "YES",
+                    title: m.title,
+                  },
+                  {
+                    title: m.title,
+                    eventTitle: event.title,
+                    image: m.image,
+                    rewardsMinSize: m.rewardsMinSize,
+                    rewardsMaxSpread: m.rewardsMaxSpread,
+                  },
+                )
+              }
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-muted transition-colors hover:border-brand/50 hover:text-fg"
+            >
+              <Plus size={10} aria-hidden className="shrink-0 text-accent" />
+              <span className="truncate">{label}</span>
+              {yes !== undefined ? (
+                <span className="tabular shrink-0 text-[10px] text-faint">{cents(yes)}</span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function TokenPriceChart({ tokenId, outcome }: { tokenId: string; outcome: string }) {
   const [range, setRange] = useState("1d");
@@ -113,6 +177,8 @@ export function MarketTab() {
       </div>
 
       <TokenPriceChart tokenId={active.tokenId} outcome={active.outcome} />
+
+      <EventSiblings tokenId={active.tokenId} />
 
       <div className="space-y-1.5">
         <span className="text-[11px] uppercase tracking-wide text-muted">Order book</span>

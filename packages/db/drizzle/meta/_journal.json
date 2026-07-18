@@ -92,6 +92,27 @@
       "when": 1783497128360,
       "tag": "0012_funds_and_confirm",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784312129933,
+      "tag": "0013_rules_tags_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1784319180061,
+      "tag": "0014_bridge_funding",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1784332222403,
+      "tag": "0015_strategy_drafts",
+      "breakpoints": true
     }
   ]
 }

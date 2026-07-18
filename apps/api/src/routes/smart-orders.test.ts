@@ -69,6 +69,8 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         triggerCount: 0,
         cooldownUntil: null,
         runtimeWatermarks: null,
+        tags: [],
+        archivedAt: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -81,7 +83,8 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       const r = find(id);
       return r && r.walletAddress === w ? r : null;
     },
-    listByWallet: async (w) => rows.filter((r) => r.walletAddress === w),
+    listByWallet: async (w, _limit, opts) =>
+      rows.filter((r) => r.walletAddress === w && (opts?.includeArchived || !r.archivedAt)),
     listEvaluable: async () => [],
     updateEvaluationState: async () => null,
     pause: async () => null,
@@ -91,6 +94,25 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
     markExecuting: async () => null,
     markAutoExecuted: async () => null,
     markExecutionFailed: async () => null,
+    setTags: async (id, w, tags) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.tags = [...tags];
+      return r;
+    },
+    archive: async (id, w) => {
+      const r = find(id);
+      const terminal = ["CANCELLED","COMPLETED","EXECUTED_MANUALLY","EXECUTED_AUTO","EXECUTION_FAILED","EXPIRED","INVALIDATED","ERROR"].includes(r?.status ?? "");
+      if (!r || r.walletAddress !== w || !terminal || r.archivedAt) return null;
+      r.archivedAt = new Date();
+      return r;
+    },
+    unarchive: async (id, w) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.archivedAt = null;
+      return r;
+    },
     addExecutedNotional: async () => {},
   };
 };
@@ -585,6 +607,105 @@ describe("GET /api/smart-orders (+ v1 normalization)", () => {
     expect(strategies[0].version).toBe(1);
     expect(strategies[0].definitionV2.version).toBe(2);
     expect(strategies[0].definitionV2.expr.op).toBe("and");
+    await app.close();
+  });
+});
+
+describe("tags + archive (organization)", () => {
+  /** Create through the real route so the stored definition is compiled/valid. */
+  const createOne = async (app: {
+    inject: (opts: object) => Promise<{ statusCode: number; json: () => { id: string } }>;
+  }): Promise<string> => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: validBody,
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id;
+  };
+
+  it("sets normalized tags (lowercased, deduped) and audits", async () => {
+    const { app, audits } = buildSmartOrdersApp({});
+    const id = await createOne(app);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/tags`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { tags: ["Election", "  hedge ", "election"] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tags).toEqual(["election", "hedge"]);
+    // The harness records {action, subject} only — control detail is metadata.
+    expect(
+      audits.some((a) => a.action === "rule.state_changed" && a.subject === `rule:${id}`),
+    ).toBe(true);
+    await app.close();
+  });
+
+  it("rejects more than 10 tags and over-long tags", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const id = await createOne(app);
+    const tooMany = await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/tags`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
+    });
+    expect(tooMany.statusCode).toBe(400);
+    const tooLong = await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/tags`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { tags: ["x".repeat(25)] },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("refuses to archive an active strategy; archives a cancelled one; list hides it", async () => {
+    const ruleStore = makeRuleStore();
+    const { app } = buildSmartOrdersApp({ ruleStore });
+    const id = await createOne(app);
+
+    const active = await app.inject({
+      method: "POST",
+      url: `/api/smart-orders/${id}/archive`,
+      headers: { cookie: COOKIE },
+    });
+    expect(active.statusCode).toBe(409); // monitoring must stay visible
+
+    ruleStore.rows[0]!.status = "CANCELLED";
+    const archived = await app.inject({
+      method: "POST",
+      url: `/api/smart-orders/${id}/archive`,
+      headers: { cookie: COOKIE },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().archivedAt).not.toBeNull();
+
+    const hidden = await app.inject({
+      method: "GET",
+      url: "/api/smart-orders",
+      headers: { cookie: COOKIE },
+    });
+    expect(hidden.json().strategies).toHaveLength(0);
+
+    const shown = await app.inject({
+      method: "GET",
+      url: "/api/smart-orders?includeArchived=1",
+      headers: { cookie: COOKIE },
+    });
+    expect(shown.json().strategies).toHaveLength(1);
+
+    const restored = await app.inject({
+      method: "POST",
+      url: `/api/smart-orders/${id}/unarchive`,
+      headers: { cookie: COOKIE },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().archivedAt).toBeNull();
     await app.close();
   });
 });

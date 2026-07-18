@@ -25,12 +25,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
 import {
   useBridgeDepositAddresses,
+  useBridgeDeposits,
   useFeatureFlags,
   useFundsAssets,
   useWithdraw,
   useWithdrawals,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
+import { BridgeSendPanel } from "./BridgeSendPanel";
 import type { FundsAsset } from "@/lib/types";
 
 // Bridged USDC.e on Polygon mainnet (same constant as allowance-bootstrap.ts)
@@ -187,11 +189,12 @@ export function FundsSheet({
         ) : tab === "withdraw" ? (
           <WithdrawPanel
             enabled={Boolean(flags.data?.walletWithdraw)}
+            bridgeEnabled={Boolean(flags.data?.bridgeWithdrawals)}
             availableUsd={depositUsd}
             onDone={() => setTab("history")}
           />
         ) : (
-          <HistoryPanel open={open} />
+          <HistoryPanel open={open} bridgeEnabled={Boolean(flags.data?.bridgeFunding)} />
         )}
       </div>
     </div>
@@ -414,20 +417,25 @@ function TopUpPanel({
               {bridgeDeposit.isPending ? "Generating..." : "Generate deposit address"}
             </Button>
           ) : bridgeAddress ? (
-            <div className="rounded-md border border-brand/40 bg-brand-soft/30 p-3">
-              <div className="text-[10px] uppercase tracking-wide text-muted">
-                Send only {selectedAsset?.token.symbol} on {selectedAsset?.chainName}
+            <div className="space-y-3">
+              <div className="rounded-md border border-brand/40 bg-brand-soft/30 p-3">
+                <div className="text-[10px] uppercase tracking-wide text-muted">
+                  Send only {selectedAsset?.token.symbol} on {selectedAsset?.chainName}
+                </div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className="flex-1 break-all font-mono text-[12px] text-fg">
+                    {bridgeAddress}
+                  </span>
+                  <CopyButton text={bridgeAddress} />
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  Sending a different chain or token can delay or fail the deposit. Incoming
+                  transfers appear in the History tab as the bridge processes them.
+                </p>
               </div>
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className="flex-1 break-all font-mono text-[12px] text-fg">
-                  {bridgeAddress}
-                </span>
-                <CopyButton text={bridgeAddress} />
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-muted">
-                Sending a different chain or token can delay or fail the deposit. Status tracking is
-                the next backend slice; keep your source wallet transaction hash.
-              </p>
+              {selectedAsset ? (
+                <BridgeSendPanel asset={selectedAsset} bridgeAddress={bridgeAddress} />
+              ) : null}
             </div>
           ) : (
             <ErrorNote message="Bridge did not return an address for this chain family." />
@@ -601,18 +609,29 @@ function DirectPolygonTopUp({
 
 // ── Withdraw (owner-only, relayer-executed, gasless) ────────────────────────
 
+/** EVM chains selectable as withdrawal destinations (login wallet address). */
+const WITHDRAW_CHAINS: { chainId: string; label: string; direct?: boolean }[] = [
+  { chainId: "137", label: "Polygon — direct, gasless", direct: true },
+  { chainId: "8453", label: "Base — via bridge" },
+  { chainId: "42161", label: "Arbitrum — via bridge" },
+  { chainId: "1", label: "Ethereum — via bridge" },
+];
+
 function WithdrawPanel({
   enabled,
+  bridgeEnabled,
   availableUsd,
   onDone,
 }: {
   enabled: boolean;
+  bridgeEnabled: boolean;
   availableUsd: number | null;
   onDone: () => void;
 }) {
   const { address } = useAccount();
   const withdraw = useWithdraw();
   const [amount, setAmount] = useState("");
+  const [toChainId, setToChainId] = useState("137");
   const [confirming, setConfirming] = useState(false);
   // One idempotency key per confirm attempt: a double-click or retry of the
   // SAME confirmation can never produce two transfers.
@@ -630,10 +649,13 @@ function WithdrawPanel({
   const parsed = Number(amount);
   const amountOk =
     Number.isFinite(parsed) && parsed >= 1 && (availableUsd === null || parsed <= availableUsd);
+  const viaBridge = toChainId !== "137";
+  const chainLabel =
+    WITHDRAW_CHAINS.find((c) => c.chainId === toChainId)?.label.split(" — ")[0] ?? "Polygon";
 
   const submit = () => {
     withdraw.mutate(
-      { amountUsd: parsed, idempotencyKey },
+      { amountUsd: parsed, idempotencyKey, ...(viaBridge ? { toChainId } : {}) },
       {
         onSuccess: () => {
           setAmount("");
@@ -661,9 +683,30 @@ function WithdrawPanel({
         </div>
         <p className="mt-1.5 text-[11px] leading-snug text-muted">
           Withdrawals can <span className="font-semibold text-fg">only</span> go to your connected
-          login wallet — the destination can&apos;t be changed, by design.
+          login wallet — the destination can&apos;t be changed, by design. You choose the chain it
+          arrives on.
         </p>
       </div>
+
+      {bridgeEnabled ? (
+        <label className="block space-y-1 text-[11px] text-muted">
+          <span>Destination chain</span>
+          <select
+            value={toChainId}
+            onChange={(e) => {
+              setToChainId(e.target.value);
+              setConfirming(false);
+            }}
+            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent/50 focus:outline-none"
+          >
+            {WITHDRAW_CHAINS.map((c) => (
+              <option key={c.chainId} value={c.chainId}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
 
       <div className="flex gap-2">
         <input
@@ -704,9 +747,20 @@ function WithdrawPanel({
       ) : (
         <div className="space-y-2 rounded-lg border border-brand/40 bg-brand-soft/40 p-3">
           <p className="text-[12px] leading-snug text-fg">
-            Send <span className="tabular font-semibold">${parsed.toFixed(2)}</span> from the
-            deposit wallet to your login wallet? Gas is covered — the full amount arrives as pUSD
-            (Polymarket USD, 1:1 with USDC).
+            {viaBridge ? (
+              <>
+                Send <span className="tabular font-semibold">${parsed.toFixed(2)}</span> to your
+                login wallet on <span className="font-semibold">{chainLabel}</span>? The bridge
+                converts it to USDC there — small bridge fees are deducted, and the server refuses
+                if the quote drops more than 1% below your amount.
+              </>
+            ) : (
+              <>
+                Send <span className="tabular font-semibold">${parsed.toFixed(2)}</span> from the
+                deposit wallet to your login wallet? Gas is covered — the full amount arrives as
+                pUSD (Polymarket USD, 1:1 with USDC).
+              </>
+            )}
           </p>
           <div className="flex gap-2">
             <Button size="sm" variant="primary" disabled={withdraw.isPending} onClick={submit}>
@@ -724,54 +778,152 @@ function WithdrawPanel({
   );
 }
 
-// ── History ──────────────────────────────────────────────────────────────────
+// ── History (withdrawals + bridge deposits, newest first) ───────────────────
 
 const STATE_TONE: Record<string, string> = {
   requested: "text-muted",
   submitted: "text-accent",
   confirmed: "text-pos",
   failed: "text-neg",
+  // Bridge deposit states
+  detected: "text-accent",
+  processing: "text-accent",
+  origin_confirmed: "text-accent",
+  completed: "text-pos",
 };
 
-function HistoryPanel({ open }: { open: boolean }) {
-  const history = useWithdrawals(open);
-  const rows = history.data?.withdrawals ?? [];
+const DEPOSIT_STATE_LABEL: Record<string, string> = {
+  detected: "detected",
+  processing: "processing",
+  origin_confirmed: "confirmed at source",
+  submitted: "arriving",
+  completed: "completed",
+  failed: "failed",
+};
 
-  if (history.isLoading) return <Spinner label="Loading transfers…" />;
+const BRIDGE_WITHDRAWAL_STATE_LABEL: Record<string, string> = {
+  requested: "starting",
+  address_created: "starting",
+  polygon_submitted: "leaving Polygon",
+  polygon_confirmed: "leaving Polygon",
+  bridging: "bridging",
+  completed: "completed",
+  failed_address: "failed (funds safe)",
+  failed_polygon: "failed (funds safe)",
+  failed_bridge: "needs support",
+};
+
+const CHAIN_NAMES: Record<string, string> = {
+  "137": "Polygon",
+  "8453": "Base",
+  "42161": "Arbitrum",
+  "1": "Ethereum",
+};
+
+interface HistoryRow {
+  id: string;
+  direction: "in" | "out";
+  amountLabel: string;
+  subtitle: string;
+  state: string;
+  stateLabel: string;
+  txUrl: string | null;
+  at: number;
+}
+
+function HistoryPanel({ open, bridgeEnabled }: { open: boolean; bridgeEnabled: boolean }) {
+  const history = useWithdrawals(open);
+  const deposits = useBridgeDeposits(open && bridgeEnabled);
+  const assets = useFundsAssets(open && bridgeEnabled);
+
+  const assetFor = (chainId: string, tokenAddress: string) =>
+    assets.data?.assets.find(
+      (a) => a.chainId === chainId && a.token.address.toLowerCase() === tokenAddress.toLowerCase(),
+    ) ?? null;
+
+  const rows: HistoryRow[] = [
+    ...(history.data?.withdrawals ?? []).map(
+      (w): HistoryRow => ({
+        id: `w-${w.id}`,
+        direction: "out",
+        amountLabel: `−$${w.amountUsd.toFixed(2)}`,
+        subtitle: "Withdrawal to login wallet",
+        state: w.state,
+        stateLabel: w.state,
+        txUrl: w.transactionHash ? `https://polygonscan.com/tx/${w.transactionHash}` : null,
+        at: new Date(w.createdAt).getTime(),
+      }),
+    ),
+    ...(history.data?.bridgeWithdrawals ?? []).map(
+      (w): HistoryRow => ({
+        id: `bw-${w.id}`,
+        direction: "out",
+        amountLabel: `−$${w.amountUsd.toFixed(2)}`,
+        subtitle: `Withdrawal to ${CHAIN_NAMES[w.toChainId] ?? `chain ${w.toChainId}`} (bridge)`,
+        state: w.state.startsWith("failed") ? "failed" : w.state,
+        stateLabel: BRIDGE_WITHDRAWAL_STATE_LABEL[w.state] ?? w.state,
+        txUrl: w.polygonTxHash ? `https://polygonscan.com/tx/${w.polygonTxHash}` : null,
+        at: new Date(w.createdAt).getTime(),
+      }),
+    ),
+    ...(deposits.data?.deposits ?? []).map((d): HistoryRow => {
+      const asset = assetFor(d.fromChainId, d.fromTokenAddress);
+      const amount =
+        asset && d.fromAmountBaseUnit !== ""
+          ? Number(formatUnits(BigInt(d.fromAmountBaseUnit), asset.token.decimals))
+          : null;
+      return {
+        id: `d-${d.id}`,
+        direction: "in",
+        amountLabel:
+          amount !== null ? `+${amount.toFixed(2)} ${asset?.token.symbol ?? ""}` : "Deposit",
+        subtitle: `Bridge deposit${asset ? ` from ${asset.chainName}` : ""}`,
+        state: d.state,
+        stateLabel: DEPOSIT_STATE_LABEL[d.state] ?? d.state,
+        txUrl: null,
+        at: new Date(d.createdAt).getTime(),
+      };
+    }),
+  ].sort((a, b) => b.at - a.at);
+
+  if (history.isLoading || (bridgeEnabled && deposits.isLoading)) {
+    return <Spinner label="Loading transfers…" />;
+  }
   if (rows.length === 0) {
     return (
       <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted">
-        No withdrawals yet. Top-ups appear on Polygonscan via the deposit wallet address.
+        No transfers yet. Direct Polygon top-ups appear on Polygonscan via the deposit wallet
+        address{bridgeEnabled ? "; bridge deposits show up here as they are detected" : ""}.
       </p>
     );
   }
   return (
     <ul className="max-h-64 space-y-1.5 overflow-y-auto">
-      {rows.map((w) => (
+      {rows.map((row) => (
         <li
-          key={w.id}
+          key={row.id}
           className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2"
         >
           <div className="flex items-center gap-2">
-            {w.state === "confirmed" ? (
+            {row.state === "confirmed" || row.state === "completed" ? (
               <ArrowDownToLine size={13} className="text-pos" aria-hidden />
             ) : (
               <History size={13} className="text-muted" aria-hidden />
             )}
             <div>
-              <div className="tabular text-[13px] font-medium text-fg">
-                ${w.amountUsd.toFixed(2)}
+              <div className="tabular text-[13px] font-medium text-fg">{row.amountLabel}</div>
+              <div className="text-[10px] text-faint">
+                {row.subtitle} · {new Date(row.at).toLocaleString()}
               </div>
-              <div className="text-[10px] text-faint">{new Date(w.createdAt).toLocaleString()}</div>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className={cn("text-[11px] font-medium capitalize", STATE_TONE[w.state])}>
-              {w.state}
+            <span className={cn("text-[11px] font-medium capitalize", STATE_TONE[row.state])}>
+              {row.stateLabel}
             </span>
-            {w.transactionHash ? (
+            {row.txUrl ? (
               <a
-                href={`https://polygonscan.com/tx/${w.transactionHash}`}
+                href={row.txUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="text-muted hover:text-fg"

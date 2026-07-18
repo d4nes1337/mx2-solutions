@@ -29,6 +29,10 @@ export interface StrategyRow {
   expiresAt: string | null;
   lastEvaluatedAt: string | null;
   errorMessage: string | null;
+  /** Freeform organization labels (lowercased). */
+  tags: string[];
+  /** Set when soft-hidden; only terminal strategies can be archived. */
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
   definitionV2: StrategyDefinition;
@@ -75,14 +79,34 @@ export interface MarketSearchResult {
   negRisk: boolean;
   rewardsMinSize: number | null;
   rewardsMaxSpread: number | null;
+  /** Sub-market label inside a multi-market event ("Over 2.5", a candidate). */
+  groupItemTitle: string;
+  bestBid: string;
+  bestAsk: string;
+  active: boolean;
+  closed: boolean;
+  sportsMarketType: string | null;
+}
+
+/** Event-granularity search hit: the event plus its ordered sub-markets. */
+export interface EventSearchResult {
+  eventId: string;
+  title: string;
+  image: string;
+  endDate: string | null;
+  negRisk: boolean;
+  markets: MarketSearchResult[];
 }
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
 
-export function useStrategies(signedIn: boolean) {
+export function useStrategies(signedIn: boolean, includeArchived = false) {
   return useQuery({
-    queryKey: ["smart-orders"],
-    queryFn: () => api.get<{ strategies: StrategyRow[] }>("/api/smart-orders"),
+    queryKey: ["smart-orders", { includeArchived }],
+    queryFn: () =>
+      api.get<{ strategies: StrategyRow[] }>(
+        `/api/smart-orders${includeArchived ? "?includeArchived=1" : ""}`,
+      ),
     enabled: signedIn,
     refetchInterval: POLL.rules,
   });
@@ -123,8 +147,23 @@ export function useCreateStrategy() {
 export function useStrategyControl() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" | "cancel" }) =>
-      api.post<StrategyRow>(`/api/smart-orders/${id}/${action}`),
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "pause" | "resume" | "cancel" | "archive" | "unarchive";
+    }) => api.post<StrategyRow>(`/api/smart-orders/${id}/${action}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+  });
+}
+
+/** Replace a strategy's freeform tags (≤10, 1–24 chars — validated server-side). */
+export function useSetStrategyTags() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, tags }: { id: string; tags: string[] }) =>
+      api.patch<StrategyRow>(`/api/smart-orders/${id}/tags`, { tags }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
   });
 }
@@ -160,5 +199,46 @@ export function useMarketSearch(q: string) {
       ),
     enabled: query.length >= 2,
     staleTime: 30_000,
+  });
+}
+
+/** Full event (ordered sub-markets) — the event page. */
+export function useEventMarkets(eventId: string | null) {
+  return useQuery({
+    queryKey: ["event-markets", eventId],
+    queryFn: () => api.get<EventSearchResult>(`/api/events/${eventId}/markets`),
+    enabled: Boolean(eventId),
+    staleTime: 30_000,
+  });
+}
+
+/** Parent-event siblings for a token — "Also in this event" surfaces. */
+export function useMarketSiblings(tokenId: string | null) {
+  return useQuery({
+    queryKey: ["market-siblings", tokenId],
+    queryFn: () =>
+      api.get<{ event: EventSearchResult | null }>(
+        `/api/markets/siblings?tokenId=${encodeURIComponent(tokenId!)}`,
+      ),
+    enabled: Boolean(tokenId),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Event-grouped search (Markets tab, builder picker): every hit carries its
+ * sub-markets — totals/spreads in a match, candidates in an election.
+ */
+export function useGroupedMarketSearch(q: string) {
+  const query = useDebouncedValue(q.trim(), 300);
+  return useQuery({
+    queryKey: ["market-search-grouped", query],
+    queryFn: () =>
+      api.get<{ results: EventSearchResult[] }>(
+        `/api/markets/search/grouped?q=${encodeURIComponent(query)}`,
+      ),
+    enabled: query.length >= 2,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
   });
 }

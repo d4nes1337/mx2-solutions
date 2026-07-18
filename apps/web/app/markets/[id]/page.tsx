@@ -20,6 +20,7 @@ import { RuleList } from "@/components/RuleList";
 import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
 import { AutomateCard } from "@/components/market/AutomateCard";
+import { EventSiblingsPanel } from "@/components/market/EventSiblingsPanel";
 import { BacktestTeaser } from "@/components/market/BacktestTeaser";
 import { MarketScenarios } from "@/components/market/MarketScenarios";
 import { RecentTradesCard } from "@/components/market/RecentTradesCard";
@@ -230,6 +231,8 @@ export default function MarketCockpitPage() {
             outcome={outcomes[outcomeIdx] ?? "YES"}
             title={m.question}
           />
+
+          <EventSiblingsPanel tokenId={tokenIds[0] ?? null} currentMarketId={id} />
 
           {view === "advanced" ? (
             <>

@@ -10,8 +10,10 @@ import type {
   EvaluateNowResponse,
   EventsResponse,
   FeatureFlags,
+  BridgeDepositItem,
   FundsAssetsResponse,
   FundsDepositAddressesResponse,
+  FundsQuoteResponse,
   HomeFeedResponse,
   HistoryResponse,
   HistoryTypeFilter,
@@ -40,6 +42,7 @@ import type {
   TradingWalletBalanceResponse,
   TradingWalletProvisionResponse,
   TradingWalletReissueResponse,
+  BridgeWithdrawalItem,
   WalletWithdrawalItem,
   WithdrawResponse,
   TradingWalletStatusResponse,
@@ -387,7 +390,7 @@ export function useReissueTradingWallet() {
 export function useWithdraw() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { amountUsd: number; idempotencyKey: string }) =>
+    mutationFn: (input: { amountUsd: number; idempotencyKey: string; toChainId?: string }) =>
       api.post<WithdrawResponse>("/api/trading-wallet/withdraw", input),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
@@ -400,7 +403,9 @@ export function useWithdrawals(enabled = true) {
   return useQuery({
     queryKey: ["withdrawals"],
     queryFn: () =>
-      api.get<{ withdrawals: WalletWithdrawalItem[] }>("/api/trading-wallet/withdrawals"),
+      api.get<{ withdrawals: WalletWithdrawalItem[]; bridgeWithdrawals?: BridgeWithdrawalItem[] }>(
+        "/api/trading-wallet/withdrawals",
+      ),
     enabled,
     staleTime: 15_000,
   });
@@ -418,6 +423,28 @@ export function useFundsAssets(enabled = true) {
 export function useBridgeDepositAddresses() {
   return useMutation({
     mutationFn: () => api.post<FundsDepositAddressesResponse>("/api/funds/deposit-addresses"),
+  });
+}
+
+/** Deposit-direction bridge quote (fees/ETA/min received). */
+export function useBridgeQuote() {
+  return useMutation({
+    mutationFn: (input: {
+      fromChainId: string;
+      fromTokenAddress: string;
+      fromAmountBaseUnit: string;
+    }) => api.post<FundsQuoteResponse>("/api/funds/quote", input),
+  });
+}
+
+/** Tracked bridge deposits; refetches trigger a bounded live status pull. */
+export function useBridgeDeposits(enabled = true) {
+  return useQuery({
+    queryKey: ["bridge-deposits"],
+    queryFn: () => api.get<{ deposits: BridgeDepositItem[] }>("/api/funds/deposits?refresh=1"),
+    enabled,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }
 

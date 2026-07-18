@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   integer,
   jsonb,
@@ -319,6 +320,15 @@ export const conditionalRules = pgTable(
      */
     runtimeWatermarks: jsonb("runtime_watermarks"),
     totalNotionalExecuted: numeric("total_notional_executed").notNull().default("0"),
+    /** Freeform organization labels (lowercased, ≤10 per strategy). */
+    tags: jsonb("tags")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    /**
+     * Reversible soft-hide for ended strategies (terminal statuses only —
+     * an active strategy can never be hidden from monitoring). No hard delete.
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -570,3 +580,164 @@ export const walletWithdrawals = pgTable(
 
 export type WalletWithdrawalRow = typeof walletWithdrawals.$inferSelect;
 export type NewWalletWithdrawalRow = typeof walletWithdrawals.$inferInsert;
+
+/**
+ * Persisted Polymarket Bridge addresses (migration 0014). One row per
+ * generated address per user: deposit hops (kind=deposit, per address family)
+ * and withdrawal hops (kind=withdrawal, per destination route). Persisting
+ * them lets the sheet reuse addresses instead of regenerating per open, and
+ * gives the status poller its work list.
+ */
+export const bridgeAddresses = pgTable(
+  "bridge_addresses",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    depositWalletAddress: text("deposit_wallet_address").notNull(),
+    kind: text("kind").notNull().default("deposit"),
+    addressType: text("address_type").notNull(),
+    address: text("address").notNull(),
+    /** Withdrawal hops only: the destination route baked into the address. */
+    toChainId: text("to_chain_id"),
+    toTokenAddress: text("to_token_address"),
+    recipientAddress: text("recipient_address"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("bridge_addresses_wallet_addr_unique").on(t.walletAddress, t.kind, t.address),
+    index("bridge_addresses_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type BridgeAddressRow = typeof bridgeAddresses.$inferSelect;
+export type NewBridgeAddressRow = typeof bridgeAddresses.$inferInsert;
+
+/**
+ * Bridge deposit transfers, upserted from the provider status API.
+ * State machine (never regresses; completed/failed terminal):
+ * detected → processing → origin_confirmed → submitted → completed | failed.
+ * providerStatus is stored verbatim; unknown provider statuses bucket into
+ * "processing" without failing.
+ */
+export const bridgeDeposits = pgTable(
+  "bridge_deposits",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    bridgeAddressId: uuid("bridge_address_id").notNull(),
+    fromChainId: text("from_chain_id").notNull().default(""),
+    fromTokenAddress: text("from_token_address").notNull().default(""),
+    fromAmountBaseUnit: text("from_amount_base_unit").notNull().default(""),
+    state: text("state").notNull().default("detected"),
+    providerStatus: text("provider_status").notNull().default(""),
+    txHash: text("tx_hash"),
+    providerCreatedTimeMs: bigint("provider_created_time_ms", { mode: "number" })
+      .notNull()
+      .default(0),
+    raw: jsonb("raw"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("bridge_deposits_dedupe_unique").on(
+      t.bridgeAddressId,
+      t.fromChainId,
+      t.fromTokenAddress,
+      t.fromAmountBaseUnit,
+      t.providerCreatedTimeMs,
+    ),
+    index("bridge_deposits_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type BridgeDepositRow = typeof bridgeDeposits.$inferSelect;
+export type NewBridgeDepositRow = typeof bridgeDeposits.$inferInsert;
+
+/**
+ * Two-leg bridge withdrawals (deposit wallet → bridge address on Polygon →
+ * destination chain). Destination is ALWAYS the user's own login wallet,
+ * resolved server-side (D-026). State machine:
+ * requested → address_created → polygon_submitted → polygon_confirmed →
+ * bridging → completed, with failed_address | failed_polygon (recoverable —
+ * funds never left) and failed_bridge (support/recovery flow) offshoots.
+ */
+export const bridgeWithdrawals = pgTable(
+  "bridge_withdrawals",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    depositWalletAddress: text("deposit_wallet_address").notNull(),
+    destinationAddress: text("destination_address").notNull(),
+    toChainId: text("to_chain_id").notNull(),
+    toTokenAddress: text("to_token_address").notNull(),
+    bridgeAddressId: uuid("bridge_address_id"),
+    amountUsd: numeric("amount_usd").notNull(),
+    quoteId: text("quote_id"),
+    estToTokenBaseUnit: text("est_to_token_base_unit"),
+    state: text("state").notNull().default("requested"),
+    relayerTransactionId: text("relayer_transaction_id"),
+    polygonTxHash: text("polygon_tx_hash"),
+    bridgeTxHash: text("bridge_tx_hash"),
+    error: text("error"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("bridge_withdrawals_idem_unique").on(t.walletAddress, t.idempotencyKey),
+    index("bridge_withdrawals_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type BridgeWithdrawalRow = typeof bridgeWithdrawals.$inferSelect;
+export type NewBridgeWithdrawalRow = typeof bridgeWithdrawals.$inferInsert;
+
+/**
+ * Server-synced builder drafts (migration 0015, ADR-0019). Free-form
+ * StrategyDoc JSON + per-draft AI chat, keyed by the client's draft id.
+ * Last-write-wins on updatedAtClient (client-side ms) — a deliberate
+ * single-user tradeoff. Deliberately NOT conditional_rules: drafts mutate per
+ * keystroke and may not compile; armed definitions are immutable (D-020).
+ */
+export const strategyDrafts = pgTable(
+  "strategy_drafts",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    clientDraftId: text("client_draft_id").notNull(),
+    name: text("name").notNull().default(""),
+    origin: text("origin").notNull().default("blank"),
+    doc: jsonb("doc").notNull(),
+    aiMessages: jsonb("ai_messages")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    aiHistory: jsonb("ai_history")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    tags: jsonb("tags")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    status: text("status").notNull().default("active"),
+    armedRuleId: uuid("armed_rule_id"),
+    updatedAtClient: bigint("updated_at_client", { mode: "number" }).notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("strategy_drafts_wallet_client_unique").on(t.walletAddress, t.clientDraftId),
+    index("strategy_drafts_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type StrategyDraftRow = typeof strategyDrafts.$inferSelect;
+export type NewStrategyDraftRow = typeof strategyDrafts.$inferInsert;

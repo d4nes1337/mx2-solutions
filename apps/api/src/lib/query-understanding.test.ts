@@ -28,6 +28,12 @@ const hit = (over: Partial<MarketSearchHit>): MarketSearchHit => ({
   negRisk: false,
   rewardsMinSize: null,
   rewardsMaxSpread: null,
+  groupItemTitle: "",
+  bestBid: "0",
+  bestAsk: "0",
+  active: true,
+  closed: false,
+  sportsMarketType: null,
   ...over,
 });
 

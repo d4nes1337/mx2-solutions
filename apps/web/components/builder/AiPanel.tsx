@@ -2,26 +2,23 @@
 
 /**
  * The AI tab: a full-height chat that turns typed ideas into a live strategy
- * canvas. Stateless server — the panel holds the conversation locally and
- * re-sends the recent turns (plus the current compiled definition) each time,
- * so follow-ups like "make it $200" refine the canvas in place.
+ * canvas. Stateless server — the conversation lives in the builder store,
+ * scoped to the current draft (switching drafts switches chats; a new draft
+ * starts clean), and the recent turns are re-sent (plus the current compiled
+ * definition) each time so follow-ups like "make it $200" refine in place.
  *
- * Display log vs API history: `messages` is what the user sees (optimistic —
- * the user turn appears immediately); `history` is the exact API contract
- * (pushed only on success, capped at 6 turns) so a failed request never
- * poisons the next one.
+ * Display log vs API history: `aiMessages` is what the user sees (optimistic —
+ * the user turn appears immediately); `aiHistory` is the exact API contract
+ * (pushed only on success, capped) so a failed request never poisons the
+ * next one.
  */
 import { useEffect, useRef, useState } from "react";
 import { Send, Sparkles, X } from "lucide-react";
 import { Badge, Spinner } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { ApiError } from "@/lib/api";
-import {
-  useGenerateStrategy,
-  type AiGenerateResponse,
-  type AiHistoryEntry,
-} from "@/lib/ai/queries";
-import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
+import { useGenerateStrategy, type AiGenerateResponse } from "@/lib/ai/queries";
+import { conditionLeavesOf, docFromDefinition, docHasContent } from "@/lib/smart-orders/doc";
 import { compileDoc } from "@/lib/smart-orders/compile";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
@@ -39,18 +36,6 @@ const STAGES = [
 ];
 const STAGE_AT_MS = [0, 1_800, 5_000, 11_000];
 
-/** Display-log cap — plenty for a session without unbounded growth. */
-const MAX_MESSAGES = 40;
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  /** Engine warnings attached to an assistant turn. */
-  warnings?: string[];
-  /** "I assumed / quick questions" chips — tap to prefill the composer. */
-  openQuestions?: string[];
-}
-
 export function AiPanel({
   initialPrompt,
   initialPinned,
@@ -61,13 +46,17 @@ export function AiPanel({
 }) {
   const doc = useBuilderStore((s) => s.doc);
   const reset = useBuilderStore((s) => s.reset);
+  const spawnDraft = useBuilderStore((s) => s.spawnDraft);
   const revealAll = useBuilderStore((s) => s.revealAll);
   const setAiStatus = useBuilderStore((s) => s.setAiStatus);
+  // Chat state lives in the store, scoped per draft: switching drafts switches
+  // conversations, and a fresh draft always starts with a clean chat.
+  const messages = useBuilderStore((s) => s.aiMessages);
+  const pushMessage = useBuilderStore((s) => s.pushAiMessage);
+  const pushHistory = useBuilderStore((s) => s.pushAiHistory);
   const generate = useGenerateStrategy();
 
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState<AiHistoryEntry[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [stage, setStage] = useState(0);
   const autoFired = useRef(false);
   /** Last submitted prompt — powers the Retry button and deep-link error copy. */
@@ -98,12 +87,10 @@ export function AiPanel({
     seedPins(initialPinned);
   }
 
-  const pushMessage = (msg: ChatMessage) => setMessages((m) => [...m, msg].slice(-MAX_MESSAGES));
-
   const applyResult = (prompt: string, res: AiGenerateResponse) => {
     if (res.status === "clarify") {
       pushMessage({ role: "assistant", content: res.question });
-      setHistory((h) => [...h, { role: "user" as const, content: prompt.slice(0, 600) }].slice(-6));
+      pushHistory([{ role: "user", content: prompt.slice(0, 600) }]);
       return;
     }
     const next = layoutDoc(docFromDefinition(res.definition));
@@ -119,7 +106,15 @@ export function AiPanel({
         },
       ]),
     );
-    reset(next);
+    // First AI turn over a hand-edited canvas forks into a new draft (the
+    // manual version survives on its own; the conversation moves with the
+    // fork). Later turns iterate on the AI's own output in place.
+    const s = useBuilderStore.getState();
+    if (s.aiHistory.length === 0 && s.dirty && docHasContent(s.doc)) {
+      spawnDraft(next, { origin: "ai", carryChat: true });
+    } else {
+      reset(next);
+    }
     revealAll();
     pushMessage({
       role: "assistant",
@@ -129,13 +124,10 @@ export function AiPanel({
         ? { openQuestions: res.openQuestions }
         : {}),
     });
-    setHistory((h) =>
-      [
-        ...h,
-        { role: "user" as const, content: prompt.slice(0, 600) },
-        { role: "assistant" as const, content: res.summary.slice(0, 600) },
-      ].slice(-6),
-    );
+    pushHistory([
+      { role: "user", content: prompt.slice(0, 600) },
+      { role: "assistant", content: res.summary.slice(0, 600) },
+    ]);
   };
 
   const submit = (raw: string, opts?: { fromDeepLink?: boolean }) => {
@@ -150,7 +142,7 @@ export function AiPanel({
     generate.mutate(
       {
         prompt,
-        history,
+        history: useBuilderStore.getState().aiHistory,
         currentDefinition: hasConditions ? compileDoc(doc) : null,
         ...(pinned.length > 0 ? { pinnedConditionIds: pinned.map((p) => p.conditionId) } : {}),
       },
@@ -312,7 +304,7 @@ export function AiPanel({
               <button
                 key={t.id}
                 type="button"
-                onClick={() => reset(t.build())}
+                onClick={() => spawnDraft(t.build(), { origin: `template:${t.id}` })}
                 className="rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-muted transition-colors hover:text-fg"
               >
                 {t.name}

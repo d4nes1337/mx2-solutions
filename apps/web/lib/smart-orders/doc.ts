@@ -59,6 +59,13 @@ export interface StrategyDoc {
 /** Placeholder for a condition the user hasn't bound to a market yet. */
 export const UNBOUND: MarketRef = { conditionId: "", tokenId: "", outcome: "YES" };
 
+/** True when the doc holds anything worth keeping (gates draft persistence). */
+export const docHasContent = (doc: StrategyDoc): boolean =>
+  doc.expr.children.length > 0 ||
+  doc.watchedMarkets.length > 0 ||
+  doc.name.trim() !== "" ||
+  doc.action.kind !== "alert";
+
 export const isBound = (m: MarketRef): boolean => m.tokenId !== "" && m.conditionId !== "";
 
 export const emptyDoc = (): StrategyDoc => ({

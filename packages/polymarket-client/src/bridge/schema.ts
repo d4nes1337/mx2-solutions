@@ -39,8 +39,98 @@ export const BridgeDepositResponseSchema = z.object({
   depositAddresses: BridgeDepositAddressesSchema.optional(),
 });
 
+// ── Quotes (POST /quote) ────────────────────────────────────────────────────
+// Shapes observed in official docs 2026-07-17; everything optional/passthrough
+// so provider drift degrades to missing display fields, never a hard failure.
+
+const looseNumber = z.union([z.number(), z.string().transform(Number)]).optional();
+
+export const BridgeFeeBreakdownSchema = z
+  .object({
+    appFeeLabel: z.string().optional(),
+    appFeePercent: looseNumber,
+    appFeeUsd: looseNumber,
+    gasUsd: looseNumber,
+    fillCostUsd: looseNumber,
+    swapImpactUsd: looseNumber,
+    totalImpactUsd: looseNumber,
+    maxSlippage: looseNumber,
+    minReceived: looseNumber,
+  })
+  .passthrough();
+
+export const BridgeQuoteResponseSchema = z
+  .object({
+    quoteId: z.string().optional(),
+    estCheckoutTimeMs: looseNumber,
+    estToTokenBaseUnit: z
+      .union([z.string(), z.number()])
+      .transform((v) => String(v))
+      .optional(),
+    estInputUsd: looseNumber,
+    estOutputUsd: looseNumber,
+    estFeeBreakdown: BridgeFeeBreakdownSchema.optional(),
+  })
+  .passthrough();
+
+// ── Status (GET /status/{bridgeAddress}) ────────────────────────────────────
+
+/** Provider transfer statuses documented 2026-07-17. Unknown values map to a
+ * non-terminal bucket downstream — never a parse failure. */
+export const KNOWN_BRIDGE_STATUSES = [
+  "DEPOSIT_DETECTED",
+  "PROCESSING",
+  "ORIGIN_TX_CONFIRMED",
+  "SUBMITTED",
+  "COMPLETED",
+  "FAILED",
+] as const;
+
+export const BridgeStatusTransactionSchema = z
+  .object({
+    fromChainId: z
+      .union([z.string(), z.number()])
+      .transform((v) => String(v))
+      .optional(),
+    fromTokenAddress: z.string().optional(),
+    fromAmountBaseUnit: z
+      .union([z.string(), z.number()])
+      .transform((v) => String(v))
+      .optional(),
+    toChainId: z
+      .union([z.string(), z.number()])
+      .transform((v) => String(v))
+      .optional(),
+    toTokenAddress: z.string().optional(),
+    status: z.string().default("PROCESSING"),
+    txHash: z.string().nullish(),
+    createdTimeMs: looseNumber,
+  })
+  .passthrough();
+
+export const BridgeStatusResponseSchema = z
+  .object({ transactions: z.array(BridgeStatusTransactionSchema).default([]) })
+  .passthrough();
+
+// ── Withdrawals (POST /withdraw) ────────────────────────────────────────────
+// Same address-based model as deposits: the response is an intermediate bridge
+// address; moving funds to it on Polygon executes the withdrawal.
+
+export const BridgeWithdrawResponseSchema = z
+  .object({
+    address: BridgeDepositAddressesSchema.optional(),
+    addresses: BridgeDepositAddressesSchema.optional(),
+    note: z.string().optional(),
+  })
+  .passthrough();
+
 export type BridgeSupportedAsset = z.infer<typeof BridgeSupportedAssetSchema>;
 export type BridgeSupportedAssetsResponse = z.infer<typeof BridgeSupportedAssetsResponseSchema>;
 export type BridgeAddressType = z.infer<typeof BridgeAddressTypeSchema>;
 export type BridgeDepositAddresses = z.infer<typeof BridgeDepositAddressesSchema>;
 export type BridgeDepositResponse = z.infer<typeof BridgeDepositResponseSchema>;
+export type BridgeFeeBreakdown = z.infer<typeof BridgeFeeBreakdownSchema>;
+export type BridgeQuoteResponse = z.infer<typeof BridgeQuoteResponseSchema>;
+export type BridgeStatusTransaction = z.infer<typeof BridgeStatusTransactionSchema>;
+export type BridgeStatusResponse = z.infer<typeof BridgeStatusResponseSchema>;
+export type BridgeWithdrawResponse = z.infer<typeof BridgeWithdrawResponseSchema>;

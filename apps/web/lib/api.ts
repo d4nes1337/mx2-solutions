@@ -63,5 +63,17 @@ export const api = {
         ? {}
         : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
     }),
+  put: <T>(path: string, body: unknown): Promise<T> =>
+    request<T>(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  patch: <T>(path: string, body: unknown): Promise<T> =>
+    request<T>(path, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   del: <T>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
 };

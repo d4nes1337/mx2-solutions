@@ -52,6 +52,25 @@ export const GammaMarketSchema = z
     outcomePrices: z.string().default("[]"),
     clobTokenIds: z.string().default("[]"),
     neg_risk: z.boolean().default(false).optional(),
+    // Sub-market identity inside a multi-market event: the short label
+    // ("Over 2.5", a candidate name) and — for sports — the market type
+    // (moneyline/spreads/totals), used to order siblings sensibly.
+    groupItemTitle: z.string().default(""),
+    negRiskMarketID: z.string().nullish(),
+    sportsMarketType: z.string().nullish(),
+    // Parent event stubs on market payloads (GET /markets/:id) — enough to
+    // resolve the full event for sibling listings.
+    events: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            title: z.string().default(""),
+            slug: z.string().default(""),
+          })
+          .passthrough(),
+      )
+      .optional(),
     // LEGACY caps — read 1000 even where the real taker curve peaks ~1%.
     // Never use for cost math; the fee source of truth is feeSchedule / CLOB fd.
     maker_base_fee: z.number().default(0).optional(),
@@ -101,6 +120,20 @@ export const GammaEventSchema = z
     status: z.string().default(""),
     tags: z.array(GammaTagSchema).default([]),
     markets: z.array(GammaMarketSchema).default([]),
+    // Winner-take-all event (elections): sub-markets are mutually exclusive
+    // candidates — ordered by price (favorite first) in sibling listings.
+    negRisk: z.boolean().default(false).optional(),
+    series: z
+      .array(
+        z
+          .object({
+            id: z.string().optional(),
+            title: z.string().optional(),
+            slug: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
   })
   .passthrough();
 
