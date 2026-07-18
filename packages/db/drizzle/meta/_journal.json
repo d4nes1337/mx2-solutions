@@ -113,6 +113,20 @@
       "when": 1784332222403,
       "tag": "0015_strategy_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784500000000,
+      "tag": "0016_order_fills",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784500000001,
+      "tag": "0017_audit_subject_idx",
+      "breakpoints": true
     }
   ]
 }

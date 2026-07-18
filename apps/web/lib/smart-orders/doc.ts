@@ -73,7 +73,7 @@ export const emptyDoc = (): StrategyDoc => ({
   templateId: null,
   expr: { type: "group", id: "root", op: "and", children: [] },
   holdsForMs: 300_000,
-  maxDataAgeMs: 5_000,
+  maxDataAgeMs: 30_000,
   action: { kind: "alert" },
   recurrence: { kind: "once" },
   limits: null,

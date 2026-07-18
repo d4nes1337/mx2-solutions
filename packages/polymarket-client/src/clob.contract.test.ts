@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { OrderbookSchema, TradeSchema, TokenPriceSchema } from "./clob/schema.js";
+import {
+  OrderbookSchema,
+  TradeSchema,
+  TokenPriceSchema,
+  UserTradesResponseSchema,
+} from "./clob/schema.js";
 import { createClobClient } from "./clob/client.js";
 
 const sampleOrderbook: unknown = {
@@ -78,6 +83,79 @@ describe("TradeSchema", () => {
       type: "TRADE",
     };
     expect(TradeSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("UserTradesResponseSchema (authenticated GET /data/trades)", () => {
+  it("parses the paginated envelope with maker_orders attribution", () => {
+    // Field set mirrors @polymarket/clob-client's Trade/MakerOrder types.
+    const payload: unknown = {
+      data: [
+        {
+          id: "t-1",
+          taker_order_id: "0xtaker",
+          market: "0xcond",
+          asset_id: "123",
+          side: "BUY",
+          size: "10",
+          fee_rate_bps: "0",
+          price: "0.41",
+          status: "CONFIRMED",
+          match_time: "1700000000",
+          last_update: "1700000001",
+          outcome: "No",
+          bucket_index: 0,
+          owner: "api-key",
+          maker_address: "0xmaker",
+          maker_orders: [
+            {
+              order_id: "0xours",
+              owner: "api-key",
+              maker_address: "0xmaker",
+              matched_amount: "10",
+              price: "0.41",
+              fee_rate_bps: "0",
+              asset_id: "123",
+              outcome: "No",
+              side: "SELL",
+            },
+          ],
+          transaction_hash: "0xabc",
+          trader_side: "MAKER",
+        },
+      ],
+      next_cursor: "LTE=",
+      limit: 100,
+      count: 1,
+    };
+    const result = UserTradesResponseSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.data[0]!.maker_orders[0]!.matched_amount).toBe("10");
+      expect(result.data.next_cursor).toBe("LTE=");
+    }
+  });
+
+  it("tolerates missing optional fields (taker_order_id, maker_orders)", () => {
+    const result = UserTradesResponseSchema.safeParse({
+      data: [
+        {
+          id: "t-2",
+          market: "0xcond",
+          asset_id: "123",
+          side: "SELL",
+          size: "5",
+          price: "0.6",
+          status: "CONFIRMED",
+          match_time: "1700000000",
+        },
+      ],
+      next_cursor: "MA==",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.data[0]!.maker_orders).toEqual([]);
+    }
   });
 });
 

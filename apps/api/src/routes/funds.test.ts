@@ -50,6 +50,7 @@ const auditStore: AuditStore = {
   }),
   recent: async () => [],
   forActor: async () => [],
+  forSubject: async () => [],
 };
 
 const geoblockClient: GeoblockClient = {

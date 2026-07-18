@@ -47,7 +47,7 @@ const base = (
   templateId: id,
   expr,
   holdsForMs,
-  maxDataAgeMs: 5_000,
+  maxDataAgeMs: 30_000,
   action,
   recurrence: { kind: "once" },
   limits: null,

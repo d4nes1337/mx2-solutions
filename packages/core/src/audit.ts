@@ -16,6 +16,7 @@ export const AUDIT_ACTIONS = [
   "order.signed",
   "order.submitted",
   "order.acknowledged",
+  "order.partially_filled",
   "order.filled",
   "order.cancelled",
   "order.cancel_failed",

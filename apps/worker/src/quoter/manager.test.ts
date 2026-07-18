@@ -235,6 +235,7 @@ const makeHarness = (
       },
       recent: async () => [],
       forActor: async () => [],
+      forSubject: async () => [],
     } as AuditStore,
     runtimeFlags: {
       get: async (key: string) =>

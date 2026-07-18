@@ -359,6 +359,8 @@ export interface TriggerStore {
   findByIdForWallet(id: string, walletAddress: string): Promise<RuleTriggerRow | null>;
   listByWallet(walletAddress: string, limit?: number): Promise<RuleTriggerRow[]>;
   listAwaiting(walletAddress: string): Promise<RuleTriggerRow[]>;
+  /** All triggers for one rule, newest first — the strategy timeline. */
+  listByRule(ruleId: string, limit?: number): Promise<RuleTriggerRow[]>;
   /** Defensive idempotency: at most one trigger per rule for recurrence "once". */
   hasForRule(ruleId: string): Promise<boolean>;
   updateStatus(id: string, status: TriggerStatus, opts?: { orderIntentId?: string }): Promise<void>;
@@ -414,6 +416,15 @@ export const createTriggerStore = (db: Database): TriggerStore => ({
         ),
       )
       .orderBy(desc(ruleTriggers.triggeredAt));
+  },
+
+  async listByRule(ruleId, limit = 50) {
+    return db
+      .select()
+      .from(ruleTriggers)
+      .where(eq(ruleTriggers.ruleId, ruleId))
+      .orderBy(desc(ruleTriggers.triggeredAt))
+      .limit(limit);
   },
 
   async hasForRule(ruleId) {

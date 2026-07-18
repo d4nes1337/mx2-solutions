@@ -28,7 +28,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { ConditionV2, ExprNode, ExprResultNode } from "@mx2/rules";
+import type { ExprNode, ExprResultNode } from "@mx2/rules";
 import { Spinner } from "@/components/ui";
 import {
   UNBOUND,
@@ -39,83 +39,21 @@ import {
   marketLabel,
   type StrategyDoc,
 } from "@/lib/smart-orders/doc";
+import { cents, conditionSummary, formatActual } from "@/lib/smart-orders/summaries";
 import { dropTargetFor, validateConnection } from "@/lib/smart-orders/connection-rules";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import type { BuilderIssue } from "@/lib/smart-orders/compile";
 import type { DraftEvaluation } from "@/lib/smart-orders/queries";
 import { NODE_TYPES, type ConditionNodeData } from "./nodes";
 
-const cents = (p: number) => `${Math.round(p * 100)}¢`;
-const usd = (n: number) => `$${n.toLocaleString()}`;
-
-const conditionSummary = (
-  doc: StrategyDoc,
-  c: ConditionV2,
-): { summary: string; detail: string | null } => {
-  switch (c.kind) {
-    case "price":
-      return {
-        summary: `${c.market.outcome} price ${c.comparator === "lte" ? "below" : "above"} ${cents(c.threshold)}`,
-        detail: marketLabel(doc, c.market),
-      };
-    case "spread":
-      return {
-        summary: `Spread ${c.comparator === "lte" ? "under" : "over"} ${cents(c.threshold)}`,
-        detail: marketLabel(doc, c.market),
-      };
-    case "cumulative_notional":
-      return {
-        summary: `Liquidity ≥ ${usd(c.minNotional)} up to ${cents(c.priceBound)}`,
-        detail: marketLabel(doc, c.market),
-      };
-    case "visible_levels":
-      return {
-        summary: `≥ ${c.minLevels} book levels up to ${cents(c.priceBound)}`,
-        detail: marketLabel(doc, c.market),
-      };
-    case "time_window":
-      return { summary: "Within a time window", detail: null };
-    case "price_move":
-      return {
-        summary: `${c.market.outcome} ${c.direction === "drop" ? "drops" : c.direction === "rise" ? "rises" : "moves"} ${cents(c.deltaThreshold)}+ in ${Math.round(c.windowMs / 60_000)}m`,
-        detail: marketLabel(doc, c.market),
-      };
-    case "trailing":
-      return {
-        summary:
-          c.mode === "stop"
-            ? `${c.market.outcome} falls ${cents(c.offset)} from its peak`
-            : `${c.market.outcome} rebounds ${cents(c.offset)} off its low`,
-        detail: marketLabel(doc, c.market),
-      };
-  }
-};
-
 /** Flatten the evaluation result tree into per-node lookups. */
 const indexResults = (
-  node: ExprResultNode | undefined,
+  node: ExprResultNode | null | undefined,
   into: Map<string, ExprResultNode>,
 ): void => {
   if (!node) return;
   into.set(node.id, node);
   if (node.type === "group") for (const child of node.children) indexResults(child, into);
-};
-
-const formatActual = (kind: ConditionV2["kind"], actual: number | null): string | null => {
-  if (actual === null) return null;
-  switch (kind) {
-    case "price":
-    case "spread":
-    case "price_move":
-    case "trailing":
-      return cents(actual);
-    case "cumulative_notional":
-      return usd(Math.round(actual));
-    case "visible_levels":
-      return String(actual);
-    case "time_window":
-      return null;
-  }
 };
 
 /** Pure projection: StrategyDoc (+ live evaluation, validation issues) → graph. */
@@ -163,13 +101,15 @@ function buildGraph(
       const r = results.get(node.id);
       const cr = r?.type === "condition" ? r.result : null;
       const { summary, detail } = conditionSummary(doc, c);
-      const state: ConditionNodeData["state"] = !evaluation
-        ? "unknown"
-        : cr?.stale
-          ? "stale"
-          : cr?.satisfied
-            ? "pass"
-            : "fail";
+      // A freshness-only probe (root null) carries no condition verdicts.
+      const state: ConditionNodeData["state"] =
+        !evaluation || evaluation.root === null
+          ? "unknown"
+          : cr?.stale
+            ? "stale"
+            : cr?.satisfied
+              ? "pass"
+              : "fail";
       nodes.push({
         id: node.id,
         type: "condition",

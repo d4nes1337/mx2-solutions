@@ -72,6 +72,7 @@ const makeDeps = (over: {
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
   return { bridgeStore, bridgeClient, auditStore, audits, checked, upserts };
 };

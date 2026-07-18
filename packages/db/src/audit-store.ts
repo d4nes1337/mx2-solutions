@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import type { AuditEvent, NewAuditEvent } from "@mx2/core";
 import type { Database } from "./client.js";
 import { auditEvents, type AuditEventRow } from "./schema.js";
@@ -20,6 +20,8 @@ export interface AuditStore {
   emit(event: NewAuditEvent): Promise<AuditEvent>;
   recent(limit?: number): Promise<AuditEvent[]>;
   forActor(actor: string, limit?: number): Promise<AuditEvent[]>;
+  /** Events for one subject (e.g. "rule:<id>"), newest first; `before` pages. */
+  forSubject(subject: string, limit?: number, before?: Date): Promise<AuditEvent[]>;
 }
 
 export const createAuditStore = (db: Database): AuditStore => ({
@@ -51,6 +53,20 @@ export const createAuditStore = (db: Database): AuditStore => ({
       .select()
       .from(auditEvents)
       .where(eq(auditEvents.actor, actor))
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(limit);
+    return rows.map(toDomain);
+  },
+
+  async forSubject(subject, limit = 100, before) {
+    const rows = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        before !== undefined
+          ? and(eq(auditEvents.subject, subject), lt(auditEvents.createdAt, before))
+          : eq(auditEvents.subject, subject),
+      )
       .orderBy(desc(auditEvents.createdAt))
       .limit(limit);
     return rows.map(toDomain);

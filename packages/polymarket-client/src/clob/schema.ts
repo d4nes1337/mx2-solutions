@@ -93,6 +93,49 @@ export const SubmitOrderResponseSchema = z
   .passthrough();
 export type SubmitOrderResponse = z.infer<typeof SubmitOrderResponseSchema>;
 
+/**
+ * Authenticated GET /data/trades — the caller's own fills. Shape verified
+ * against @polymarket/clob-client's Trade/MakerOrder types: when the caller
+ * was the taker, `taker_order_id` is theirs; when maker, one of the
+ * `maker_orders` entries carries their order id and matched amount.
+ */
+export const UserTradeMakerOrderSchema = z
+  .object({
+    order_id: z.string(),
+    matched_amount: z.string(),
+    price: z.string(),
+    asset_id: z.string().optional(),
+    outcome: z.string().optional(),
+    side: z.string().optional(),
+  })
+  .passthrough();
+export type UserTradeMakerOrder = z.infer<typeof UserTradeMakerOrderSchema>;
+
+export const UserTradeSchema = z
+  .object({
+    id: z.string(),
+    taker_order_id: z.string().optional(),
+    market: z.string(),
+    asset_id: z.string(),
+    side: z.enum(["BUY", "SELL"]),
+    size: z.string(),
+    price: z.string(),
+    status: z.string(),
+    match_time: z.string(),
+    trader_side: z.string().optional(),
+    maker_orders: z.array(UserTradeMakerOrderSchema).default([]),
+  })
+  .passthrough();
+export type UserTrade = z.infer<typeof UserTradeSchema>;
+
+export const UserTradesResponseSchema = z
+  .object({
+    data: z.array(UserTradeSchema),
+    next_cursor: z.string(),
+  })
+  .passthrough();
+export type UserTradesResponse = z.infer<typeof UserTradesResponseSchema>;
+
 export type OrderSide = "BUY" | "SELL";
 export type OrderType = "GTC" | "GTD" | "FOK" | "FAK";
 

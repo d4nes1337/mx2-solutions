@@ -7,27 +7,22 @@
  * converts explicitly with a discard confirmation, and the alert vs order
  * split is a kind decision — so switching execution can never silently
  * clobber a farming loop or a stop link (the old data-loss bug).
+ *
+ * The dense per-kind forms live in OrderActionEditor / QuoteLoopEditor; this
+ * file owns kind selection and the shared canvas-node editors.
  */
 import { useState } from "react";
-import Link from "next/link";
-import type { ActionV2, OrderActionV2, QuoteLoopAction } from "@mx2/rules";
+import type { ActionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
 import { UNBOUND } from "@/lib/smart-orders/doc";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import { useStrategies, type MarketSearchResult } from "@/lib/smart-orders/queries";
-import { MarketSearch } from "../MarketSearch";
+import { useStrategies } from "@/lib/smart-orders/queries";
 import { CONDITION_KIND_OPTIONS, defaultCondition } from "./ConditionEditor";
-import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
-import { OrderCostPreview } from "./OrderCostPreview";
-
-const ENTRY_WINDOW_OPTIONS = [
-  { value: "180000", label: "3m" },
-  { value: "300000", label: "5m" },
-  { value: "900000", label: "15m" },
-  { value: "3600000", label: "1h" },
-];
+import { Field } from "./fields";
+import { OrderActionEditor } from "./OrderActionEditor";
+import { QuoteLoopForm } from "./QuoteLoopEditor";
 
 type ActionKind = ActionV2["kind"];
 
@@ -77,8 +72,6 @@ const hasMeaningfulConfig = (a: ActionV2): boolean =>
 export function ActionEditor() {
   const doc = useBuilderStore((s) => s.doc);
   const setAction = useBuilderStore((s) => s.setAction);
-  const setLimits = useBuilderStore((s) => s.setLimits);
-  const bindMarket = useBuilderStore((s) => s.bindMarket);
   const flags = useFeatureFlags();
   const [pendingKind, setPendingKind] = useState<ActionKind | null>(null);
   const a = doc.action;
@@ -144,193 +137,7 @@ export function ActionEditor() {
 
       {a.kind === "quote_loop" ? <QuoteLoopForm action={a} makerLoop={makerLoop} /> : null}
 
-      {a.kind === "order" ? (
-        <>
-          <Field label="Execution">
-            <div className="nodrag">
-              <Segmented
-                options={[
-                  { value: "prepare", label: "Ask to sign" },
-                  { value: "auto", label: "Auto" },
-                ]}
-                value={a.execution}
-                onChange={(execution) => setAction({ ...a, execution })}
-                size="md"
-                grow
-              />
-            </div>
-          </Field>
-          <MarketBinding
-            current={a.market}
-            doc={doc}
-            onPick={(ref, meta) => bindMarket("action", ref, meta)}
-          />
-          <Field label="Side">
-            <div className="nodrag">
-              <Segmented
-                options={[
-                  { value: "BUY", label: "Buy" },
-                  { value: "SELL", label: "Sell" },
-                ]}
-                value={a.side}
-                onChange={(side) => setAction({ ...a, side })}
-                size="md"
-                grow
-              />
-            </div>
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Limit price">
-              <NumberInput
-                value={toCents(a.price)}
-                onChange={(v) => setAction({ ...a, price: fromCents(v) })}
-                suffix="¢"
-                min={1}
-                max={99}
-              />
-            </Field>
-            <Field label="Size">
-              <NumberInput
-                value={a.size}
-                onChange={(v) => setAction({ ...a, size: Math.max(1, v) })}
-                suffix="shares"
-                min={1}
-              />
-            </Field>
-          </div>
-          <p className="tabular text-[11px] text-muted">
-            Max cost ≈ ${(a.price * a.size).toFixed(2)}
-          </p>
-
-          <Field label="Execution style">
-            <div className="nodrag">
-              <Segmented
-                options={[
-                  { value: "GTC", label: "Rest" },
-                  { value: "GTD", label: "Timed" },
-                  { value: "FAK", label: "Instant" },
-                  { value: "FOK", label: "All-or-none" },
-                ]}
-                value={a.orderType}
-                onChange={(orderType) => {
-                  // Strip fields the new style doesn't support; seed GTD's window.
-                  const next: OrderActionV2 = { ...a, orderType };
-                  const mutable = next as {
-                    postOnly?: boolean;
-                    expiresAfterMs?: number;
-                  };
-                  if (orderType !== "GTD") delete mutable.expiresAfterMs;
-                  else if (mutable.expiresAfterMs === undefined) mutable.expiresAfterMs = 300_000;
-                  if (orderType === "FOK" || orderType === "FAK") delete mutable.postOnly;
-                  setAction(next);
-                }}
-                size="sm"
-                grow
-              />
-            </div>
-          </Field>
-          <p className="text-[10px] leading-snug text-faint">
-            {a.orderType === "GTC"
-              ? "Rests on the book until filled or cancelled — no trading fee."
-              : a.orderType === "GTD"
-                ? "Rests for the entry window after the trigger, then expires — no trading fee."
-                : a.orderType === "FAK"
-                  ? "Fills whatever the book offers at your price immediately; the rest is cancelled. Pays the taker fee."
-                  : "Fills the full size immediately or not at all. Pays the taker fee."}
-          </p>
-
-          {a.orderType === "GTD" ? (
-            <Field label="Entry window (after trigger)">
-              <div className="nodrag">
-                <Segmented
-                  options={ENTRY_WINDOW_OPTIONS}
-                  value={String(a.expiresAfterMs ?? 300_000)}
-                  onChange={(v) => setAction({ ...a, expiresAfterMs: Number(v) })}
-                  size="md"
-                  grow
-                />
-              </div>
-            </Field>
-          ) : null}
-
-          {a.orderType === "GTC" || a.orderType === "GTD" ? (
-            <label className="nodrag flex items-center gap-2 text-[12px] text-fg">
-              <input
-                type="checkbox"
-                checked={a.postOnly ?? false}
-                onChange={(e) =>
-                  setAction(
-                    e.target.checked
-                      ? { ...a, postOnly: true }
-                      : (() => {
-                          const next = { ...a };
-                          delete (next as { postOnly?: boolean }).postOnly;
-                          return next;
-                        })(),
-                  )
-                }
-              />
-              Maker only (post-only) — reject instead of crossing the spread
-            </label>
-          ) : null}
-
-          <OrderCostPreview action={a} />
-
-          {a.execution === "auto" ? (
-            <div className="space-y-2 rounded-lg border border-brand/40 bg-brand-soft/40 p-3">
-              <p className="text-[12px] font-semibold text-fg">Auto-mode spending limits</p>
-              <p className="text-[11px] leading-snug text-muted">
-                Orders place themselves from your Arima trading wallet, capped by these limits.
-                Required before arming.
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                <Field label="Per order">
-                  <NumberInput
-                    value={doc.limits?.maxNotionalPerOrder ?? 0}
-                    onChange={(v) =>
-                      setLimits({
-                        maxNotionalPerOrder: v,
-                        maxDailyNotional: doc.limits?.maxDailyNotional ?? v,
-                        maxTotalNotional: doc.limits?.maxTotalNotional ?? v,
-                      })
-                    }
-                    suffix="$"
-                    min={1}
-                  />
-                </Field>
-                <Field label="Per day">
-                  <NumberInput
-                    value={doc.limits?.maxDailyNotional ?? 0}
-                    onChange={(v) =>
-                      setLimits({
-                        maxNotionalPerOrder: doc.limits?.maxNotionalPerOrder ?? v,
-                        maxDailyNotional: v,
-                        maxTotalNotional: doc.limits?.maxTotalNotional ?? v,
-                      })
-                    }
-                    suffix="$"
-                    min={1}
-                  />
-                </Field>
-                <Field label="Total">
-                  <NumberInput
-                    value={doc.limits?.maxTotalNotional ?? 0}
-                    onChange={(v) =>
-                      setLimits({
-                        maxNotionalPerOrder: doc.limits?.maxNotionalPerOrder ?? v,
-                        maxDailyNotional: doc.limits?.maxDailyNotional ?? v,
-                        maxTotalNotional: v,
-                      })
-                    }
-                    suffix="$"
-                    min={1}
-                  />
-                </Field>
-              </div>
-            </div>
-          ) : null}
-        </>
-      ) : null}
+      {a.kind === "order" ? <OrderActionEditor action={a} /> : null}
     </div>
   );
 }
@@ -364,136 +171,6 @@ function StopStrategyForm({ targetId }: { targetId: string }) {
         ))}
       </select>
     </Field>
-  );
-}
-
-/** quote_loop: the rewards-farming maker loop, parameterized on the canvas. */
-function QuoteLoopForm({ action, makerLoop }: { action: QuoteLoopAction; makerLoop: boolean }) {
-  const setAction = useBuilderStore((s) => s.setAction);
-  const q = action;
-
-  if (!makerLoop) {
-    return (
-      <div className="space-y-2 rounded-lg border border-border bg-surface-2/60 p-2.5">
-        <p className="text-[12px] leading-snug text-muted">
-          Rewards farming isn&apos;t enabled on this server yet. This action is kept as-is — use the
-          farming cockpit to explore reward pools.
-        </p>
-        <Link
-          href="/farming"
-          className="nodrag text-[12px] font-medium text-accent hover:underline"
-        >
-          Open the farming cockpit →
-        </Link>
-      </div>
-    );
-  }
-
-  const pickMarket = (r: MarketSearchResult) => {
-    const [yes, no] = r.tokenIds;
-    if (!yes || !no) return;
-    setAction({
-      ...q,
-      market: {
-        conditionId: r.conditionId,
-        yesTokenId: yes,
-        noTokenId: no,
-        title: r.title,
-        negRisk: r.negRisk,
-      },
-      // Seed params from the market's rewards program when known.
-      ...(r.rewardsMinSize ? { sizeShares: Math.max(q.sizeShares, r.rewardsMinSize) } : {}),
-      ...(r.rewardsMaxSpread
-        ? {
-            targetSpreadCents: Math.min(q.targetSpreadCents, Math.max(0.5, r.rewardsMaxSpread - 1)),
-          }
-        : {}),
-    });
-  };
-
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] leading-snug text-muted">
-        Rests post-only bids on BOTH outcomes near the midpoint to earn liquidity rewards, merging
-        completed pairs back to cash. Runs in shadow mode first — it simulates and reports before
-        any real quote is placed.
-      </p>
-      {q.market.conditionId !== "" ? (
-        <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5">
-          <span className="truncate text-[12px] text-fg">
-            {q.market.title ?? q.market.conditionId}
-          </span>
-          <span className="shrink-0 rounded-full border border-brand/40 bg-brand-soft px-2 text-[10px] font-semibold text-accent">
-            YES + NO
-          </span>
-        </div>
-      ) : (
-        <p className="text-[12px] font-medium text-warn">Pick a market to quote:</p>
-      )}
-      <div className="nodrag nowheel">
-        <MarketSearch onPickResult={pickMarket} placeholder="Search rewards markets…" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Size per side">
-          <NumberInput
-            value={q.sizeShares}
-            onChange={(v) => setAction({ ...q, sizeShares: Math.max(1, Math.round(v)) })}
-            suffix="shares"
-            min={1}
-          />
-        </Field>
-        <Field label="Half-spread">
-          <NumberInput
-            value={q.targetSpreadCents}
-            onChange={(v) => setAction({ ...q, targetSpreadCents: Math.min(10, Math.max(0.5, v)) })}
-            suffix="¢"
-            min={0.5}
-            max={10}
-            step={0.5}
-          />
-        </Field>
-        <Field label="Re-quote tolerance">
-          <NumberInput
-            value={q.requoteToleranceCents}
-            onChange={(v) =>
-              setAction({ ...q, requoteToleranceCents: Math.min(10, Math.max(0.5, v)) })
-            }
-            suffix="¢"
-            min={0.5}
-            max={10}
-            step={0.5}
-          />
-        </Field>
-        <Field label="Max net inventory">
-          <NumberInput
-            value={q.maxInventoryShares}
-            onChange={(v) => setAction({ ...q, maxInventoryShares: Math.max(1, Math.round(v)) })}
-            suffix="shares"
-            min={1}
-          />
-        </Field>
-        <Field label="Max capital">
-          <NumberInput
-            value={q.maxCapitalUsd}
-            onChange={(v) => setAction({ ...q, maxCapitalUsd: Math.max(1, Math.round(v)) })}
-            suffix="$"
-            min={1}
-          />
-        </Field>
-        <Field label="Max daily loss">
-          <NumberInput
-            value={q.maxDailyLossUsd}
-            onChange={(v) => setAction({ ...q, maxDailyLossUsd: Math.max(1, Math.round(v)) })}
-            suffix="$"
-            min={1}
-          />
-        </Field>
-      </div>
-      <p className="text-[10px] leading-snug text-faint">
-        Conditions on the canvas act as an optional gate — quotes rest only while they hold. No
-        conditions = always on.
-      </p>
-    </div>
   );
 }
 

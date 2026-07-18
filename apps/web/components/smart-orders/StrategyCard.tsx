@@ -11,14 +11,14 @@ import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  ChevronDown,
+  ChevronRight,
   Copy,
   Pencil,
   Plus,
   RotateCcw,
   X,
 } from "lucide-react";
-import { Badge, Button, LiveDot, cn } from "@/components/ui";
+import { Badge, Button, LiveDot } from "@/components/ui";
 import { docFromDefinition, marketLabel, docMarketRefs } from "@/lib/smart-orders/doc";
 import { layoutDoc } from "@/lib/smart-orders/layout";
 import { strategySentence, humanDuration } from "@/lib/smart-orders/sentence";
@@ -28,7 +28,6 @@ import {
   useCreateStrategy,
   useSetStrategyTags,
   useStrategyControl,
-  useStrategyEvaluation,
   type StrategyRow,
 } from "@/lib/smart-orders/queries";
 
@@ -117,39 +116,12 @@ function TagsRow({ row }: { row: StrategyRow }) {
   );
 }
 
-function LiveState({ id }: { id: string }) {
-  const evaluation = useStrategyEvaluation(id);
-  if (evaluation.isLoading) return <p className="text-[12px] text-muted">Checking live state…</p>;
-  if (!evaluation.data) return null;
-  const e = evaluation.data;
-  return (
-    <div className="space-y-1.5 rounded-lg border border-border bg-surface-2/60 px-3 py-2">
-      <div className="flex items-center justify-between text-[12px]">
-        <span className="text-muted">Would trigger now?</span>
-        <Badge tone={e.satisfied ? "pos" : e.staleTokenIds.length > 0 ? "warn" : "neutral"}>
-          {e.satisfied ? "Yes" : e.staleTokenIds.length > 0 ? "Waiting for data" : "Not yet"}
-        </Badge>
-      </div>
-      {e.markets.map((m) => (
-        <div key={m.tokenId} className="tabular flex justify-between text-[11px] text-muted">
-          <span>{m.tokenId.slice(0, 10)}…</span>
-          <span>
-            {m.bestAsk !== null ? `ask ${Math.round(m.bestAsk * 100)}¢` : "no data"}
-            {m.bestBid !== null ? ` · bid ${Math.round(m.bestBid * 100)}¢` : ""}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function StrategyCard({ row }: { row: StrategyRow }) {
   const router = useRouter();
   const control = useStrategyControl();
   const create = useCreateStrategy();
   const setTags = useSetStrategyTags();
   const spawnDraft = useBuilderStore((s) => s.spawnDraft);
-  const [expanded, setExpanded] = useState(false);
   const def = row.definitionV2;
   const doc = docFromDefinition(def);
   const status = userStatus(row.status, {
@@ -193,9 +165,12 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[14px] font-semibold text-fg">
+            <Link
+              href={`/smart-orders/${row.id}`}
+              className="text-[14px] font-semibold text-fg transition-colors hover:text-accent"
+            >
               {row.name || def.name || "Smart Order"}
-            </span>
+            </Link>
             {status.live ? (
               <LiveDot
                 label={status.label.toUpperCase()}
@@ -319,25 +294,15 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
               <ArchiveRestore size={11} aria-hidden /> Restore
             </Button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => setExpanded((e) => !e)}
-            className="rounded-md p-1 text-muted transition-colors hover:text-fg"
-            aria-label={expanded ? "Collapse" : "Expand live state"}
+          <Link
+            href={`/smart-orders/${row.id}`}
+            className="inline-flex items-center gap-0.5 rounded-md p-1 text-[12px] font-medium text-muted transition-colors hover:text-fg"
+            aria-label="Open strategy details"
           >
-            <ChevronDown
-              size={15}
-              className={cn("transition-transform", expanded && "rotate-180")}
-            />
-          </button>
+            Details <ChevronRight size={13} aria-hidden />
+          </Link>
         </div>
       </div>
-
-      {expanded ? (
-        <div className="mt-3">
-          <LiveState id={row.id} />
-        </div>
-      ) : null}
     </div>
   );
 }

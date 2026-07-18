@@ -105,6 +105,7 @@ const buildAuthApp = async (opts: {
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
 
   const users: UserStore = {

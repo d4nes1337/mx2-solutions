@@ -6,9 +6,11 @@ import type {
   ConditionalRuleRow,
   MarketSnapshotRow,
   MarketSnapshotStore,
+  OrderIntentStore,
   RuleStore,
   RuntimeFlagStore,
   SessionStore,
+  TriggerStore,
 } from "@mx2/db";
 import type { ClobClient, GammaClient } from "@mx2/polymarket-client";
 import {
@@ -37,6 +39,8 @@ export interface SmartOrdersRoutesDeps {
   sessions: SessionStore;
   auditStore: AuditStore;
   ruleStore: RuleStore;
+  triggerStore: TriggerStore;
+  orderIntents: OrderIntentStore;
   runtimeFlags: RuntimeFlagStore;
   marketSnapshots: MarketSnapshotStore;
   gammaClient: GammaClient;
@@ -193,7 +197,7 @@ const CreateSmartOrderSchema = z.object({
   templateId: z.string().max(64).nullish(),
   expr: ExprNodeSchema,
   holdsForMs: z.number().int().min(0).max(86_400_000).default(300_000),
-  maxDataAgeMs: z.number().int().positive().max(60_000).default(5_000),
+  maxDataAgeMs: z.number().int().positive().max(60_000).default(30_000),
   action: ActionSchema,
   recurrence: RecurrenceSchema.default({ kind: "once" }),
   limits: LimitsSchema.nullish(),
@@ -201,8 +205,15 @@ const CreateSmartOrderSchema = z.object({
 });
 
 const EvaluateDraftSchema = z.object({
-  expr: ExprNodeSchema,
-  maxDataAgeMs: z.number().int().positive().max(60_000).default(10_000),
+  /** null = freshness-only probe (no conditions bound yet). */
+  expr: ExprNodeSchema.nullable(),
+  maxDataAgeMs: z.number().int().positive().max(60_000).default(30_000),
+  /**
+   * Tokens the canvas shows but the expression doesn't reference (order-action
+   * market, watched markets) — included in the freshness/market payload so
+   * they don't sit on "waiting for data…" forever.
+   */
+  extraTokenIds: z.array(z.string().min(1).max(100)).max(8).default([]),
 });
 
 // ── Snapshot / REST → normalized views ──────────────────────────────────────
@@ -519,7 +530,9 @@ export const registerSmartOrdersRoutes = (
       reply.code(404);
       return { error: "NOT_FOUND", message: "Smart Order not found" };
     }
-    return serializeStrategy(row);
+    // Per-strategy auto kill state (W8) so the detail page can show/toggle it.
+    const disarmFlag = await deps.runtimeFlags.get(`rule_auto_disabled:${id}`);
+    return { ...serializeStrategy(row), autoDisabled: disarmFlag?.value === "true" };
   });
 
   // ── Controls ────────────────────────────────────────────────────────────────
@@ -686,6 +699,73 @@ export const registerSmartOrdersRoutes = (
     };
   });
 
+  // ── GET /api/smart-orders/:id/timeline — activity feed for one strategy ───
+  // What the engine actually did: state churn (window started / stale resets /
+  // restarts), triggers, and the orders they produced with live fill state.
+  app.get("/api/smart-orders/:id/timeline", guard, async (req, reply) => {
+    const user = req.user!;
+    const { id } = req.params as { id: string };
+    const query = req.query as Record<string, string | undefined>;
+    const limit = Math.min(Math.max(Number(query["limit"] ?? 100) || 100, 1), 200);
+    const beforeRaw = query["before"];
+    const before = beforeRaw ? new Date(beforeRaw) : undefined;
+    if (before !== undefined && Number.isNaN(before.getTime())) {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", message: "before must be an ISO timestamp" };
+    }
+    const row = await deps.ruleStore.findByIdForWallet(id, user.walletAddress);
+    if (!row) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Smart Order not found" };
+    }
+
+    const [events, triggers] = await Promise.all([
+      deps.auditStore.forSubject(`rule:${id}`, limit, before),
+      deps.triggerStore.listByRule(id),
+    ]);
+    const intentIds = triggers.map((t) => t.orderIntentId).filter((v): v is string => v !== null);
+    const [linked, byMetadata] = await Promise.all([
+      deps.orderIntents.findByIds(intentIds),
+      deps.orderIntents.listByRuleMetadata(id),
+    ]);
+    const orders = [...new Map([...linked, ...byMetadata].map((o) => [o.id, o])).values()].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+
+    return {
+      strategyId: row.id,
+      status: row.status,
+      events: events.map((e) => ({
+        id: e.id,
+        at: e.createdAt,
+        action: e.action,
+        metadata: e.metadata,
+      })),
+      triggers: triggers.map((t) => ({
+        id: t.id,
+        triggeredAt: t.triggeredAt,
+        status: t.status,
+        reasonCodes: t.reasonCodes,
+        orderIntentId: t.orderIntentId,
+      })),
+      orders: orders.map((o) => ({
+        id: o.id,
+        createdAt: o.createdAt,
+        status: o.status,
+        side: o.side,
+        price: o.price,
+        size: o.size,
+        orderType: o.orderType,
+        clobOrderId: o.clobOrderId,
+        filledSize: o.filledSize,
+        avgFillPrice: o.avgFillPrice,
+        tokenId: o.tokenId,
+        conditionId: o.conditionId,
+        errorMessage: o.errorMessage,
+      })),
+    };
+  });
+
   // ── POST /api/smart-orders/evaluate-draft — PUBLIC (builder playground) ───
   app.post(
     "/api/smart-orders/evaluate-draft",
@@ -700,35 +780,52 @@ export const registerSmartOrdersRoutes = (
         };
       }
       // Wrap the draft expression in a minimal definition so the shared
-      // validator enforces the same structural caps as arm-time.
-      const draftDef: StrategyDefinition = {
-        version: 2,
-        name: "draft",
-        templateId: null,
-        expr: parsed.data.expr,
-        holdsForMs: 0,
-        maxDataAgeMs: parsed.data.maxDataAgeMs,
-        action: { kind: "alert" },
-        recurrence: { kind: "once" },
-        limits: null,
-        expiresAtMs: null,
-      };
-      const structural = validateStrategyDefinition(draftDef).filter((i) =>
-        i.code.startsWith("EXPR_"),
-      );
-      if (structural.length > 0) {
-        reply.code(400);
-        return { error: "INVALID_STRATEGY", issues: structural };
+      // validator enforces the same structural caps as arm-time. A null expr
+      // is a freshness-only probe: the canvas still needs live prices for
+      // markets no condition references yet (order-action / watched markets).
+      const draftDef: StrategyDefinition | null =
+        parsed.data.expr === null
+          ? null
+          : {
+              version: 2,
+              name: "draft",
+              templateId: null,
+              expr: parsed.data.expr,
+              holdsForMs: 0,
+              maxDataAgeMs: parsed.data.maxDataAgeMs,
+              action: { kind: "alert" },
+              recurrence: { kind: "once" },
+              limits: null,
+              expiresAtMs: null,
+            };
+      if (draftDef !== null) {
+        const structural = validateStrategyDefinition(draftDef).filter((i) =>
+          i.code.startsWith("EXPR_"),
+        );
+        if (structural.length > 0) {
+          reply.code(400);
+          return { error: "INVALID_STRATEGY", issues: structural };
+        }
       }
 
-      const tokens = referencedTokenIds(draftDef);
+      const tokens = [
+        ...new Set([
+          ...(draftDef !== null ? referencedTokenIds(draftDef) : []),
+          ...parsed.data.extraTokenIds,
+        ]),
+      ];
       const nowMs = Date.now();
-      const views = await loadViews(deps, tokens, nowMs, priceMoveTokens(draftDef));
-      const evaluation = evaluateExpression(draftDef, views, nowMs);
+      const views = await loadViews(
+        deps,
+        tokens,
+        nowMs,
+        draftDef !== null ? priceMoveTokens(draftDef) : undefined,
+      );
+      const evaluation = draftDef !== null ? evaluateExpression(draftDef, views, nowMs) : null;
       return {
-        satisfied: evaluation.satisfied,
-        root: evaluation.root,
-        staleTokenIds: evaluation.staleTokenIds,
+        satisfied: evaluation?.satisfied ?? false,
+        root: evaluation?.root ?? null,
+        staleTokenIds: evaluation?.staleTokenIds ?? [],
         markets: marketFreshness(views, tokens, nowMs),
         evaluatedAt: new Date(nowMs).toISOString(),
       };

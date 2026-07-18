@@ -36,6 +36,8 @@ export interface StrategyRow {
   createdAt: string;
   updatedAt: string;
   definitionV2: StrategyDefinition;
+  /** Detail endpoint only: per-strategy auto kill switch state (W8). */
+  autoDisabled?: boolean;
 }
 
 export interface MarketFreshness {
@@ -48,7 +50,8 @@ export interface MarketFreshness {
 
 export interface DraftEvaluation {
   satisfied: boolean;
-  root: ExprResultNode;
+  /** null when the draft has no bound conditions (freshness-only probe). */
+  root: ExprResultNode | null;
   staleTokenIds: string[];
   markets: MarketFreshness[];
   evaluatedAt: string;
@@ -58,9 +61,51 @@ export interface StrategyEvaluation extends Omit<DraftEvaluation, "evaluatedAt">
   strategyId: string;
   status: string;
   holdsForMs: number;
+  maxDataAgeMs: number;
   trueSince: string | null;
   triggerCount: number;
   cooldownUntil: string | null;
+}
+
+// ── Timeline (GET /api/smart-orders/:id/timeline) ───────────────────────────
+
+export interface TimelineEvent {
+  id: string;
+  at: string;
+  action: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface TimelineTrigger {
+  id: string;
+  triggeredAt: string;
+  status: string;
+  reasonCodes: string[];
+  orderIntentId: string | null;
+}
+
+export interface TimelineOrder {
+  id: string;
+  createdAt: string;
+  status: string;
+  side: "BUY" | "SELL";
+  price: string;
+  size: string;
+  orderType: string;
+  clobOrderId: string | null;
+  filledSize: string;
+  avgFillPrice: string | null;
+  tokenId: string;
+  conditionId: string;
+  errorMessage: string | null;
+}
+
+export interface StrategyTimeline {
+  strategyId: string;
+  status: string;
+  events: TimelineEvent[];
+  triggers: TimelineTrigger[];
+  orders: TimelineOrder[];
 }
 
 export interface MarketSearchResult {
@@ -129,6 +174,27 @@ export function useStrategyEvaluation(id: string | null) {
   });
 }
 
+/** Activity feed: engine state churn + triggers + linked orders with fills. */
+export function useStrategyTimeline(id: string | null) {
+  return useQuery({
+    queryKey: ["smart-orders", id, "timeline"],
+    queryFn: () => api.get<StrategyTimeline>(`/api/smart-orders/${id}/timeline`),
+    enabled: Boolean(id),
+    refetchInterval: POLL.ruleTimeline,
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Per-strategy auto kill switch (W8): disarm blocks auto-submission only. */
+export function useStrategyDisarm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "disarm" | "rearm" }) =>
+      api.post<{ ok: boolean; autoDisabled: boolean }>(`/api/smart-orders/${id}/${action}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+  });
+}
+
 export function useCreateStrategy() {
   const qc = useQueryClient();
   return useMutation({
@@ -171,18 +237,25 @@ export function useSetStrategyTags() {
 /**
  * Public draft evaluation for the builder playground. `revision` keys the
  * cache to the doc's semantic version; polling keeps the verdict live.
+ * `extraTokenIds` (order-action / watched markets outside the expression)
+ * are keyed separately — watched markets don't bump the revision.
  */
 export function useDraftEvaluation(
   expr: ExprNode | null,
   maxDataAgeMs: number,
+  extraTokenIds: string[],
   revision: number,
   enabled: boolean,
 ) {
   return useQuery({
-    queryKey: ["draft-eval", revision],
+    queryKey: ["draft-eval", revision, extraTokenIds.join(",")],
     queryFn: () =>
-      api.post<DraftEvaluation>("/api/smart-orders/evaluate-draft", { expr, maxDataAgeMs }),
-    enabled: enabled && expr !== null,
+      api.post<DraftEvaluation>("/api/smart-orders/evaluate-draft", {
+        expr,
+        maxDataAgeMs,
+        extraTokenIds,
+      }),
+    enabled: enabled && (expr !== null || extraTokenIds.length > 0),
     refetchInterval: POLL.ruleEval,
     placeholderData: (prev) => prev,
   });

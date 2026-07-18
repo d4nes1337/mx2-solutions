@@ -50,11 +50,31 @@ const watermarksEqual = (a: WatermarksByNode = {}, b: WatermarksByNode = {}): bo
 export interface RuleEvaluatorManager {
   start(): void;
   onBook(view: MarketDataView): void;
+  /**
+   * price_change level deltas: patch the cached book view AND refresh its
+   * freshness clock. Without this, a live-but-quiet market only refreshes on
+   * full `book` snapshots and hold windows keep resetting as "stale".
+   */
+  onBookDelta(tokenId: string, deltas: readonly BookLevelDelta[], tMs: number): void;
+  /**
+   * Freshness heartbeat with no level info (e.g. last_trade_price). Honest
+   * tradeoff: the book may have shifted on the trade, but upstream sends
+   * book/price_change alongside trades, and the tolerance is the same accuracy
+   * budget maxDataAgeMs already accepts.
+   */
+  onHeartbeat(tokenId: string, tMs: number): void;
   /** Price print/tick/mid — feeds rolling price_move windows. */
   onPrice(tokenId: string, price: number, tMs: number): void;
   onReconnect(): void;
   onTickSizeChange(tokenId: string): void;
   stop(): void;
+}
+
+/** One orderbook level change (size 0 = level removed). */
+export interface BookLevelDelta {
+  readonly price: number;
+  readonly size: number;
+  readonly side: "bid" | "ask";
 }
 
 export interface RuleEvaluatorOptions {
@@ -74,6 +94,24 @@ export interface RuleEvaluatorOptions {
   reloadIntervalMs?: number;
   /** How often to tick rules for staleness / window completion. Default 1 s. */
   tickIntervalMs?: number;
+  /**
+   * REST orderbook fetch for the background freshness-verify pass. When a
+   * subscribed token's view is aging while the WS transport is healthy, the
+   * evaluator re-fetches the book instead of letting the view go stale.
+   * Absent → no REST verification (WS-only freshness).
+   */
+  fetchOrderbook?: (tokenId: string) => Promise<MarketDataView | null>;
+  /**
+   * WS transport liveness. REST verification runs ONLY while this returns
+   * true — a real disconnect must still fail closed (DATA_STALE resets).
+   */
+  isFeedConnected?: () => boolean;
+  /** Cadence of the REST freshness-verify pass. Default 10 s. */
+  refreshIntervalMs?: number;
+  /** Max tokens re-fetched per verify pass (CLOB load bound). Default 8. */
+  refreshMaxPerPass?: number;
+  /** Min gap between audited churn events per (rule, reason). Default 60 s. */
+  churnAuditMinIntervalMs?: number;
 }
 
 interface ActiveRule {
@@ -98,13 +136,21 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     opts;
   const reloadIntervalMs = opts.reloadIntervalMs ?? 5_000;
   const tickIntervalMs = opts.tickIntervalMs ?? 1_000;
+  const refreshIntervalMs = opts.refreshIntervalMs ?? 10_000;
+  const refreshMaxPerPass = opts.refreshMaxPerPass ?? 8;
+  const churnAuditMinIntervalMs = opts.churnAuditMinIntervalMs ?? 60_000;
 
   const rules = new Map<string, ActiveRule>();
   const tokenSubs = new Map<string, Set<string>>();
   const latestView = new Map<string, MarketDataView>();
   const priceWindows = createPriceWindowStore();
+  /** Last audited churn event per `${ruleId}:${reason}` (rate limit). */
+  const churnAuditAt = new Map<string, number>();
   let reloadTimer: ReturnType<typeof setInterval> | undefined;
   let tickTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshCursor = 0;
+  let refreshInFlight = false;
 
   const addRule = (row: ConditionalRuleRow): void => {
     let def: StrategyDefinition;
@@ -124,19 +170,44 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
         .map((l) => (l.condition.kind === "price_move" ? l.condition.market.tokenId : ""))
         .filter((t) => t !== ""),
     );
-    // Conservative restart: never resume mid-accumulation across a reload/restart
-    // (app-restart-mid-window robustness is deferred) — but PRESERVE the repeat
-    // bookkeeping (triggerCount, cooldownUntil) AND the trailing watermarks
-    // (D-025: a trailing stop keeps protecting through a restart; resetting
-    // the peak on every restart would walk the stop level down a decline).
+    // Restart policy: resume a mid-accumulation hold window ONLY when the row
+    // was still fresh at shutdown (last evaluation within maxDataAgeMs) — a
+    // longer gap means we cannot vouch the condition held while we were down,
+    // so we conservatively restart the window (and audit the reset so the
+    // timeline shows why). Repeat bookkeeping (triggerCount, cooldownUntil)
+    // and trailing watermarks are ALWAYS preserved (D-025: a trailing stop
+    // keeps protecting through a restart; resetting the peak on every restart
+    // would walk the stop level down a decline).
+    const canResume =
+      row.status === "ACTIVE_ACCUMULATING" &&
+      row.trueSince !== null &&
+      row.lastEvaluatedAt !== null &&
+      Date.now() - row.lastEvaluatedAt.getTime() <= def.maxDataAgeMs;
     const runtime: StrategyRuntime = {
-      status: "ACTIVE_WAITING",
-      trueSinceMs: null,
+      status: canResume ? "ACTIVE_ACCUMULATING" : "ACTIVE_WAITING",
+      trueSinceMs: canResume ? row.trueSince!.getTime() : null,
       lastEventTimeMs: null,
       triggerCount: row.triggerCount ?? 0,
       cooldownUntilMs: row.cooldownUntil ? row.cooldownUntil.getTime() : null,
       watermarks: (row.runtimeWatermarks as WatermarksByNode | null) ?? {},
     };
+    if (!canResume && row.status === "ACTIVE_ACCUMULATING") {
+      auditStore
+        .emit({
+          actor: row.walletAddress,
+          action: "rule.state_changed",
+          subject: `rule:${row.id}`,
+          metadata: {
+            from: "ACTIVE_ACCUMULATING",
+            to: "ACTIVE_WAITING",
+            reason: "RESTART_RESET",
+            nonTerminal: true,
+          },
+        })
+        .catch((e: unknown) =>
+          logger.warn({ err: e, ruleId: row.id }, "Restart-reset audit failed"),
+        );
+    }
     rules.set(row.id, {
       id: row.id,
       walletAddress: row.walletAddress,
@@ -163,6 +234,9 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     const ar = rules.get(id);
     if (!ar) return;
     rules.delete(id);
+    for (const key of [...churnAuditAt.keys()]) {
+      if (key.startsWith(`${id}:`)) churnAuditAt.delete(key);
+    }
     for (const token of ar.tokens) {
       const set = tokenSubs.get(token);
       if (!set) continue;
@@ -304,25 +378,119 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       }
     }
 
-    // Audit only meaningful (terminal) transitions to keep the log signal-rich.
-    if (
-      result.transition &&
-      result.transition.to !== "TRIGGERED_AWAITING_USER" &&
-      isTerminal(result.transition.to)
-    ) {
-      await auditStore.emit({
-        actor: ar.walletAddress,
-        action: "rule.state_changed",
-        subject: `rule:${ar.id}`,
-        metadata: {
-          from: result.transition.from,
-          to: result.transition.to,
-          reason: result.transition.reason,
-        },
-      });
+    // Terminal transitions are always audited. Non-terminal churn (window
+    // started, stale/price resets, reconnects…) is audited too — it is what a
+    // strategy's activity timeline is made of, and its absence is exactly how
+    // the "hold window silently reset for 15 minutes" failure stayed invisible
+    // — but rate-limited per (rule, reason) so a flapping market can't flood
+    // the append-only log. TRIGGERED transitions are excluded: rule.triggered
+    // already records those with full evidence.
+    if (result.transition && result.transition.to !== "TRIGGERED_AWAITING_USER") {
+      const isTerminalTransition = isTerminal(result.transition.to);
+      const churnKey = `${ar.id}:${result.transition.reason}`;
+      const lastAt = churnAuditAt.get(churnKey) ?? 0;
+      if (isTerminalTransition || nowMs - lastAt >= churnAuditMinIntervalMs) {
+        if (!isTerminalTransition) churnAuditAt.set(churnKey, nowMs);
+        await auditStore.emit({
+          actor: ar.walletAddress,
+          action: "rule.state_changed",
+          subject: `rule:${ar.id}`,
+          metadata: {
+            from: result.transition.from,
+            to: result.transition.to,
+            reason: result.transition.reason,
+            ...(isTerminalTransition
+              ? {}
+              : { trueSinceMs: result.runtime.trueSinceMs, nonTerminal: true }),
+          },
+        });
+      }
     }
 
     if (isTerminal(result.runtime.status)) removeRule(ar.id);
+  };
+
+  /** Re-evaluate every rule watching `tokenId` against the current views. */
+  const reevaluateToken = (tokenId: string): void => {
+    const set = tokenSubs.get(tokenId);
+    if (!set) return;
+    const now = Date.now();
+    for (const id of [...set]) {
+      const ar = rules.get(id);
+      if (ar) applyEvent(ar, { type: "book", views: viewsFor(ar), nowMs: now });
+    }
+  };
+
+  /** Patch a cached view with level deltas and stamp it fresh. */
+  const applyDeltas = (
+    view: MarketDataView,
+    deltas: readonly BookLevelDelta[],
+    tMs: number,
+  ): MarketDataView => {
+    let bids = view.bids;
+    let asks = view.asks;
+    for (const d of deltas) {
+      const current = d.side === "bid" ? bids : asks;
+      const without = current.filter((l) => l.price !== d.price);
+      const next = d.size > 0 ? [...without, { price: d.price, size: d.size }] : without;
+      next.sort((a, b) => (d.side === "bid" ? b.price - a.price : a.price - b.price));
+      if (d.side === "bid") bids = next;
+      else asks = next;
+    }
+    return { ...view, bids, asks, sourceTimeMs: tMs, receivedAtMs: tMs };
+  };
+
+  /**
+   * Background freshness verification: while the WS transport is healthy,
+   * re-fetch the book for subscribed tokens whose view is aging past half the
+   * tightest maxDataAgeMs of the rules watching them. On a quiet market the WS
+   * legitimately sends nothing (deltas only on change), so without this pass
+   * long hold windows would keep resetting as "stale". A real disconnect
+   * skips the pass entirely — staleness then fails closed as before.
+   */
+  const refreshQuietTokens = async (): Promise<void> => {
+    const { fetchOrderbook, isFeedConnected } = opts;
+    if (!fetchOrderbook || isFeedConnected?.() !== true || refreshInFlight) return;
+    const now = Date.now();
+    const candidates: string[] = [];
+    for (const [token, ruleIds] of tokenSubs) {
+      let minAge = Infinity;
+      for (const id of ruleIds) {
+        const ar = rules.get(id);
+        if (ar) minAge = Math.min(minAge, ar.def.maxDataAgeMs);
+      }
+      const threshold = Number.isFinite(minAge) ? minAge / 2 : 15_000;
+      const view = latestView.get(token);
+      const age = view ? now - view.sourceTimeMs : Infinity;
+      if (age > threshold) candidates.push(token);
+    }
+    if (candidates.length === 0) return;
+    const start = refreshCursor % candidates.length;
+    const batch = [...candidates.slice(start), ...candidates.slice(0, start)].slice(
+      0,
+      refreshMaxPerPass,
+    );
+    refreshCursor += batch.length;
+    refreshInFlight = true;
+    try {
+      await Promise.all(
+        batch.map(async (token) => {
+          try {
+            const view = await fetchOrderbook(token);
+            if (!view || !tokenSubs.has(token)) return;
+            const current = latestView.get(token);
+            // Never regress: WS may have delivered newer data mid-fetch.
+            if (current && current.sourceTimeMs >= view.sourceTimeMs) return;
+            latestView.set(token, view);
+            reevaluateToken(token);
+          } catch (e) {
+            logger.warn({ err: e, tokenId: token }, "REST freshness re-fetch failed");
+          }
+        }),
+      );
+    } finally {
+      refreshInFlight = false;
+    }
   };
 
   const applyEvent = (ar: ActiveRule, event: EvalEventV2): void => {
@@ -357,18 +525,37 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
           });
         }
       }, tickIntervalMs);
-      logger.info({ reloadIntervalMs, tickIntervalMs }, "Conditional-rule evaluator started");
+      if (opts.fetchOrderbook) {
+        refreshTimer = setInterval(() => {
+          refreshQuietTokens().catch((e: unknown) =>
+            logger.warn({ err: e }, "Freshness verify pass failed"),
+          );
+        }, refreshIntervalMs);
+      }
+      logger.info(
+        { reloadIntervalMs, tickIntervalMs, restVerify: Boolean(opts.fetchOrderbook) },
+        "Conditional-rule evaluator started",
+      );
     },
 
     onBook(view) {
       latestView.set(view.tokenId, view);
-      const set = tokenSubs.get(view.tokenId);
-      if (!set) return;
-      const now = Date.now();
-      for (const id of [...set]) {
-        const ar = rules.get(id);
-        if (ar) applyEvent(ar, { type: "book", views: viewsFor(ar), nowMs: now });
-      }
+      reevaluateToken(view.tokenId);
+    },
+
+    onBookDelta(tokenId, deltas, tMs) {
+      const view = latestView.get(tokenId);
+      // No cached snapshot → never fabricate a book from deltas alone.
+      if (!view) return;
+      latestView.set(tokenId, applyDeltas(view, deltas, tMs));
+      reevaluateToken(tokenId);
+    },
+
+    onHeartbeat(tokenId, tMs) {
+      const view = latestView.get(tokenId);
+      if (!view || view.sourceTimeMs >= tMs) return;
+      latestView.set(tokenId, { ...view, sourceTimeMs: tMs, receivedAtMs: tMs });
+      // No re-evaluation: nothing changed but the clock; the 1 s tick covers it.
     },
 
     onPrice(tokenId, price, tMs) {
@@ -411,6 +598,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     stop() {
       clearInterval(reloadTimer);
       clearInterval(tickTimer);
+      clearInterval(refreshTimer);
     },
   };
 };

@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Providers } from "./providers";
 import { Header } from "@/components/Header";
+import { TerminalDock } from "@/components/terminal/TerminalDock";
 import { THEME_INIT_SCRIPT } from "@/lib/theme-constants";
 
 export const metadata: Metadata = {
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               advice.
             </div>
           </footer>
+          <TerminalDock />
         </Providers>
       </body>
     </html>

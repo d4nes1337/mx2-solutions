@@ -18,12 +18,14 @@ import {
 import {
   createAuthenticatedClobClient,
   createBridgeClient,
+  createClobClient,
   createConfiguredDepositWalletRelayer,
   createPusdBalanceReader,
 } from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createBridgePoller, type BridgePoller } from "./bridge-poller.js";
-import { createMarketFeedManager, type MarketFeedManager } from "./market-feed.js";
+import { createMarketFeedManager, orderbookToView, type MarketFeedManager } from "./market-feed.js";
+import { createOrderSyncLoop, type OrderSyncLoop } from "./order-sync.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
 import { createQuoterManager, type QuoterManager } from "./quoter/manager.js";
@@ -119,6 +121,11 @@ const main = async (): Promise<void> => {
       );
     }
 
+    // Background freshness verification (public CLOB REST): quiet-but-live
+    // markets legitimately send no WS traffic, so the evaluator re-fetches
+    // aging books instead of resetting hold windows as "stale". Gated on the
+    // WS transport being connected — a real disconnect still fails closed.
+    const publicClobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
     evaluator = createRuleEvaluatorManager({
       logger,
       ruleStore,
@@ -126,6 +133,11 @@ const main = async (): Promise<void> => {
       auditStore,
       subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
       unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
+      fetchOrderbook: async (tokenId) => {
+        const ob = await publicClobClient.getOrderbook(tokenId);
+        return ob.ok ? orderbookToView(ob.value, Date.now()) : null;
+      },
+      isFeedConnected: () => feedRef.current?.state() === "connected",
       ...(autoExecutor ? { autoExecutor } : {}),
     });
   } else {
@@ -228,10 +240,32 @@ const main = async (): Promise<void> => {
           },
           onTickSizeChange: (tokenId) => evaluator?.onTickSizeChange(tokenId),
           onPrice: (tokenId, price, tMs) => evaluator?.onPrice(tokenId, price, tMs),
+          onBookDelta: (tokenId, deltas, tMs) => evaluator?.onBookDelta(tokenId, deltas, tMs),
+          onHeartbeat: (tokenId, tMs) => evaluator?.onHeartbeat(tokenId, tMs),
         }
       : {}),
   });
   feedRef.current = marketFeed;
+
+  // Order fill reconciliation — read-only against the CLOB (no orders placed,
+  // modified, or cancelled), so no trading feature flag gates it; it only
+  // needs the encryption master key to read per-account CLOB credentials.
+  let orderSync: OrderSyncLoop | null = null;
+  if (config.encryptionMasterKey) {
+    orderSync = createOrderSyncLoop({
+      logger,
+      encryptionMasterKey: config.encryptionMasterKey,
+      orderIntents: createOrderIntentStore(dbHandle.db),
+      tradingAccounts: createTradingAccountStore(dbHandle.db),
+      accountClobCredentials: createTradingAccountClobCredentialStore(dbHandle.db),
+      tradingClobClient: createAuthenticatedClobClient({
+        baseUrl: config.polymarket.clobBaseUrl,
+      }),
+      auditStore: createAuditStore(dbHandle.db),
+    });
+  } else {
+    logger.warn("No encryption master key — order fill sync disabled");
+  }
 
   // Bridge status polling (deposits + withdrawal legs) — read-only against
   // the Bridge, so it needs no signing/relayer prerequisites.
@@ -251,6 +285,7 @@ const main = async (): Promise<void> => {
   evaluator?.start();
   quoter?.start();
   rewardsPoller?.start();
+  orderSync?.start();
   bridgePoller?.start();
 
   const heartbeat = setInterval(() => {
@@ -263,6 +298,7 @@ const main = async (): Promise<void> => {
     evaluator?.stop();
     quoter?.stop();
     rewardsPoller?.stop();
+    orderSync?.stop();
     bridgePoller?.stop();
     marketFeed.close();
     await dbHandle.close();

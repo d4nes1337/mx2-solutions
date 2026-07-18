@@ -49,6 +49,7 @@ const makeDeps = (over: { reader: AllowanceReader; signer?: TradingSigner }) => 
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
   const privyWallets: PrivyWalletStore = {
     upsert: async () => {

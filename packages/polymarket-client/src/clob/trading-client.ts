@@ -5,12 +5,14 @@ import {
   BalanceAllowanceSchema,
   OpenOrdersResponseSchema,
   SubmitOrderResponseSchema,
+  UserTradesResponseSchema,
   type L2Credentials,
   type BalanceAllowance,
   type OpenOrder,
   type SubmitOrderResponse,
   type SignedClobOrder,
   type OrderType,
+  type UserTrade,
 } from "./schema.js";
 import { buildL2Headers, type L2HeaderArgs } from "./hmac.js";
 import {
@@ -54,6 +56,23 @@ export interface AuthenticatedClobClient {
     address: string,
     creds: L2Credentials,
   ): Promise<Result<OpenOrder[], PolymarketError>>;
+  /**
+   * The caller's own trades (fills) — GET /data/trades, paginated. Used by the
+   * order-sync loop to distinguish "filled" from "cancelled" once an order
+   * leaves the open-orders set.
+   */
+  getUserTrades(
+    address: string,
+    creds: L2Credentials,
+    params?: UserTradeParams,
+  ): Promise<Result<UserTrade[], PolymarketError>>;
+}
+
+export interface UserTradeParams {
+  asset_id?: string;
+  market?: string;
+  before?: string;
+  after?: string;
 }
 
 export interface SubmitOrderOptions {
@@ -287,6 +306,38 @@ export const createAuthenticatedClobClient = (
       );
       if (!result.ok) return err(result.error);
       return ok(result.value.data);
+    },
+
+    async getUserTrades(address, creds, params) {
+      // L2 HMAC signs the request path only (query appended after) — mirrors
+      // getOpenOrders and @polymarket/clob-client's getTrades pagination:
+      // response {data, next_cursor}, END cursor "LTE=".
+      const requestPath = "/data/trades";
+      const headersResult = await l2Headers(address, creds, { method: "GET", requestPath });
+      if (!headersResult.ok) return err(headersResult.error);
+      const trades: UserTrade[] = [];
+      let cursor = INITIAL_CURSOR;
+      const MAX_PAGES = 5;
+      for (let page = 0; page < MAX_PAGES && cursor !== "LTE="; page++) {
+        const query = new URLSearchParams({ next_cursor: cursor });
+        if (params?.asset_id) query.set("asset_id", params.asset_id);
+        if (params?.market) query.set("market", params.market);
+        if (params?.before) query.set("before", params.before);
+        if (params?.after) query.set("after", params.after);
+        const result = await doFetch(
+          `${baseUrl}${requestPath}?${query.toString()}`,
+          {
+            method: "GET",
+            headers: headersResult.value,
+          },
+          UserTradesResponseSchema,
+          timeoutMs,
+        );
+        if (!result.ok) return err(result.error);
+        trades.push(...result.value.data);
+        cursor = result.value.next_cursor;
+      }
+      return ok(trades);
     },
   };
 };

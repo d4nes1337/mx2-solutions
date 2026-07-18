@@ -311,6 +311,8 @@ export const buildApp = (deps: AppDeps) => {
     sessions: deps.sessions,
     auditStore: deps.auditStore,
     ruleStore: deps.ruleStore,
+    triggerStore: deps.triggerStore,
+    orderIntents: deps.orderIntents,
     runtimeFlags: deps.runtimeFlags,
     marketSnapshots: deps.marketSnapshots,
     gammaClient: deps.gammaClient,

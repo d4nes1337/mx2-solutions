@@ -92,6 +92,7 @@ const mockAuditStore: AuditStore = {
   }),
   recent: async () => [],
   forActor: async () => [],
+  forSubject: async () => [],
 };
 
 const mockChallenges: ChallengeStore = {
@@ -160,6 +161,10 @@ const mockOrderIntents: OrderIntentStore = {
   updateStatus: async () => {},
   countRecentByWallet: async () => 0,
   sumRuleAutoNotional: async () => 0,
+  listForSync: async () => [],
+  findByIds: async () => [],
+  listByRuleMetadata: async () => [],
+  updateFillState: async () => {},
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {
@@ -198,6 +203,7 @@ const mockTriggerStore: TriggerStore = {
   listByWallet: async () => [],
   listAwaiting: async () => [],
   hasForRule: async () => false,
+  listByRule: async () => [],
   updateStatus: async () => {},
 };
 
@@ -208,6 +214,7 @@ const mockTradingClobClient: AuthenticatedClobClient = {
   submitOrder: async () => err(upstreamErr),
   cancelOrder: async () => err(upstreamErr),
   getOpenOrders: async () => ok([]),
+  getUserTrades: async () => ok([]),
 };
 
 const mockGeoblockClient: GeoblockClient = {

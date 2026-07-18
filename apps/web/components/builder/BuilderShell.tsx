@@ -20,8 +20,9 @@ import {
   useShowcases,
 } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
-import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
+import { conditionLeavesOf, docFromDefinition, docMarketRefs } from "@/lib/smart-orders/doc";
 import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/smart-orders/drafts";
+import { saveLimitPrefs } from "@/lib/smart-orders/limit-prefs";
 import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/smart-orders/drafts-sync";
 import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
 import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
@@ -337,10 +338,26 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     [doc],
   );
 
+  // Markets the canvas shows but the expression doesn't reference (order
+  // action / watched) still need live freshness — otherwise their nodes sit
+  // on "waiting for data…" forever.
+  const extraTokenIds = useMemo(() => {
+    const exprTokens = new Set(
+      conditionLeavesOf(doc.expr).flatMap((l) =>
+        l.condition.kind !== "time_window" ? [l.condition.market.tokenId] : [],
+      ),
+    );
+    return docMarketRefs(doc)
+      .map((r) => r.tokenId)
+      .filter((t) => t !== "" && !exprTokens.has(t))
+      .slice(0, 8);
+  }, [doc]);
+
   const debouncedRevision = useDebouncedRevision(revision);
   const evaluation = useDraftEvaluation(
     hasConditions && boundTokens ? doc.expr : null,
     doc.maxDataAgeMs,
+    extraTokenIds,
     debouncedRevision,
     initialized,
   );
@@ -379,6 +396,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const save = () => {
     create.mutate(compileDoc(doc), {
       onSuccess: (created) => {
+        // Remember the armed caps so the next auto strategy starts prefilled.
+        if (doc.action.kind === "order" && doc.action.execution === "auto") {
+          saveLimitPrefs(doc.limits);
+        }
         const consumedId = useBuilderStore.getState().draftId;
         useBuilderStore.getState().spawnDraft();
         if (consumedId) {

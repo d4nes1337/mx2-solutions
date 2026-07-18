@@ -224,6 +224,7 @@ const makeTriggerStore = (
     listAwaiting: async (w) =>
       rows.filter((r) => r.walletAddress === w && r.status === "awaiting_user"),
     hasForRule: async (ruleId) => rows.some((r) => r.ruleId === ruleId),
+    listByRule: async (ruleId) => rows.filter((r) => r.ruleId === ruleId),
     updateStatus: async (id, status, opts) => {
       const r = find(id);
       if (r) {
@@ -289,6 +290,7 @@ const buildRulesApp = (opts: {
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
   const sessions: SessionStore = {
     create: async () => {
@@ -348,6 +350,10 @@ const buildRulesApp = (opts: {
     updateStatus: async () => {},
     countRecentByWallet: async () => 0,
     sumRuleAutoNotional: async () => 0,
+    listForSync: async () => [],
+    findByIds: async () => [],
+    listByRuleMetadata: async () => [],
+    updateFillState: async () => {},
   };
   const noopFlags: RuntimeFlagStore = {
     get: async () => null,
@@ -389,6 +395,7 @@ const buildRulesApp = (opts: {
     submitOrder: async () => err(upstreamErr),
     cancelOrder: async () => err(upstreamErr),
     getOpenOrders: async () => ok([]),
+    getUserTrades: async () => ok([]),
   };
   const geo: GeoblockClient = {
     check: async (ip) => ok({ status: "allowed", country: "DE", region: null, ip }),

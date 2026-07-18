@@ -92,6 +92,9 @@ const intentRow: OrderIntentRow = {
   status: "pending",
   clobOrderId: null,
   errorMessage: null,
+  filledSize: "0",
+  avgFillPrice: null,
+  lastSyncedAt: null,
   metadata: {},
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -142,6 +145,7 @@ const makeHarness = (
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
 
   const ruleStore = {

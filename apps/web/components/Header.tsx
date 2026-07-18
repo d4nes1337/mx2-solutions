@@ -14,6 +14,7 @@ const NAV = [
   { href: "/", label: "Home", tour: null },
   { href: "/markets", label: "Markets", tour: "nav-markets" },
   { href: "/smart-orders", label: "Smart Orders", tour: "nav-smart-orders" },
+  { href: "/portfolio", label: "Portfolio", tour: null },
   { href: "/wallet", label: "Wallet", tour: "nav-wallet" },
 ];
 

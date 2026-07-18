@@ -8,6 +8,12 @@ export interface MarketWsClientOptions {
   onMessage: (msgs: WsMarketMessage[]) => void;
   onStateChange?: (state: WsClientState) => void;
   onStale?: (tokenIds: string[]) => void;
+  /**
+   * Called when received items fail schema validation (upstream shape drift —
+   * exactly how the 2025-09 price_change change went unnoticed). `total` is the
+   * cumulative unparsed count for this client; `sample` is the latest offender.
+   */
+  onUnparsed?: (total: number, sample: unknown) => void;
   /** How long without any message before marking the channel as stale. Default 30 s. */
   staleThresholdMs?: number;
   /** Base reconnect delay in ms (doubles each attempt, capped at reconnectMaxMs). */
@@ -22,6 +28,7 @@ export class MarketWsClient {
   private staleTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectAttempts = 0;
+  private unparsedCount = 0;
 
   constructor(private readonly opts: MarketWsClientOptions) {}
 
@@ -74,7 +81,12 @@ export class MarketWsClient {
       const messages: WsMarketMessage[] = [];
       for (const item of items) {
         const parsed = WsMarketMessageSchema.safeParse(item);
-        if (parsed.success) messages.push(parsed.data);
+        if (parsed.success) {
+          messages.push(parsed.data);
+        } else {
+          this.unparsedCount++;
+          this.opts.onUnparsed?.(this.unparsedCount, item);
+        }
       }
       if (messages.length > 0) this.opts.onMessage(messages);
     });

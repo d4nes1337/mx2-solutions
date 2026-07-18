@@ -1,4 +1,4 @@
-import { and, eq, desc, gte, isNull, sql } from "drizzle-orm";
+import { and, eq, desc, gte, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   userClobCredentials,
@@ -495,6 +495,31 @@ export interface OrderIntentStore {
     status: OrderIntentStatus,
     extra?: { clobOrderId?: string; errorMessage?: string },
   ): Promise<void>;
+  /** Batch lookup by id (timeline: trigger-linked orders). */
+  findByIds(ids: readonly string[]): Promise<OrderIntentRow[]>;
+  /** Intents stamped with a rule id in metadata (auto-executed orders). */
+  listByRuleMetadata(ruleId: string, limit?: number): Promise<OrderIntentRow[]>;
+  /**
+   * Intents the order-sync worker loop should reconcile against the CLOB:
+   * in-flight (submitted/acknowledged) with a known CLOB order id, least
+   * recently synced first (never-synced before everything else).
+   */
+  listForSync(limit?: number): Promise<OrderIntentRow[]>;
+  /**
+   * Fill-reconciliation write (worker single-writer). Statuses only ever
+   * advance: a terminal intent (filled/cancelled/failed/unknown) is never
+   * overwritten — the update is compare-and-set on the in-flight statuses.
+   */
+  updateFillState(
+    id: string,
+    update: {
+      status?: OrderIntentStatus;
+      filledSize?: string;
+      avgFillPrice?: string | null;
+      lastSyncedAt: Date;
+      errorMessage?: string;
+    },
+  ): Promise<void>;
 }
 
 export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
@@ -581,6 +606,54 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
         ...(extra?.errorMessage !== undefined ? { errorMessage: extra.errorMessage } : {}),
       })
       .where(eq(orderIntents.id, id));
+  },
+
+  async findByIds(ids) {
+    if (ids.length === 0) return [];
+    return db
+      .select()
+      .from(orderIntents)
+      .where(inArray(orderIntents.id, [...ids]));
+  },
+
+  async listByRuleMetadata(ruleId, limit = 50) {
+    return db
+      .select()
+      .from(orderIntents)
+      .where(sql`${orderIntents.metadata}->>'ruleId' = ${ruleId}`)
+      .orderBy(desc(orderIntents.createdAt))
+      .limit(limit);
+  },
+
+  async listForSync(limit = 200) {
+    return db
+      .select()
+      .from(orderIntents)
+      .where(
+        and(
+          inArray(orderIntents.status, ["submitted", "acknowledged"]),
+          isNotNull(orderIntents.clobOrderId),
+        ),
+      )
+      .orderBy(sql`${orderIntents.lastSyncedAt} asc nulls first`)
+      .limit(limit);
+  },
+
+  async updateFillState(id, update) {
+    await db
+      .update(orderIntents)
+      .set({
+        lastSyncedAt: update.lastSyncedAt,
+        updatedAt: sql`now()`,
+        ...(update.status !== undefined ? { status: update.status } : {}),
+        ...(update.filledSize !== undefined ? { filledSize: update.filledSize } : {}),
+        ...(update.avgFillPrice !== undefined ? { avgFillPrice: update.avgFillPrice } : {}),
+        ...(update.errorMessage !== undefined ? { errorMessage: update.errorMessage } : {}),
+      })
+      // CAS: only in-flight intents are writable — never regress a terminal.
+      .where(
+        and(eq(orderIntents.id, id), inArray(orderIntents.status, ["submitted", "acknowledged"])),
+      );
   },
 });
 

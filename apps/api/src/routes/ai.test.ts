@@ -169,6 +169,7 @@ const buildAiApp = (opts: {
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async () => [],
   };
 
   const gamma: GammaClient = {
@@ -207,6 +208,7 @@ const buildAiApp = (opts: {
     submitOrder: async () => err(upstreamErr),
     cancelOrder: async () => err(upstreamErr),
     getOpenOrders: async () => ok([]),
+    getUserTrades: async () => ok([]),
   };
   const geo: GeoblockClient = {
     check: async (ip) => ok({ status: "allowed", country: "DE", region: null, ip }),
@@ -262,6 +264,10 @@ const buildAiApp = (opts: {
     updateStatus: async () => {},
     countRecentByWallet: async () => 0,
     sumRuleAutoNotional: async () => 0,
+    listForSync: async () => [],
+    findByIds: async () => [],
+    listByRuleMetadata: async () => [],
+    updateFillState: async () => {},
   };
   const flags: RuntimeFlagStore = {
     get: async () => null,
@@ -297,6 +303,7 @@ const buildAiApp = (opts: {
     listByWallet: async () => [],
     listAwaiting: async () => [],
     hasForRule: async () => false,
+    listByRule: async () => [],
     updateStatus: async () => {},
   };
   const privyWallets: PrivyWalletStore = {

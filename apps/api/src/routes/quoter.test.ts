@@ -122,6 +122,7 @@ const buildApp = (
       },
       recent: async () => [],
       forActor: async () => [],
+      forSubject: async () => [],
     } as AuditStore,
     gammaClient: {} as GammaClient,
     clobClient: {} as ClobClient,

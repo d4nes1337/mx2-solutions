@@ -1,7 +1,21 @@
 import type { Logger } from "@mx2/observability";
 import type { MarketSnapshotStore } from "@mx2/db";
 import type { BookLevel, MarketDataView } from "@mx2/rules";
-import { MarketWsClient, type WsClientState, type WsMarketMessage } from "@mx2/polymarket-client";
+import {
+  MarketWsClient,
+  bookSides,
+  priceChangeItems,
+  type Orderbook,
+  type WsClientState,
+  type WsMarketMessage,
+} from "@mx2/polymarket-client";
+
+/** One normalized level change for the evaluator's cached book view. */
+export interface BookDelta {
+  price: number;
+  size: number;
+  side: "bid" | "ask";
+}
 
 export interface MarketFeedOptions {
   wsUrl: string;
@@ -17,11 +31,21 @@ export interface MarketFeedOptions {
    * price_change ticks, and book mids (which keep windows alive on quiet tape).
    */
   onPrice?: (tokenId: string, price: number, tMs: number) => void;
+  /**
+   * price_change level deltas — lets the evaluator patch its cached book AND
+   * refresh its freshness clock between full `book` snapshots. Without this a
+   * quiet-but-live market goes "stale" and hold windows keep resetting.
+   */
+  onBookDelta?: (tokenId: string, deltas: readonly BookDelta[], tMs: number) => void;
+  /** Any-message freshness heartbeat for a token (e.g. last_trade_price). */
+  onHeartbeat?: (tokenId: string, tMs: number) => void;
 }
 
 export interface MarketFeedManager {
   subscribe(tokenIds: string[]): void;
   unsubscribe(tokenIds: string[]): void;
+  /** Live WS transport state — "connected" means staleness is trustworthy. */
+  state(): WsClientState;
   close(): void;
 }
 
@@ -55,11 +79,29 @@ const toLevels = (
 const toView = (
   msg: Extract<WsMarketMessage, { event_type: "book" }>,
   receivedAtMs: number,
-): MarketDataView => ({
-  tokenId: msg.asset_id,
-  conditionId: msg.market,
-  bids: toLevels(msg.buys, "bid"),
-  asks: toLevels(msg.sells, "ask"),
+): MarketDataView => {
+  const { bids, asks } = bookSides(msg);
+  return {
+    tokenId: msg.asset_id,
+    conditionId: msg.market,
+    bids: toLevels(bids, "bid"),
+    asks: toLevels(asks, "ask"),
+    marketStatus: "open",
+    sourceTimeMs: receivedAtMs,
+    receivedAtMs,
+  };
+};
+
+/**
+ * Normalize a CLOB REST orderbook into a MarketDataView — the evaluator's
+ * background freshness-verify path reuses the exact same view shape the WS
+ * book path produces.
+ */
+export const orderbookToView = (ob: Orderbook, receivedAtMs: number): MarketDataView => ({
+  tokenId: ob.asset_id,
+  conditionId: ob.market,
+  bids: toLevels(ob.bids, "bid"),
+  asks: toLevels(ob.asks, "ask"),
   marketStatus: "open",
   sourceTimeMs: receivedAtMs,
   receivedAtMs,
@@ -69,6 +111,7 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
   for (const msg of msgs) {
     if (msg.event_type === "book") {
       const receivedAtMs = Date.now();
+      const { bids, asks } = bookSides(msg);
       // Feed the evaluator first (in-memory, cheap) then persist the snapshot.
       try {
         opts.onBookView?.(toView(msg, receivedAtMs));
@@ -76,7 +119,7 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
         opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Rule evaluator onBookView failed");
       }
       try {
-        const mid = computeMidPrice(msg.buys, msg.sells);
+        const mid = computeMidPrice(bids, asks);
         if (mid !== null) opts.onPrice?.(msg.asset_id, Number(mid), receivedAtMs);
       } catch (e) {
         opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window mid push failed");
@@ -85,10 +128,10 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
         await opts.marketSnapshots.upsert({
           tokenId: msg.asset_id,
           conditionId: msg.market,
-          bids: msg.buys,
-          asks: msg.sells,
+          bids,
+          asks,
           lastTradePrice: null,
-          midPrice: computeMidPrice(msg.buys, msg.sells),
+          midPrice: computeMidPrice(bids, asks),
           source: "ws",
           isStale: false,
           receivedAt: new Date(receivedAtMs),
@@ -99,16 +142,57 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
     } else if (msg.event_type === "tick_size_change") {
       opts.onTickSizeChange?.(msg.asset_id);
     } else if (msg.event_type === "price_change") {
-      try {
-        opts.onPrice?.(msg.asset_id, Number(msg.price), Date.now());
-      } catch (e) {
-        opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window tick push failed");
+      const receivedAtMs = Date.now();
+      // Group per token: one onBookDelta call per asset keeps the evaluator's
+      // re-evaluation count proportional to tokens, not raw level changes.
+      const deltasByToken = new Map<string, BookDelta[]>();
+      for (const item of priceChangeItems(msg)) {
+        try {
+          // Prefer the item's best bid/ask mid as the price observation —
+          // level-change prices alone can be deep in the book.
+          const price =
+            item.bestBid !== undefined && item.bestAsk !== undefined
+              ? (Number(item.bestBid) + Number(item.bestAsk)) / 2
+              : Number(item.price);
+          if (Number.isFinite(price)) opts.onPrice?.(item.assetId, price, receivedAtMs);
+        } catch (e) {
+          opts.logger.warn({ err: e, tokenId: item.assetId }, "Price-window tick push failed");
+        }
+        const price = Number(item.price);
+        const size = item.size !== undefined ? Number(item.size) : NaN;
+        const side = item.side === "BUY" ? "bid" : item.side === "SELL" ? "ask" : null;
+        if (side !== null && Number.isFinite(price) && Number.isFinite(size)) {
+          const list = deltasByToken.get(item.assetId) ?? [];
+          list.push({ price, size, side });
+          deltasByToken.set(item.assetId, list);
+        } else {
+          // Legacy shape without size/side carries no level info — still a
+          // liveness signal for the token's cached view.
+          try {
+            opts.onHeartbeat?.(item.assetId, receivedAtMs);
+          } catch (e) {
+            opts.logger.warn({ err: e, tokenId: item.assetId }, "Heartbeat push failed");
+          }
+        }
+      }
+      for (const [tokenId, deltas] of deltasByToken) {
+        try {
+          opts.onBookDelta?.(tokenId, deltas, receivedAtMs);
+        } catch (e) {
+          opts.logger.warn({ err: e, tokenId }, "Rule evaluator onBookDelta failed");
+        }
       }
     } else if (msg.event_type === "last_trade_price") {
+      const receivedAtMs = Date.now();
       try {
-        opts.onPrice?.(msg.asset_id, Number(msg.price), Date.now());
+        opts.onPrice?.(msg.asset_id, Number(msg.price), receivedAtMs);
       } catch (e) {
         opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Price-window trade push failed");
+      }
+      try {
+        opts.onHeartbeat?.(msg.asset_id, receivedAtMs);
+      } catch (e) {
+        opts.logger.warn({ err: e, tokenId: msg.asset_id }, "Heartbeat push failed");
       }
       try {
         const existing = await opts.marketSnapshots.findByTokenId(msg.asset_id);
@@ -134,6 +218,7 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
 
 export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedManager => {
   let lastState: WsClientState = "idle";
+  let lastUnparsedLogMs = 0;
   const client = new MarketWsClient({
     wsUrl: opts.wsUrl,
     staleThresholdMs: opts.staleThresholdMs ?? 30_000,
@@ -142,6 +227,15 @@ export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedMana
       handleMessages(msgs, opts).catch((e: unknown) => {
         opts.logger.warn({ err: e }, "Market feed message handler error");
       });
+    },
+
+    // Schema drift upstream used to be invisible (messages silently dropped);
+    // log it, throttled, so the next rename is caught in hours, not weeks.
+    onUnparsed: (total, sample) => {
+      const now = Date.now();
+      if (now - lastUnparsedLogMs < 60_000) return;
+      lastUnparsedLogMs = now;
+      opts.logger.warn({ total, sample }, "Market WS messages failed schema validation");
     },
 
     onStale: (tokenIds) => {
@@ -171,6 +265,7 @@ export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedMana
   return {
     subscribe: (tokenIds) => client.subscribe(tokenIds),
     unsubscribe: (tokenIds) => client.unsubscribe(tokenIds),
+    state: () => client.currentState,
     close: () => client.close(),
   };
 };

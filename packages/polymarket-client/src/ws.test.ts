@@ -5,6 +5,8 @@ import {
   WsPriceChangeMessageSchema,
   WsLastTradePriceMessageSchema,
   WsTickSizeChangeMessageSchema,
+  bookSides,
+  priceChangeItems,
 } from "./ws/schema.js";
 import { MarketWsClient } from "./ws/market-client.js";
 
@@ -28,7 +30,7 @@ describe("WsMarketMessageSchema", () => {
     }
   });
 
-  it("parses a price_change message", () => {
+  it("parses a legacy (flat) price_change message", () => {
     const msg: unknown = {
       event_type: "price_change",
       asset_id: TOKEN_ID,
@@ -40,6 +42,93 @@ describe("WsMarketMessageSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.event_type).toBe("price_change");
+    }
+  });
+
+  it("parses the current (2025-09+) book message using bids/asks", () => {
+    const msg: unknown = {
+      event_type: "book",
+      asset_id: TOKEN_ID,
+      market: MARKET_ID,
+      bids: [{ price: "0.545", size: "1500" }],
+      asks: [{ price: "0.555", size: "1200" }],
+      hash: "0xabc",
+      timestamp: "1700000000",
+    };
+    const result = WsBookMessageSchema.safeParse(msg);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const sides = bookSides(result.data);
+      expect(sides.bids).toEqual([{ price: "0.545", size: "1500" }]);
+      expect(sides.asks).toEqual([{ price: "0.555", size: "1200" }]);
+    }
+  });
+
+  it("bookSides normalizes the legacy buys/sells shape", () => {
+    const result = WsBookMessageSchema.safeParse({
+      event_type: "book",
+      asset_id: TOKEN_ID,
+      market: MARKET_ID,
+      buys: [{ price: "0.545", size: "1500" }],
+      sells: [{ price: "0.555", size: "1200" }],
+      timestamp: "1700000000",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const sides = bookSides(result.data);
+      expect(sides.bids).toEqual([{ price: "0.545", size: "1500" }]);
+      expect(sides.asks).toEqual([{ price: "0.555", size: "1200" }]);
+    }
+  });
+
+  it("parses the current (2025-09+) batched price_change message", () => {
+    // Per docs.polymarket.com market-channel: asset_id lives INSIDE each
+    // price_changes item, not at the top level.
+    const msg: unknown = {
+      event_type: "price_change",
+      market: MARKET_ID,
+      price_changes: [
+        {
+          asset_id: TOKEN_ID,
+          price: "0.60",
+          size: "3300",
+          side: "SELL",
+          hash: "0xdef",
+          best_bid: "0.59",
+          best_ask: "0.60",
+        },
+      ],
+      timestamp: "1729084877448",
+    };
+    const result = WsPriceChangeMessageSchema.safeParse(msg);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const items = priceChangeItems(result.data);
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        assetId: TOKEN_ID,
+        price: "0.60",
+        size: "3300",
+        side: "SELL",
+        bestBid: "0.59",
+        bestAsk: "0.60",
+      });
+    }
+  });
+
+  it("priceChangeItems normalizes the legacy flat shape", () => {
+    const result = WsPriceChangeMessageSchema.safeParse({
+      event_type: "price_change",
+      asset_id: TOKEN_ID,
+      market: MARKET_ID,
+      price: "0.553",
+      timestamp: "1700000010",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const items = priceChangeItems(result.data);
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ assetId: TOKEN_ID, price: "0.553" });
     }
   });
 

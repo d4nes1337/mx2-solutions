@@ -68,6 +68,7 @@ export const POLL = {
   openOrders: 15_000,
   rules: 4_000,
   ruleEval: 3_000,
+  ruleTimeline: 5_000,
   triggers: 4_000,
   triggerDetail: 3_000,
   marketTrades: 10_000,

@@ -10,8 +10,10 @@ import type {
   ConditionalRuleRow,
   MarketSnapshotRow,
   MarketSnapshotStore,
+  OrderIntentRow,
   OrderIntentStore,
   RuleStore,
+  RuleTriggerRow,
   RuntimeFlagStore,
   SessionStore,
   TriggerStore,
@@ -181,9 +183,12 @@ const buildSmartOrdersApp = (opts: {
   snapshots?: Record<string, MarketSnapshotRow>;
   findMarket?: GammaClient["findMarket"];
   searchMarkets?: GammaClient["searchMarkets"];
+  triggers?: RuleTriggerRow[];
+  orders?: OrderIntentRow[];
 }) => {
   const ruleStore = opts.ruleStore ?? makeRuleStore();
   const audits: { action: string; subject: string | null }[] = [];
+  const fullAudits: Awaited<ReturnType<AuditStore["emit"]>>[] = [];
 
   const config = loadConfig({
     DATABASE_URL: "postgresql://u:p@localhost:5432/db",
@@ -193,17 +198,20 @@ const buildSmartOrdersApp = (opts: {
   const auditStore: AuditStore = {
     emit: async (e) => {
       audits.push({ action: e.action, subject: e.subject ?? null });
-      return {
-        id: "a",
+      const full = {
+        id: `a-${fullAudits.length + 1}`,
         actor: e.actor,
         action: e.action,
         subject: e.subject ?? null,
         metadata: e.metadata,
         createdAt: new Date(),
       };
+      fullAudits.push(full);
+      return full;
     },
     recent: async () => [],
     forActor: async () => [],
+    forSubject: async (subject) => fullAudits.filter((a) => a.subject === subject),
   };
   const sessions: SessionStore = {
     create: async () => {
@@ -264,6 +272,7 @@ const buildSmartOrdersApp = (opts: {
     submitOrder: async () => err(upstreamErr),
     cancelOrder: async () => err(upstreamErr),
     getOpenOrders: async () => ok([]),
+    getUserTrades: async () => ok([]),
   };
   const geo: GeoblockClient = {
     check: async (ip) => ok({ status: "allowed", country: "DE", region: null, ip }),
@@ -309,6 +318,13 @@ const buildSmartOrdersApp = (opts: {
       updateStatus: async () => {},
       countRecentByWallet: async () => 0,
       sumRuleAutoNotional: async () => 0,
+      listForSync: async () => [],
+      findByIds: async (ids) => (opts.orders ?? []).filter((o) => ids.includes(o.id)),
+      listByRuleMetadata: async (ruleId) =>
+        (opts.orders ?? []).filter(
+          (o) => (o.metadata as Record<string, unknown> | null)?.["ruleId"] === ruleId,
+        ),
+      updateFillState: async () => {},
     } satisfies OrderIntentStore,
     flags: {
       get: async () => null,
@@ -323,6 +339,7 @@ const buildSmartOrdersApp = (opts: {
       listByWallet: async () => [],
       listAwaiting: async () => [],
       hasForRule: async () => false,
+      listByRule: async (ruleId) => (opts.triggers ?? []).filter((t) => t.ruleId === ruleId),
       updateStatus: async () => {},
     } satisfies TriggerStore,
     privyWallets: {
@@ -761,6 +778,45 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     await app.close();
   });
 
+  it("includes extraTokenIds (action/watched markets) in the freshness payload", async () => {
+    // The order-action market is NOT in the expression — before extraTokenIds
+    // its canvas node sat on "waiting for data…" forever.
+    const { app } = buildSmartOrdersApp({
+      snapshots: { "tok-1": snapshotFor("tok-1"), "tok-2": snapshotFor("tok-2") },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders/evaluate-draft",
+      headers: { "content-type": "application/json" },
+      payload: { ...draft, extraTokenIds: ["tok-2"] },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const tokens = body.markets.map((m: { tokenId: string }) => m.tokenId).sort();
+    expect(tokens).toEqual(["tok-1", "tok-2"]);
+    const tok2 = body.markets.find((m: { tokenId: string }) => m.tokenId === "tok-2");
+    expect(tok2.hasData).toBe(true);
+    await app.close();
+  });
+
+  it("supports a freshness-only probe (null expr + extraTokenIds)", async () => {
+    const { app } = buildSmartOrdersApp({ snapshots: { "tok-2": snapshotFor("tok-2") } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders/evaluate-draft",
+      headers: { "content-type": "application/json" },
+      payload: { expr: null, extraTokenIds: ["tok-2"] },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.satisfied).toBe(false);
+    expect(body.root).toBeNull();
+    expect(body.markets).toHaveLength(1);
+    expect(body.markets[0].tokenId).toBe("tok-2");
+    expect(body.markets[0].hasData).toBe(true);
+    await app.close();
+  });
+
   it("rejects drafts referencing too many markets", async () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
@@ -796,6 +852,106 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
       lastStatus = res.statusCode;
     }
     expect(lastStatus).toBe(429);
+    await app.close();
+  });
+});
+
+describe("GET /api/smart-orders/:id/timeline", () => {
+  const trigger = (ruleId: string, over: Partial<RuleTriggerRow> = {}): RuleTriggerRow => ({
+    id: "trig-1",
+    ruleId,
+    walletAddress: WALLET,
+    triggeredAt: new Date("2026-01-01T00:15:00Z"),
+    evidence: {},
+    reasonCodes: ["PRICE_OK"],
+    status: "confirmed",
+    orderIntentId: "intent-1",
+    createdAt: new Date("2026-01-01T00:15:00Z"),
+    ...over,
+  });
+  const order = (over: Partial<OrderIntentRow> = {}): OrderIntentRow => ({
+    id: "intent-1",
+    walletAddress: WALLET,
+    tradingAccountId: null,
+    idempotencyKey: "auto:rule-1:trig-1",
+    conditionId: "cond-1",
+    tokenId: "tok-1",
+    side: "BUY",
+    price: "0.41",
+    size: "10",
+    orderType: "GTC",
+    funder: null,
+    signer: null,
+    signatureType: null,
+    signingMode: null,
+    status: "filled",
+    clobOrderId: "clob-1",
+    errorMessage: null,
+    filledSize: "10",
+    avgFillPrice: "0.405",
+    lastSyncedAt: new Date(),
+    metadata: { ruleId: "rule-1" },
+    createdAt: new Date("2026-01-01T00:15:01Z"),
+    updatedAt: new Date(),
+    ...over,
+  });
+
+  const createStrategy = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: validBody,
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id as string;
+  };
+
+  it("merges audit events, triggers, and linked orders (deduped) for the owner", async () => {
+    const { app } = buildSmartOrdersApp({
+      triggers: [trigger("rule-1")],
+      // Same order reachable via trigger link AND metadata.ruleId — must dedupe.
+      orders: [order()],
+    });
+    const id = await createStrategy(app); // "rule-1"
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/smart-orders/${id}/timeline`,
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.strategyId).toBe(id);
+    // rule.created was audited with subject rule:<id> — it must appear.
+    expect(body.events.map((e: { action: string }) => e.action)).toContain("rule.created");
+    expect(body.triggers).toHaveLength(1);
+    expect(body.triggers[0].orderIntentId).toBe("intent-1");
+    expect(body.orders).toHaveLength(1);
+    expect(body.orders[0].filledSize).toBe("10");
+    expect(body.orders[0].avgFillPrice).toBe("0.405");
+    await app.close();
+  });
+
+  it("404s for a strategy the caller does not own", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/smart-orders/rule-unknown/timeline",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("rejects an invalid before cursor", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const id = await createStrategy(app);
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/smart-orders/${id}/timeline?before=not-a-date`,
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(400);
     await app.close();
   });
 });

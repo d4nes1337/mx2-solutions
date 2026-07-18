@@ -37,6 +37,8 @@ export const auditEvents = pgTable(
     index("audit_events_actor_idx").on(t.actor),
     index("audit_events_action_idx").on(t.action),
     index("audit_events_created_at_idx").on(t.createdAt),
+    // Timeline reads: events for one subject, newest first (migration 0017).
+    index("audit_events_subject_created_idx").on(t.subject, t.createdAt),
   ],
 );
 
@@ -244,6 +246,11 @@ export const orderIntents = pgTable(
     status: text("status").notNull().default("pending"),
     clobOrderId: text("clob_order_id"),
     errorMessage: text("error_message"),
+    // Fill reconciliation (migration 0016) — written only by the worker's
+    // order-sync loop; statuses only ever advance, never regress.
+    filledSize: numeric("filled_size").notNull().default("0"),
+    avgFillPrice: numeric("avg_fill_price"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     metadata: jsonb("metadata")
       .notNull()
       .default(sql`'{}'::jsonb`),
