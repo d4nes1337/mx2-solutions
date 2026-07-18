@@ -102,7 +102,16 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
     },
     archive: async (id, w) => {
       const r = find(id);
-      const terminal = ["CANCELLED","COMPLETED","EXECUTED_MANUALLY","EXECUTED_AUTO","EXECUTION_FAILED","EXPIRED","INVALIDATED","ERROR"].includes(r?.status ?? "");
+      const terminal = [
+        "CANCELLED",
+        "COMPLETED",
+        "EXECUTED_MANUALLY",
+        "EXECUTED_AUTO",
+        "EXECUTION_FAILED",
+        "EXPIRED",
+        "INVALIDATED",
+        "ERROR",
+      ].includes(r?.status ?? "");
       if (!r || r.walletAddress !== w || !terminal || r.archivedAt) return null;
       r.archivedAt = new Date();
       return r;

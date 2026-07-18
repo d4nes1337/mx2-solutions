@@ -47,8 +47,7 @@ export function FilterBar({
   tags: string[];
   archivedCount: number;
 }) {
-  const hasFilters =
-    filters.query !== "" || filters.group !== null || filters.tags.length > 0;
+  const hasFilters = filters.query !== "" || filters.group !== null || filters.tags.length > 0;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -66,9 +65,7 @@ export function FilterBar({
           <button
             key={group}
             type="button"
-            onClick={() =>
-              onChange({ ...filters, group: filters.group === group ? null : group })
-            }
+            onClick={() => onChange({ ...filters, group: filters.group === group ? null : group })}
             className={chipClass(filters.group === group)}
           >
             {GROUP_TITLES[group]} · {count}
@@ -96,9 +93,7 @@ export function FilterBar({
       </div>
       {tags.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-faint">
-            Tags
-          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-faint">Tags</span>
           {tags.map((tag) => {
             const active = filters.tags.includes(tag);
             return (
@@ -108,9 +103,7 @@ export function FilterBar({
                 onClick={() =>
                   onChange({
                     ...filters,
-                    tags: active
-                      ? filters.tags.filter((t) => t !== tag)
-                      : [...filters.tags, tag],
+                    tags: active ? filters.tags.filter((t) => t !== tag) : [...filters.tags, tag],
                   })
                 }
                 className={chipClass(active)}

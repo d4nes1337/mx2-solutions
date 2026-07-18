@@ -180,9 +180,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
     const [row] = await db
       .update(conditionalRules)
       .set({ tags: [...tags], updatedAt: sql`now()` })
-      .where(
-        and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)),
-      )
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
       .returning();
     return row ?? null;
   },
@@ -207,9 +205,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
     const [row] = await db
       .update(conditionalRules)
       .set({ archivedAt: null, updatedAt: sql`now()` })
-      .where(
-        and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)),
-      )
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
       .returning();
     return row ?? null;
   },

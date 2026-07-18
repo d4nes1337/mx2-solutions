@@ -619,17 +619,17 @@ durable event log, full failure-mode replay) per RFC-0001 — owner to prioritis
 
 ## Delivery roadmap
 
-| Slice                                                   | Gate   | Status    | Blocked by                                        |
-| ------------------------------------------------------- | ------ | --------- | ------------------------------------------------- |
-| 0 — scaffolding/CI/health/flags/audit skeleton          | —      | **Built** | —                                                 |
-| 1 — read-only feed + market cockpit                     | Gate 2 | **Built** | —                                                 |
-| 2 — wallet login + allowlist + profile/PnL (read-only)  | Gate 3 | **Built** | Owner Gate 3 review                               |
-| 3 — manual trading (staging-only, geo-gated, flagged)   | Gate 4 | **Built** | Owner Gate 4 review + staging creds + A-021 spike |
-| 4 (web) — frontend MVP (read-only + preview-only)       | —      | **Built** | —                                                 |
-| 6 — conditional rules (shadow / alert / manual-confirm) | Gate 5 | **Built** | Owner Gate 5 review                               |
-| 6b — wallet funds + Bridge funding scaffold             | Gate 6 | **Built** | signed-in/staging acceptance                      |
+| Slice                                                   | Gate   | Status    | Blocked by                                         |
+| ------------------------------------------------------- | ------ | --------- | -------------------------------------------------- |
+| 0 — scaffolding/CI/health/flags/audit skeleton          | —      | **Built** | —                                                  |
+| 1 — read-only feed + market cockpit                     | Gate 2 | **Built** | —                                                  |
+| 2 — wallet login + allowlist + profile/PnL (read-only)  | Gate 3 | **Built** | Owner Gate 3 review                                |
+| 3 — manual trading (staging-only, geo-gated, flagged)   | Gate 4 | **Built** | Owner Gate 4 review + staging creds + A-021 spike  |
+| 4 (web) — frontend MVP (read-only + preview-only)       | —      | **Built** | —                                                  |
+| 6 — conditional rules (shadow / alert / manual-confirm) | Gate 5 | **Built** | Owner Gate 5 review                                |
+| 6b — wallet funds + Bridge funding scaffold             | Gate 6 | **Built** | signed-in/staging acceptance                       |
 | 6c — bridge deposit tracking + cross-chain withdrawals  | Gate 6 | **Built** | staging acceptance (ADR-0018 OQ-1/OQ-2), flags off |
-| 6d — hybrid canvas drafts + per-draft AI chat           | —      | **Built** | —                                                 |
-| 6e — event-grouped search / event pages / siblings      | —      | **Built** | —                                                 |
-| 6f — smart-orders tags/archive/restart + filter bar     | —      | **Built** | migration 0013 on deploy                          |
-| 7 — beta hardening / release                            | Gate 6 | Pending   | prior slices                                      |
+| 6d — hybrid canvas drafts + per-draft AI chat           | —      | **Built** | —                                                  |
+| 6e — event-grouped search / event pages / siblings      | —      | **Built** | —                                                  |
+| 6f — smart-orders tags/archive/restart + filter bar     | —      | **Built** | migration 0013 on deploy                           |
+| 7 — beta hardening / release                            | Gate 6 | Pending   | prior slices                                       |

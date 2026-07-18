@@ -186,9 +186,7 @@ export const StrategyDefinitionSchema = z.object({
 });
 
 /** PATCH /:id/tags body — ≤10 freeform labels, 1–24 chars each. */
-const TagsSchema = z
-  .object({ tags: z.array(z.string().min(1).max(24)).max(10) })
-  .strict();
+const TagsSchema = z.object({ tags: z.array(z.string().min(1).max(24)).max(10) }).strict();
 
 const CreateSmartOrderSchema = z.object({
   name: z.string().min(1).max(120),
@@ -756,24 +754,20 @@ export const registerSmartOrdersRoutes = (
   // Event-granularity results: each hit keeps ALL its sub-markets (totals,
   // spreads, candidates). Shares the flat search's cache AND its rate-limit
   // scope, so the two endpoints draw from one Gamma budget.
-  app.get(
-    "/api/markets/search/grouped",
-    publicGuard("market-search", 120),
-    async (req, reply) => {
-      const q = ((req.query as Record<string, string>)["q"] ?? "").trim();
-      if (q.length < 2 || q.length > 80) {
-        reply.code(400);
-        return { error: "INVALID_REQUEST", message: "q must be 2–80 characters." };
-      }
-      const result = await smartSearchEventHits(deps.gammaClient, q, {
-        limit: 10,
-        marketsPerEvent: 20,
-      });
-      if (!result.ok) {
-        reply.code(502);
-        return { error: result.error.code, message: result.error.message };
-      }
-      return { results: result.value };
-    },
-  );
+  app.get("/api/markets/search/grouped", publicGuard("market-search", 120), async (req, reply) => {
+    const q = ((req.query as Record<string, string>)["q"] ?? "").trim();
+    if (q.length < 2 || q.length > 80) {
+      reply.code(400);
+      return { error: "INVALID_REQUEST", message: "q must be 2–80 characters." };
+    }
+    const result = await smartSearchEventHits(deps.gammaClient, q, {
+      limit: 10,
+      marketsPerEvent: 20,
+    });
+    if (!result.ok) {
+      reply.code(502);
+      return { error: result.error.code, message: result.error.message };
+    }
+    return { results: result.value };
+  });
 };

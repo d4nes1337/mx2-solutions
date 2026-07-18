@@ -60,7 +60,11 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
       <Button size="sm" variant="ghost" onClick={toggle} aria-expanded={open}>
         <FileText size={13} aria-hidden />
         Drafts
-        <ChevronDown size={12} aria-hidden className={cn("transition-transform", open && "rotate-180")} />
+        <ChevronDown
+          size={12}
+          aria-hidden
+          className={cn("transition-transform", open && "rotate-180")}
+        />
       </Button>
 
       {open ? (
@@ -97,7 +101,9 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
                   <span className="block truncate text-[12px] font-medium text-fg">
                     {/* The current draft's live name beats the (≤500ms stale) index copy. */}
                     {current && docName.trim() !== "" ? docName : label(d)}
-                    {current ? <span className="ml-1.5 text-[10px] text-accent">current</span> : null}
+                    {current ? (
+                      <span className="ml-1.5 text-[10px] text-accent">current</span>
+                    ) : null}
                   </span>
                   <span className="block text-[10px] text-faint">
                     {timeAgo(d.updatedAt / 1000)}

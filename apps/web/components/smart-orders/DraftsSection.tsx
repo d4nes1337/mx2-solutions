@@ -10,11 +10,7 @@ import Link from "next/link";
 import { PenLine, Trash2 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
-import {
-  deleteDraftLocal,
-  listDraftsLocal,
-  type DraftMeta,
-} from "@/lib/smart-orders/drafts";
+import { deleteDraftLocal, listDraftsLocal, type DraftMeta } from "@/lib/smart-orders/drafts";
 import { importServerDrafts } from "@/lib/smart-orders/drafts-sync";
 
 export function DraftsSection() {

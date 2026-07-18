@@ -48,7 +48,10 @@ function QuoteCard({ quote }: { quote: FundsQuoteResponse }) {
         <div className="flex items-center justify-between text-muted">
           <span>Fees{quote.fees.appFeeLabel ? ` (${quote.fees.appFeeLabel})` : ""}</span>
           <span className="tabular">
-            ${(quote.fees.totalImpactUsd ?? (quote.fees.appFeeUsd ?? 0) + (quote.fees.gasUsd ?? 0)).toFixed(2)}
+            $
+            {(
+              quote.fees.totalImpactUsd ?? (quote.fees.appFeeUsd ?? 0) + (quote.fees.gasUsd ?? 0)
+            ).toFixed(2)}
           </span>
         </div>
       ) : null}
@@ -106,7 +109,8 @@ export function BridgeSendPanel({
   });
 
   const parsedAmount = Number(amount);
-  const belowMin = Number.isFinite(parsedAmount) && parsedAmount > 0 && parsedAmount < asset.minCheckoutUsd;
+  const belowMin =
+    Number.isFinite(parsedAmount) && parsedAmount > 0 && parsedAmount < asset.minCheckoutUsd;
 
   // Debounced quote refresh as the amount changes.
   useEffect(() => {
@@ -169,7 +173,12 @@ export function BridgeSendPanel({
           className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
         />
         {sendable && balanceFormatted !== null ? (
-          <Button size="sm" variant="ghost" type="button" onClick={() => setAmount(balanceFormatted)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            type="button"
+            onClick={() => setAmount(balanceFormatted)}
+          >
             Max
           </Button>
         ) : null}
@@ -242,9 +251,7 @@ export function BridgeSendPanel({
             disabled={!amount || belowMin || isSending}
             onClick={handleSend}
           >
-            {isSending
-              ? "Check your wallet…"
-              : `Send ${asset.token.symbol} on ${asset.chainName}`}
+            {isSending ? "Check your wallet…" : `Send ${asset.token.symbol} on ${asset.chainName}`}
           </Button>
         )
       ) : (

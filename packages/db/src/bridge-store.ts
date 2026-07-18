@@ -63,7 +63,10 @@ export interface UpsertDepositsResult {
 export interface BridgeStore {
   /** Idempotent per (wallet, kind, address): re-saving refreshes nothing. */
   saveAddress(row: NewBridgeAddressRow): Promise<BridgeAddressRow>;
-  listAddresses(walletAddress: string, kind?: "deposit" | "withdrawal"): Promise<BridgeAddressRow[]>;
+  listAddresses(
+    walletAddress: string,
+    kind?: "deposit" | "withdrawal",
+  ): Promise<BridgeAddressRow[]>;
   /**
    * Addresses due a status poll: unchecked, or last checked before `staleBefore`.
    * Oldest-checked first, bounded by `limit`.
@@ -115,204 +118,207 @@ export interface BridgeStore {
   ): Promise<{ changed: { row: BridgeWithdrawalRow; previousState: string }[] }>;
 }
 
-const WITHDRAWAL_TERMINAL = new Set(["completed", "failed_address", "failed_polygon", "failed_bridge"]);
+const WITHDRAWAL_TERMINAL = new Set([
+  "completed",
+  "failed_address",
+  "failed_polygon",
+  "failed_bridge",
+]);
 
 export const createBridgeStore = (db: Database): BridgeStore => {
   return {
-  async saveAddress(row) {
-    const [saved] = await db
-      .insert(bridgeAddresses)
-      .values(row)
-      .onConflictDoNothing()
-      .returning();
-    if (saved) return saved;
-    const [existing] = await db
-      .select()
-      .from(bridgeAddresses)
-      .where(
-        and(
-          eq(bridgeAddresses.walletAddress, row.walletAddress),
-          eq(bridgeAddresses.kind, row.kind ?? "deposit"),
-          eq(bridgeAddresses.address, row.address),
-        ),
-      )
-      .limit(1);
-    if (!existing) throw new Error("Failed to save bridge address");
-    return existing;
-  },
-
-  async listAddresses(walletAddress, kind) {
-    return db
-      .select()
-      .from(bridgeAddresses)
-      .where(
-        and(
-          eq(bridgeAddresses.walletAddress, walletAddress),
-          ...(kind ? [eq(bridgeAddresses.kind, kind)] : []),
-        ),
-      )
-      .orderBy(desc(bridgeAddresses.createdAt));
-  },
-
-  async listPollableAddresses(staleBefore, limit) {
-    return db
-      .select()
-      .from(bridgeAddresses)
-      .where(
-        or(
-          isNull(bridgeAddresses.lastCheckedAt),
-          lt(bridgeAddresses.lastCheckedAt, staleBefore),
-        ),
-      )
-      .orderBy(asc(bridgeAddresses.lastCheckedAt))
-      .limit(limit);
-  },
-
-  async markAddressChecked(id) {
-    await db
-      .update(bridgeAddresses)
-      .set({ lastCheckedAt: sql`now()` })
-      .where(eq(bridgeAddresses.id, id));
-  },
-
-  async upsertDepositsFromStatus(address, transactions) {
-    const changed: UpsertDepositsResult["changed"] = [];
-    for (const tx of transactions) {
-      const state = depositStateFromProvider(tx.status);
-      const key = {
-        bridgeAddressId: address.id,
-        fromChainId: tx.fromChainId ?? "",
-        fromTokenAddress: tx.fromTokenAddress ?? "",
-        fromAmountBaseUnit: tx.fromAmountBaseUnit ?? "",
-        providerCreatedTimeMs: tx.createdTimeMs ?? 0,
-      };
+    async saveAddress(row) {
+      const [saved] = await db
+        .insert(bridgeAddresses)
+        .values(row)
+        .onConflictDoNothing()
+        .returning();
+      if (saved) return saved;
       const [existing] = await db
         .select()
-        .from(bridgeDeposits)
+        .from(bridgeAddresses)
         .where(
           and(
-            eq(bridgeDeposits.bridgeAddressId, key.bridgeAddressId),
-            eq(bridgeDeposits.fromChainId, key.fromChainId),
-            eq(bridgeDeposits.fromTokenAddress, key.fromTokenAddress),
-            eq(bridgeDeposits.fromAmountBaseUnit, key.fromAmountBaseUnit),
-            eq(bridgeDeposits.providerCreatedTimeMs, key.providerCreatedTimeMs),
+            eq(bridgeAddresses.walletAddress, row.walletAddress),
+            eq(bridgeAddresses.kind, row.kind ?? "deposit"),
+            eq(bridgeAddresses.address, row.address),
           ),
         )
         .limit(1);
+      if (!existing) throw new Error("Failed to save bridge address");
+      return existing;
+    },
 
-      if (!existing) {
-        const [inserted] = await db
-          .insert(bridgeDeposits)
-          .values({
-            walletAddress: address.walletAddress,
-            ...key,
-            state,
-            providerStatus: tx.status,
-            txHash: tx.txHash ?? null,
-            raw: tx.raw ?? null,
+    async listAddresses(walletAddress, kind) {
+      return db
+        .select()
+        .from(bridgeAddresses)
+        .where(
+          and(
+            eq(bridgeAddresses.walletAddress, walletAddress),
+            ...(kind ? [eq(bridgeAddresses.kind, kind)] : []),
+          ),
+        )
+        .orderBy(desc(bridgeAddresses.createdAt));
+    },
+
+    async listPollableAddresses(staleBefore, limit) {
+      return db
+        .select()
+        .from(bridgeAddresses)
+        .where(
+          or(isNull(bridgeAddresses.lastCheckedAt), lt(bridgeAddresses.lastCheckedAt, staleBefore)),
+        )
+        .orderBy(asc(bridgeAddresses.lastCheckedAt))
+        .limit(limit);
+    },
+
+    async markAddressChecked(id) {
+      await db
+        .update(bridgeAddresses)
+        .set({ lastCheckedAt: sql`now()` })
+        .where(eq(bridgeAddresses.id, id));
+    },
+
+    async upsertDepositsFromStatus(address, transactions) {
+      const changed: UpsertDepositsResult["changed"] = [];
+      for (const tx of transactions) {
+        const state = depositStateFromProvider(tx.status);
+        const key = {
+          bridgeAddressId: address.id,
+          fromChainId: tx.fromChainId ?? "",
+          fromTokenAddress: tx.fromTokenAddress ?? "",
+          fromAmountBaseUnit: tx.fromAmountBaseUnit ?? "",
+          providerCreatedTimeMs: tx.createdTimeMs ?? 0,
+        };
+        const [existing] = await db
+          .select()
+          .from(bridgeDeposits)
+          .where(
+            and(
+              eq(bridgeDeposits.bridgeAddressId, key.bridgeAddressId),
+              eq(bridgeDeposits.fromChainId, key.fromChainId),
+              eq(bridgeDeposits.fromTokenAddress, key.fromTokenAddress),
+              eq(bridgeDeposits.fromAmountBaseUnit, key.fromAmountBaseUnit),
+              eq(bridgeDeposits.providerCreatedTimeMs, key.providerCreatedTimeMs),
+            ),
+          )
+          .limit(1);
+
+        if (!existing) {
+          const [inserted] = await db
+            .insert(bridgeDeposits)
+            .values({
+              walletAddress: address.walletAddress,
+              ...key,
+              state,
+              providerStatus: tx.status,
+              txHash: tx.txHash ?? null,
+              raw: tx.raw ?? null,
+            })
+            .onConflictDoNothing()
+            .returning();
+          if (inserted) changed.push({ row: inserted, previousState: null });
+          continue;
+        }
+
+        const forward =
+          (DEPOSIT_STATE_RANK[state] ?? 1) > (DEPOSIT_STATE_RANK[existing.state] ?? 0);
+        const terminal = existing.state === "completed" || existing.state === "failed";
+        if (terminal || (!forward && existing.txHash === (tx.txHash ?? existing.txHash))) continue;
+        const [updated] = await db
+          .update(bridgeDeposits)
+          .set({
+            ...(forward ? { state, providerStatus: tx.status } : {}),
+            txHash: tx.txHash ?? existing.txHash,
+            raw: tx.raw ?? existing.raw,
+            updatedAt: sql`now()`,
           })
-          .onConflictDoNothing()
+          .where(eq(bridgeDeposits.id, existing.id))
           .returning();
-        if (inserted) changed.push({ row: inserted, previousState: null });
-        continue;
+        if (updated && forward) changed.push({ row: updated, previousState: existing.state });
       }
+      return { changed };
+    },
 
-      const forward = (DEPOSIT_STATE_RANK[state] ?? 1) > (DEPOSIT_STATE_RANK[existing.state] ?? 0);
-      const terminal = existing.state === "completed" || existing.state === "failed";
-      if (terminal || (!forward && existing.txHash === (tx.txHash ?? existing.txHash))) continue;
-      const [updated] = await db
-        .update(bridgeDeposits)
-        .set({
-          ...(forward ? { state, providerStatus: tx.status } : {}),
-          txHash: tx.txHash ?? existing.txHash,
-          raw: tx.raw ?? existing.raw,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(bridgeDeposits.id, existing.id))
+    async listDepositsByWallet(walletAddress, limit = 50) {
+      return db
+        .select()
+        .from(bridgeDeposits)
+        .where(eq(bridgeDeposits.walletAddress, walletAddress))
+        .orderBy(desc(bridgeDeposits.createdAt))
+        .limit(limit);
+    },
+
+    async createWithdrawal(row) {
+      const [created] = await db
+        .insert(bridgeWithdrawals)
+        .values(row)
+        .onConflictDoNothing()
         .returning();
-      if (updated && forward) changed.push({ row: updated, previousState: existing.state });
-    }
-    return { changed };
-  },
+      return created ?? null;
+    },
 
-  async listDepositsByWallet(walletAddress, limit = 50) {
-    return db
-      .select()
-      .from(bridgeDeposits)
-      .where(eq(bridgeDeposits.walletAddress, walletAddress))
-      .orderBy(desc(bridgeDeposits.createdAt))
-      .limit(limit);
-  },
+    async findWithdrawalByIdempotencyKey(walletAddress, idempotencyKey) {
+      const [row] = await db
+        .select()
+        .from(bridgeWithdrawals)
+        .where(
+          and(
+            eq(bridgeWithdrawals.walletAddress, walletAddress),
+            eq(bridgeWithdrawals.idempotencyKey, idempotencyKey),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    },
 
-  async createWithdrawal(row) {
-    const [created] = await db
-      .insert(bridgeWithdrawals)
-      .values(row)
-      .onConflictDoNothing()
-      .returning();
-    return created ?? null;
-  },
+    async listWithdrawalsByWallet(walletAddress, limit = 50) {
+      return db
+        .select()
+        .from(bridgeWithdrawals)
+        .where(eq(bridgeWithdrawals.walletAddress, walletAddress))
+        .orderBy(desc(bridgeWithdrawals.createdAt))
+        .limit(limit);
+    },
 
-  async findWithdrawalByIdempotencyKey(walletAddress, idempotencyKey) {
-    const [row] = await db
-      .select()
-      .from(bridgeWithdrawals)
-      .where(
-        and(
-          eq(bridgeWithdrawals.walletAddress, walletAddress),
-          eq(bridgeWithdrawals.idempotencyKey, idempotencyKey),
-        ),
-      )
-      .limit(1);
-    return row ?? null;
-  },
-
-  async listWithdrawalsByWallet(walletAddress, limit = 50) {
-    return db
-      .select()
-      .from(bridgeWithdrawals)
-      .where(eq(bridgeWithdrawals.walletAddress, walletAddress))
-      .orderBy(desc(bridgeWithdrawals.createdAt))
-      .limit(limit);
-  },
-
-  async updateWithdrawalState(id, state, patch) {
-    const [row] = await db
-      .update(bridgeWithdrawals)
-      .set({ state, ...(patch ?? {}), updatedAt: sql`now()` })
-      .where(eq(bridgeWithdrawals.id, id))
-      .returning();
-    return row ?? null;
-  },
-
-  async updateWithdrawalsFromStatus(address, transactions) {
-    const rows = await db
-      .select()
-      .from(bridgeWithdrawals)
-      .where(eq(bridgeWithdrawals.bridgeAddressId, address.id));
-    const changed: { row: BridgeWithdrawalRow; previousState: string }[] = [];
-    const completedTx = transactions.find((t) => t.status === "COMPLETED");
-    const failedTx = transactions.find((t) => t.status === "FAILED");
-    for (const row of rows) {
-      if (WITHDRAWAL_TERMINAL.has(row.state)) continue;
-      let next: { state: string; patch: Record<string, unknown> } | null = null;
-      if (completedTx) {
-        next = { state: "completed", patch: { bridgeTxHash: completedTx.txHash ?? null } };
-      } else if (failedTx) {
-        next = { state: "failed_bridge", patch: {} };
-      } else if (transactions.length > 0 && row.state !== "bridging") {
-        // The bridge saw the Polygon leg arrive — funds are in transit.
-        next = { state: "bridging", patch: {} };
-      }
-      if (!next || next.state === row.state) continue;
-      const [updated] = await db
+    async updateWithdrawalState(id, state, patch) {
+      const [row] = await db
         .update(bridgeWithdrawals)
-        .set({ state: next.state, ...next.patch, updatedAt: sql`now()` })
-        .where(eq(bridgeWithdrawals.id, row.id))
+        .set({ state, ...(patch ?? {}), updatedAt: sql`now()` })
+        .where(eq(bridgeWithdrawals.id, id))
         .returning();
-      if (updated) changed.push({ row: updated, previousState: row.state });
-    }
-    return { changed };
-  },
+      return row ?? null;
+    },
+
+    async updateWithdrawalsFromStatus(address, transactions) {
+      const rows = await db
+        .select()
+        .from(bridgeWithdrawals)
+        .where(eq(bridgeWithdrawals.bridgeAddressId, address.id));
+      const changed: { row: BridgeWithdrawalRow; previousState: string }[] = [];
+      const completedTx = transactions.find((t) => t.status === "COMPLETED");
+      const failedTx = transactions.find((t) => t.status === "FAILED");
+      for (const row of rows) {
+        if (WITHDRAWAL_TERMINAL.has(row.state)) continue;
+        let next: { state: string; patch: Record<string, unknown> } | null = null;
+        if (completedTx) {
+          next = { state: "completed", patch: { bridgeTxHash: completedTx.txHash ?? null } };
+        } else if (failedTx) {
+          next = { state: "failed_bridge", patch: {} };
+        } else if (transactions.length > 0 && row.state !== "bridging") {
+          // The bridge saw the Polygon leg arrive — funds are in transit.
+          next = { state: "bridging", patch: {} };
+        }
+        if (!next || next.state === row.state) continue;
+        const [updated] = await db
+          .update(bridgeWithdrawals)
+          .set({ state: next.state, ...next.patch, updatedAt: sql`now()` })
+          .where(eq(bridgeWithdrawals.id, row.id))
+          .returning();
+        if (updated) changed.push({ row: updated, previousState: row.state });
+      }
+      return { changed };
+    },
   };
 };

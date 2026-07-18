@@ -283,9 +283,9 @@ const buildAiApp = (opts: {
     markExecuting: async () => null,
     markAutoExecuted: async () => null,
     markExecutionFailed: async () => null,
-  setTags: async () => null,
-  archive: async () => null,
-  unarchive: async () => null,
+    setTags: async () => null,
+    archive: async () => null,
+    unarchive: async () => null,
     addExecutedNotional: async () => {},
   };
   const triggers: TriggerStore = {

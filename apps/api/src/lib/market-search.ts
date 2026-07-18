@@ -113,8 +113,7 @@ const SPORTS_TYPE_ORDER: Record<string, number> = {
  */
 const subMarketSortKey = (hit: MarketSearchHit, negRisk: boolean, index: number): number => {
   const open = hit.active && !hit.closed ? 0 : 1;
-  const sport =
-    hit.sportsMarketType !== null ? (SPORTS_TYPE_ORDER[hit.sportsMarketType] ?? 3) : 3;
+  const sport = hit.sportsMarketType !== null ? (SPORTS_TYPE_ORDER[hit.sportsMarketType] ?? 3) : 3;
   const favorite = negRisk ? 1 - (Number(hit.outcomePrices[0]) || 0) : 0;
   // Composite: open (0/1) ≫ sports slot (0–3) ≫ favorite price ≫ stable index.
   return open * 1e9 + sport * 1e8 + favorite * 1e7 + index;
@@ -133,9 +132,7 @@ export const eventHitFromGamma = (event: GammaEvent): EventSearchHit | null => {
   const negRisk = event.negRisk ?? false;
   const markets = event.markets
     .map((m, i) => ({ hit: hitFromGammaMarket(m, meta), i }))
-    .sort(
-      (a, b) => subMarketSortKey(a.hit, negRisk, a.i) - subMarketSortKey(b.hit, negRisk, b.i),
-    )
+    .sort((a, b) => subMarketSortKey(a.hit, negRisk, a.i) - subMarketSortKey(b.hit, negRisk, b.i))
     .map(({ hit }) => hit);
   return {
     eventId: event.id,

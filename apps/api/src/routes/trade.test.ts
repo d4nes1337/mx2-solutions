@@ -2610,9 +2610,17 @@ describe("POST /api/trading-wallet/withdraw", () => {
 
   it("is idempotent per key across the bridge path", async () => {
     const { app, batches } = bridgeApp();
-    const first = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-333333", toChainId: "8453" });
+    const first = await post(app, {
+      amountUsd: 5,
+      idempotencyKey: "k-bw-333333",
+      toChainId: "8453",
+    });
     expect(first.statusCode).toBe(200);
-    const second = await post(app, { amountUsd: 5, idempotencyKey: "k-bw-333333", toChainId: "8453" });
+    const second = await post(app, {
+      amountUsd: 5,
+      idempotencyKey: "k-bw-333333",
+      toChainId: "8453",
+    });
     expect(second.statusCode).toBe(200);
     expect(second.json().alreadySubmitted).toBe(true);
     expect(batches).toHaveLength(1);

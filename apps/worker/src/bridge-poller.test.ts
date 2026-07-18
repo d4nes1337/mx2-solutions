@@ -85,7 +85,9 @@ describe("bridge poller", () => {
     expect(deps.upserts).toHaveLength(1);
     expect(
       deps.audits.some(
-        (a) => a.action === "wallet.bridge.deposit_state_changed" && a.subject === "bridge_deposit:dep-1",
+        (a) =>
+          a.action === "wallet.bridge.deposit_state_changed" &&
+          a.subject === "bridge_deposit:dep-1",
       ),
     ).toBe(true);
   });
@@ -99,7 +101,11 @@ describe("bridge poller", () => {
   });
 
   it("flags deposits stuck non-terminal past the reconciliation window, once", async () => {
-    const stuck = { id: "dep-stuck", state: "processing", createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000) };
+    const stuck = {
+      id: "dep-stuck",
+      state: "processing",
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+    };
     const deps = makeDeps({ deposits: [stuck] });
     const poller = createBridgePoller({ logger, ...deps });
     await poller.tick();

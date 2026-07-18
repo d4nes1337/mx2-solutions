@@ -261,8 +261,9 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
       if ((req.query as Record<string, string>)["refresh"] === "1") {
         // Bounded on-request status pull — covers deployments where the
         // worker poller is off, without unbounded Bridge traffic.
-        const addresses = (await deps.bridgeStore.listAddresses(user.walletAddress, "deposit"))
-          .slice(0, REFRESH_ADDRESS_LIMIT);
+        const addresses = (
+          await deps.bridgeStore.listAddresses(user.walletAddress, "deposit")
+        ).slice(0, REFRESH_ADDRESS_LIMIT);
         for (const address of addresses) {
           const status = await deps.bridgeClient.getStatus(address.address);
           if (!status.ok) continue; // fail-soft: stale rows beat a hard error

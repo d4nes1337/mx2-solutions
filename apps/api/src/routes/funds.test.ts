@@ -163,8 +163,7 @@ const makeBridgeStore = (): BridgeStore & { addresses: BridgeAddressRow[] } => {
       }
       return { changed };
     },
-    listDepositsByWallet: async (w) =>
-      deposits.filter((d) => d.walletAddress === w) as never[],
+    listDepositsByWallet: async (w) => deposits.filter((d) => d.walletAddress === w) as never[],
     createWithdrawal: async () => null,
     findWithdrawalByIdempotencyKey: async () => null,
     listWithdrawalsByWallet: async () => [],
@@ -331,9 +330,7 @@ describe("deposit addresses + tracked deposits", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(bridgeStore.addresses).toHaveLength(1);
-    expect(bridgeStore.addresses[0]!.address).toBe(
-      "0x3333333333333333333333333333333333333333",
-    );
+    expect(bridgeStore.addresses[0]!.address).toBe("0x3333333333333333333333333333333333333333");
     expect(bridgeStore.addresses[0]!.kind).toBe("deposit");
     await app.close();
   });
