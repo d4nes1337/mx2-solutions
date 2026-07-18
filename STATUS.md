@@ -1,9 +1,23 @@
 # Project Status
 
-_Last updated: 2026-07-17_
+_Last updated: 2026-07-18_
 
 ## Recent
 
+- **Bridge-first deposits by default (built; D-033).** `FEATURE_BRIDGE_FUNDING` now defaults
+  ON (deposit-address generation only; withdrawals stay off + cross-checked) so every
+  environment gets multi-chain top-ups without env changes. Funds sheet reworked token-first:
+  USDC/USDT/ETH/SOL/BTC chips + searchable full Bridge catalog (~220 assets, 13 chains incl.
+  Solana/Tron/Bitcoin), per-family deposit addresses auto-generated on first open (new
+  `GET /api/funds/deposit-addresses` reads saved rows scoped to the CURRENT deposit wallet —
+  no Bridge call, no stale-wallet leakage), QR codes (`uqr`), in-app sends extended to native
+  coins and Optimism/BNB, and route minimums gated by the quote's USD estimate for volatile
+  assets. Home-chain resolution: "SOL" means native SOL on Solana, not the wrapped ERC-20
+  (found live, covered by tests). Polygon USDC.e direct stays as an automatic free-route
+  optimization when the connected wallet holds it, and as the whole panel when the flag is
+  off. All staging-flag jargon removed from the sheet and wallet cards. Tests: helpers 14,
+  sheet smoke 7, funds API 10 (incl. stale-wallet scoping), config defaults; suites 218 web +
+  516 node green, `next build` clean.
 - **AI-first UX pivot: smart search, draft-first AI, hero demo player, discovery section
   (built; D-027, ADR-0015/0016).** Owner's pivot brief (2026-07-17 Q&A) executed as six
   vertical slices:

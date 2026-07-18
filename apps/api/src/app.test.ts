@@ -235,9 +235,13 @@ const mockDelegations: DelegationStore = {
   expireLapsed: async () => {},
 };
 
-const appWith = (db: DbProbe, overrides?: Partial<typeof mockSessions & typeof mockAllowlist>) =>
+const appWith = (
+  db: DbProbe,
+  overrides?: Partial<typeof mockSessions & typeof mockAllowlist>,
+  configOverride?: typeof config,
+) =>
   buildApp({
-    config,
+    config: configOverride ?? config,
     logger,
     db,
     auditStore: mockAuditStore,
@@ -286,21 +290,26 @@ describe("health endpoints", () => {
     await app.close();
   });
 
-  it("GET /api/feature-flags reports risk features off by default", async () => {
+  it("GET /api/feature-flags reports risk features off by default (funding is not one)", async () => {
     const app = appWith({ ping: async () => true });
     const res = await app.inject({ method: "GET", url: "/api/feature-flags" });
     expect(res.json()).toMatchObject({
       liveTrading: false,
       conditionalLiveExecution: false,
       relayer: false,
-      bridgeFunding: false,
+      // Deposit-only Bridge funding defaults ON (D-033); withdrawals stay off.
+      bridgeFunding: true,
       bridgeWithdrawals: false,
     });
     await app.close();
   });
 
-  it("GET /api/funds/assets is fail-closed when Bridge funding is disabled", async () => {
-    const app = appWith({ ping: async () => true });
+  it("GET /api/funds/assets is fail-closed when Bridge funding is opted out", async () => {
+    const optedOut = loadConfig({
+      DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+      FEATURE_BRIDGE_FUNDING: "false",
+    });
+    const app = appWith({ ping: async () => true }, undefined, optedOut);
     const res = await app.inject({ method: "GET", url: "/api/funds/assets" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({

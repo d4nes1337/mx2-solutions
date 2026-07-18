@@ -388,6 +388,78 @@ describe("deposit addresses + tracked deposits", () => {
     await app.close();
   });
 
+  it("GET returns saved addresses without touching the Bridge, empty before first POST", async () => {
+    let bridgeCalls = 0;
+    const bridgeClient = makeBridgeClient({
+      createDepositAddresses: async () => {
+        bridgeCalls += 1;
+        return ok({ evm: "0x3333333333333333333333333333333333333333", svm: "So1anaAddr" });
+      },
+    });
+    const { app } = await buildFundsApp({ bridgeClient });
+
+    const before = await app.inject({
+      method: "GET",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json().addresses).toEqual({});
+    expect(bridgeCalls).toBe(0);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+    expect(bridgeCalls).toBe(1);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+    expect(after.json().addresses).toEqual({
+      evm: "0x3333333333333333333333333333333333333333",
+      svm: "So1anaAddr",
+    });
+    expect(after.json().depositWalletAddress).toBe(DEPOSIT_WALLET);
+    expect(bridgeCalls).toBe(1);
+    await app.close();
+  });
+
+  it("GET never surfaces addresses tied to a stale deposit wallet", async () => {
+    const bridgeStore = makeBridgeStore();
+    await bridgeStore.saveAddress({
+      walletAddress: WALLET,
+      depositWalletAddress: "0x0000000000000000000000000000000000000bad",
+      kind: "deposit",
+      addressType: "evm",
+      address: "0x4444444444444444444444444444444444444444",
+    });
+    const { app } = await buildFundsApp({ bridgeStore });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().addresses).toEqual({});
+    await app.close();
+  });
+
+  it("GET is a soft empty result when no deposit wallet exists yet", async () => {
+    const { app } = await buildFundsApp({ hasDepositWallet: false });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, depositWalletAddress: null, addresses: {} });
+    await app.close();
+  });
+
   it("requires an activated deposit wallet", async () => {
     const { app } = await buildFundsApp({ hasDepositWallet: false });
     const res = await app.inject({

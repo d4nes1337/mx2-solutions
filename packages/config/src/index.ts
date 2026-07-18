@@ -126,10 +126,11 @@ const EnvSchema = z.object({
   // login wallet only (destination is never client input). Cross-checked
   // below: requires the relayer stack.
   FEATURE_WALLET_WITHDRAW: boolFromEnv(false),
-  // Polymarket Bridge funding/withdrawals. Funding only generates per-user
-  // deposit addresses; withdrawals would move pUSD to a bridge address and must
-  // remain separately gated until the ledger/reconciliation slice is approved.
-  FEATURE_BRIDGE_FUNDING: boolFromEnv(false),
+  // Polymarket Bridge funding: generates per-user deposit addresses whose only
+  // possible destination is the user's own deposit wallet — no custody or spend
+  // risk — so it defaults ON (owner decision 2026-07-18, D-033). Withdrawals
+  // move pUSD out and stay separately gated + cross-checked below.
+  FEATURE_BRIDGE_FUNDING: boolFromEnv(true),
   FEATURE_BRIDGE_WITHDRAWALS: boolFromEnv(false),
 
   // Maker loop (RFC-0003): quote_loop creation + SHADOW quoting + cockpit UI.

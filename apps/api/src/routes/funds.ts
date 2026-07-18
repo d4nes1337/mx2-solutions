@@ -120,14 +120,37 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
     };
   });
 
+  /** Pure lookup of the caller's current internal deposit wallet. */
+  const findDepositWallet = async (
+    walletAddress: string,
+  ): Promise<
+    | { state: "no_wallet" }
+    | { state: "no_deposit_wallet" }
+    | { state: "ok"; depositWalletAddress: string; accountId: string }
+  > => {
+    const wallet = await deps.privyWallets.find(walletAddress);
+    if (!wallet) return { state: "no_wallet" };
+    const internal = (await deps.tradingAccounts.listByOwner(walletAddress)).find(
+      (account) =>
+        account.kind === "internal_privy" &&
+        account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
+        account.depositWalletAddress,
+    );
+    if (!internal?.depositWalletAddress) return { state: "no_deposit_wallet" };
+    return {
+      state: "ok",
+      depositWalletAddress: internal.depositWalletAddress,
+      accountId: internal.id,
+    };
+  };
+
   /** Resolve the caller's internal deposit wallet, or send the failure reply. */
   const resolveDepositWallet = async (
     req: FastifyRequest,
     reply: FastifyReply,
   ): Promise<{ depositWalletAddress: string; accountId: string } | null> => {
-    const user = req.user!;
-    const wallet = await deps.privyWallets.find(user.walletAddress);
-    if (!wallet) {
+    const found = await findDepositWallet(req.user!.walletAddress);
+    if (found.state === "no_wallet") {
       reply.code(400);
       void reply.send({
         error: "TRADING_WALLET_NOT_PROVISIONED",
@@ -135,13 +158,7 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
       });
       return null;
     }
-    const internal = (await deps.tradingAccounts.listByOwner(user.walletAddress)).find(
-      (account) =>
-        account.kind === "internal_privy" &&
-        account.signerAddress.toLowerCase() === wallet.embeddedAddress.toLowerCase() &&
-        account.depositWalletAddress,
-    );
-    if (!internal?.depositWalletAddress) {
+    if (found.state === "no_deposit_wallet") {
       reply.code(409);
       void reply.send({
         error: "DEPOSIT_WALLET_REQUIRED",
@@ -149,8 +166,34 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
       });
       return null;
     }
-    return { depositWalletAddress: internal.depositWalletAddress, accountId: internal.id };
+    return { depositWalletAddress: found.depositWalletAddress, accountId: found.accountId };
   };
+
+  // ── GET /api/funds/deposit-addresses — previously generated addresses ─────
+  // Reads our own store only (no Bridge call, no geoblock) so the sheet can
+  // render the address instantly on open; POST creates addresses the first
+  // time. Rows are scoped to the CURRENT deposit wallet: after a
+  // re-provision, stale addresses that would pay an old wallet never surface.
+  app.get(
+    "/api/funds/deposit-addresses",
+    { preHandler: requireAuth },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!ensureBridgeFundingEnabled(deps.config, reply)) return reply;
+      const user = req.user!;
+      const found = await findDepositWallet(user.walletAddress);
+      if (found.state !== "ok") return { ok: true, depositWalletAddress: null, addresses: {} };
+
+      const rows = (await deps.bridgeStore.listAddresses(user.walletAddress, "deposit")).filter(
+        (row) =>
+          row.depositWalletAddress.toLowerCase() === found.depositWalletAddress.toLowerCase(),
+      );
+      const addresses: Record<string, string> = {};
+      for (const row of rows) {
+        if (!(row.addressType in addresses)) addresses[row.addressType] = row.address;
+      }
+      return { ok: true, depositWalletAddress: found.depositWalletAddress, addresses };
+    },
+  );
 
   app.post(
     "/api/funds/deposit-addresses",

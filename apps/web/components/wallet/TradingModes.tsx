@@ -121,7 +121,7 @@ function nextCopy(account: TradingAccount | null, privyEnabled: boolean) {
   if (account.status === "needs_funding") {
     return {
       title: "Add funds",
-      body: "Top up with Polygon USDC.e today. Multi-chain Bridge funding is prepared behind a staging flag.",
+      body: "Top up with USDC, USDT, ETH, SOL, BTC and 200+ other assets from any major chain.",
       button: "Add funds",
     };
   }

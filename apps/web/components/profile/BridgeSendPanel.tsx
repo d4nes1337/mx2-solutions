@@ -1,15 +1,21 @@
 "use client";
 
 /**
- * In-app bridge funding: amount + live quote (fees/ETA/min received) and — on
- * EVM chains the app knows — a one-click chain-switch + ERC-20 transfer of the
- * selected asset to the generated bridge address. Non-EVM families keep the
- * copy-address flow; this panel still quotes them.
+ * In-app funding send: amount + live quote (fees/ETA/min received) and — on
+ * EVM chains the app knows — a one-click chain-switch + transfer of the
+ * selected asset (ERC-20 or native coin) to the generated bridge address.
+ * Non-EVM families keep the copy-address flow; this panel still quotes them.
+ *
+ * Free-route optimization: when the selection is USDC-on-Polygon and the
+ * connected wallet holds USDC.e, the send goes straight to the user's deposit
+ * wallet (Polymarket auto-converts USDC.e to pUSD) — zero bridge fees, no
+ * minimum — instead of through the bridge.
  */
 import { useEffect, useState } from "react";
 import {
   useAccount,
   useBalance,
+  useSendTransaction,
   useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
@@ -20,6 +26,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button, ErrorNote, Spinner } from "@/components/ui";
 import { useBridgeQuote } from "@/lib/queries";
 import { BRIDGE_SEND_CHAIN_IDS } from "@/lib/wagmi";
+import {
+  POLYGON_CHAIN_ID,
+  USDC_E_ADDRESS,
+  isNativePlaceholder,
+  isStableSymbol,
+} from "@/lib/funds-assets";
 import type { FundsAsset, FundsQuoteResponse } from "@/lib/types";
 
 const EXPLORERS: Record<string, string> = {
@@ -27,6 +39,8 @@ const EXPLORERS: Record<string, string> = {
   "8453": "https://basescan.org",
   "42161": "https://arbiscan.io",
   "1": "https://etherscan.io",
+  "10": "https://optimistic.etherscan.io",
+  "56": "https://bscscan.com",
 };
 
 const etaLabel = (ms: number | null): string | null => {
@@ -41,7 +55,7 @@ function QuoteCard({ quote }: { quote: FundsQuoteResponse }) {
       <div className="flex items-center justify-between">
         <span className="text-muted">You receive (est.)</span>
         <span className="tabular font-semibold text-fg">
-          {quote.estOutputUsd !== null ? `$${quote.estOutputUsd.toFixed(2)} pUSD` : "—"}
+          {quote.estOutputUsd !== null ? `$${quote.estOutputUsd.toFixed(2)}` : "—"}
         </span>
       </div>
       {quote.fees.totalImpactUsd !== null || quote.fees.gasUsd !== null ? (
@@ -74,9 +88,15 @@ function QuoteCard({ quote }: { quote: FundsQuoteResponse }) {
 export function BridgeSendPanel({
   asset,
   bridgeAddress,
+  directDepositWallet,
 }: {
   asset: FundsAsset;
   bridgeAddress: string;
+  /**
+   * Set when the selection is USDC-on-Polygon: the user's own deposit wallet.
+   * If the connected wallet holds USDC.e there, the send skips the bridge.
+   */
+  directDepositWallet?: string;
 }) {
   const { address, chainId } = useAccount();
   const { switchChain, isPending: isSwitching } = useSwitchChain();
@@ -88,32 +108,61 @@ export function BridgeSendPanel({
   const targetChainId = BRIDGE_SEND_CHAIN_IDS[asset.chainId];
   const sendable = asset.addressType === "evm" && targetChainId !== undefined && !!address;
   const onTargetChain = chainId === targetChainId;
+  const isNative = isNativePlaceholder(asset.token.address);
+
+  // Free-route check: USDC.e held by the connected wallet on Polygon.
+  const usdceBalance = useBalance({
+    address,
+    token: USDC_E_ADDRESS,
+    chainId: POLYGON_CHAIN_ID,
+    query: { enabled: !!address && !!directDepositWallet },
+  });
+  const useDirect =
+    !!directDepositWallet && !!usdceBalance.data && usdceBalance.data.value > 0n && sendable;
+
+  const sendToken = useDirect ? USDC_E_ADDRESS : (asset.token.address as `0x${string}`);
+  const sendDecimals = useDirect ? 6 : asset.token.decimals;
+  const recipient = (useDirect ? directDepositWallet : bridgeAddress) as `0x${string}`;
 
   const balance = useBalance({
     address,
-    token: asset.token.address as `0x${string}`,
-    chainId: targetChainId ?? 137,
+    token: isNative && !useDirect ? undefined : sendToken,
+    chainId: targetChainId ?? POLYGON_CHAIN_ID,
     query: { enabled: sendable },
   });
 
   const {
     writeContract,
-    data: txHash,
-    isPending: isSending,
-    reset: resetWrite,
+    data: erc20TxHash,
+    isPending: isSendingErc20,
+    reset: resetErc20,
   } = useWriteContract();
+  const {
+    sendTransaction,
+    data: nativeTxHash,
+    isPending: isSendingNative,
+    reset: resetNative,
+  } = useSendTransaction();
+  const txHash = erc20TxHash ?? nativeTxHash;
+  const isSending = isSendingErc20 || isSendingNative;
   const { isLoading: isConfirming, isSuccess: txConfirmed } = useWaitForTransactionReceipt({
     hash: txHash,
-    chainId: targetChainId ?? 137,
+    chainId: targetChainId ?? POLYGON_CHAIN_ID,
     query: { enabled: !!txHash },
   });
 
   const parsedAmount = Number(amount);
+  // Route minimums are USD. For volatile assets the raw amount is not USD, so
+  // trust the quote's USD estimate; for stables the raw amount is close enough.
+  const amountUsd =
+    quote.data?.estInputUsd ??
+    (isStableSymbol(asset.token.symbol) && Number.isFinite(parsedAmount) ? parsedAmount : null);
   const belowMin =
-    Number.isFinite(parsedAmount) && parsedAmount > 0 && parsedAmount < asset.minCheckoutUsd;
+    !useDirect && amountUsd !== null && amountUsd > 0 && amountUsd < asset.minCheckoutUsd;
 
-  // Debounced quote refresh as the amount changes.
+  // Debounced quote refresh as the amount changes (skipped on the free route).
   useEffect(() => {
+    if (useDirect) return;
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return;
     const t = setTimeout(() => {
       try {
@@ -128,37 +177,49 @@ export function BridgeSendPanel({
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amount, asset.id]);
+  }, [amount, asset.id, useDirect]);
 
   const handleSend = () => {
     if (!sendable || !amount) return;
     setTxError(null);
     let parsed: bigint;
     try {
-      parsed = parseUnits(amount, asset.token.decimals);
+      parsed = parseUnits(amount, sendDecimals);
     } catch {
       setTxError("Invalid amount");
       return;
     }
-    writeContract(
-      {
-        address: asset.token.address as `0x${string}`,
-        abi: erc20Abi,
-        functionName: "transfer",
-        args: [bridgeAddress as `0x${string}`, parsed],
-        chainId: targetChainId!,
+    const onDone = {
+      onError: (e: Error) => setTxError(e.message),
+      onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: ["bridge-deposits"] });
+        void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+        void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
       },
-      {
-        onError: (e) => setTxError(e.message),
-        onSuccess: () => void qc.invalidateQueries({ queryKey: ["bridge-deposits"] }),
-      },
-    );
+    };
+    if (isNative && !useDirect) {
+      sendTransaction({ to: recipient, value: parsed, chainId: targetChainId! }, onDone);
+    } else {
+      writeContract(
+        {
+          address: sendToken,
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [recipient, parsed],
+          chainId: targetChainId!,
+        },
+        onDone,
+      );
+    }
   };
 
   const balanceFormatted = balance.data
-    ? Number(formatUnits(balance.data.value, asset.token.decimals)).toFixed(2)
+    ? Number(formatUnits(balance.data.value, balance.data.decimals)).toFixed(
+        balance.data.decimals > 8 ? 4 : 2,
+      )
     : null;
   const explorer = EXPLORERS[asset.chainId];
+  const sendSymbol = useDirect ? "USDC.e" : asset.token.symbol;
 
   return (
     <div className="space-y-2">
@@ -167,9 +228,13 @@ export function BridgeSendPanel({
           type="number"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          placeholder={`Amount (${asset.token.symbol}, min $${asset.minCheckoutUsd.toFixed(0)})`}
+          placeholder={
+            useDirect
+              ? "Amount (USDC.e)"
+              : `Amount (${asset.token.symbol}, min $${asset.minCheckoutUsd.toFixed(0)})`
+          }
           min="0"
-          step="1"
+          step="any"
           className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
         />
         {sendable && balanceFormatted !== null ? (
@@ -184,18 +249,23 @@ export function BridgeSendPanel({
         ) : null}
       </div>
 
+      {useDirect ? (
+        <p className="text-[11px] text-muted">
+          Your USDC.e goes straight to your deposit wallet — no fees, no minimum, arrives 1:1.
+        </p>
+      ) : null}
       {belowMin ? (
         <ErrorNote message={`Minimum for this route is $${asset.minCheckoutUsd.toFixed(0)}.`} />
       ) : null}
-      {quote.isPending ? <Spinner label="Quoting…" /> : null}
-      {quote.data && !belowMin ? <QuoteCard quote={quote.data} /> : null}
+      {!useDirect && quote.isPending ? <Spinner label="Quoting…" /> : null}
+      {!useDirect && quote.data && !belowMin ? <QuoteCard quote={quote.data} /> : null}
 
       {sendable ? (
         txConfirmed ? (
           <div className="flex items-center gap-2 rounded-md border border-pos/30 bg-pos/10 px-3 py-2 text-sm text-pos">
             <Check size={14} />
             <span>
-              Sent — the bridge will convert it to pUSD.{" "}
+              Sent — it lands in your balance shortly.{" "}
               {txHash && explorer ? (
                 <a
                   href={`${explorer}/tx/${txHash}`}
@@ -210,7 +280,8 @@ export function BridgeSendPanel({
             <button
               type="button"
               onClick={() => {
-                resetWrite();
+                resetErc20();
+                resetNative();
                 setAmount("");
               }}
               className="ml-auto text-pos/60 hover:text-pos"
@@ -251,19 +322,14 @@ export function BridgeSendPanel({
             disabled={!amount || belowMin || isSending}
             onClick={handleSend}
           >
-            {isSending ? "Check your wallet…" : `Send ${asset.token.symbol} on ${asset.chainName}`}
+            {isSending ? "Check your wallet…" : `Send ${sendSymbol} on ${asset.chainName}`}
           </Button>
         )
-      ) : (
-        <p className="text-[11px] leading-snug text-muted">
-          Send from any wallet or exchange to the address above — the in-app send button covers
-          Polygon, Base, Arbitrum and Ethereum.
-        </p>
-      )}
+      ) : null}
 
       {sendable && balanceFormatted !== null ? (
         <p className="text-[10px] text-faint">
-          Connected wallet balance on {asset.chainName}: {balanceFormatted} {asset.token.symbol}
+          Connected wallet balance on {asset.chainName}: {balanceFormatted} {sendSymbol}
         </p>
       ) : null}
       {txError ? <ErrorNote message={txError} /> : null}

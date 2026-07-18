@@ -395,6 +395,13 @@ export interface FundsDepositAddressesResponse {
   addresses: Partial<Record<FundsAsset["addressType"], string>>;
 }
 
+/** GET /api/funds/deposit-addresses — previously generated addresses (may be empty). */
+export interface FundsSavedAddressesResponse {
+  ok: boolean;
+  depositWalletAddress: string | null;
+  addresses: Partial<Record<FundsAsset["addressType"], string>>;
+}
+
 /** POST /api/funds/quote — deposit-direction fee/ETA estimate. */
 export interface FundsQuoteResponse {
   quoteId: string | null;

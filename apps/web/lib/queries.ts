@@ -13,6 +13,7 @@ import type {
   BridgeDepositItem,
   FundsAssetsResponse,
   FundsDepositAddressesResponse,
+  FundsSavedAddressesResponse,
   FundsQuoteResponse,
   HomeFeedResponse,
   HistoryResponse,
@@ -420,9 +421,23 @@ export function useFundsAssets(enabled = true) {
   });
 }
 
+/** Saved bridge deposit addresses — reads our own store, never the Bridge. */
+export function useSavedDepositAddresses(enabled = true) {
+  return useQuery({
+    queryKey: ["bridge-deposit-addresses"],
+    queryFn: () => api.get<FundsSavedAddressesResponse>("/api/funds/deposit-addresses"),
+    enabled,
+    staleTime: 60 * 60_000, // addresses are stable per deposit wallet
+  });
+}
+
 export function useBridgeDepositAddresses() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.post<FundsDepositAddressesResponse>("/api/funds/deposit-addresses"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["bridge-deposit-addresses"] });
+    },
   });
 }
 

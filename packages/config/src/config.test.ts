@@ -12,7 +12,9 @@ describe("loadConfig", () => {
     expect(cfg.features.liveTrading).toBe(false);
     expect(cfg.features.conditionalLiveExecution).toBe(false);
     expect(cfg.features.relayer).toBe(false);
-    expect(cfg.features.bridgeFunding).toBe(false);
+    // Bridge FUNDING is not risk-bearing (addresses only deposit into the
+    // user's own wallet) and defaults ON; withdrawals move funds and stay off.
+    expect(cfg.features.bridgeFunding).toBe(true);
     expect(cfg.features.bridgeWithdrawals).toBe(false);
     expect(cfg.polymarket.clobBaseUrl).toContain("clob.polymarket.com");
     expect(cfg.polymarket.bridgeBaseUrl).toBe("https://bridge.polymarket.com");
@@ -21,6 +23,11 @@ describe("loadConfig", () => {
   it("parses boolean flags from strings", () => {
     const cfg = loadConfig({ ...base, FEATURE_LIVE_TRADING: "true" });
     expect(cfg.features.liveTrading).toBe(true);
+  });
+
+  it("lets an operator opt out of Bridge funding", () => {
+    const cfg = loadConfig({ ...base, FEATURE_BRIDGE_FUNDING: "false" });
+    expect(cfg.features.bridgeFunding).toBe(false);
   });
 
   it("fails closed if unattended conditional execution lacks its prerequisites", () => {
