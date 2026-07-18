@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { LogoMark } from "@/components/brand/LogoMark";
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
 import { AccountMenu } from "@/components/AccountMenu";
+import { HeaderWallet } from "@/components/HeaderWallet";
 import { HelpButton } from "@/components/onboarding/HelpButton";
 import { useFeatureFlags } from "@/lib/queries";
 import { cn } from "./ui";
@@ -77,6 +78,7 @@ export function Header() {
           </nav>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
+          <HeaderWallet />
           <HelpButton />
           <ThemeSwitcher />
           <AccountMenu />

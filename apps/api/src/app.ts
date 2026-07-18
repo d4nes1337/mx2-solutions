@@ -291,6 +291,7 @@ export const buildApp = (deps: AppDeps) => {
     auditStore: deps.auditStore,
     tradingAccounts,
     accountClobCredentials,
+    allowanceReader,
   });
   registerAdminRoutes(fastifyApp, {
     config: deps.config,

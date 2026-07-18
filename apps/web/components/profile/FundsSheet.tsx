@@ -47,6 +47,8 @@ import {
   searchAssets,
   symbolGroup,
 } from "@/lib/funds-assets";
+import { useChainTokenBalances } from "@/lib/use-chain-balances";
+import { ChainIcon } from "@/components/wallet/ChainIcon";
 import { BridgeSendPanel } from "./BridgeSendPanel";
 import type { FundsAsset } from "@/lib/types";
 
@@ -276,6 +278,18 @@ function TopUpPanel({
     : null;
   const activeGroup = customAsset ? symbolGroup(customAsset.token.symbol) : group;
   const chains = useMemo(() => chainsForGroup(assetRows, activeGroup), [assetRows, activeGroup]);
+  // Connected-wallet balances of this token per EVM chain — drives the
+  // "you have funds here" ordering + highlight, Polymarket-style.
+  const chainBalances = useChainTokenBalances(assetRows, activeGroup);
+  const orderedChains = useMemo(
+    () =>
+      [...chains].sort(
+        (a, b) =>
+          Number(Boolean(chainBalances[b.chainId]?.hasBalance)) -
+          Number(Boolean(chainBalances[a.chainId]?.hasBalance)),
+      ),
+    [chains, chainBalances],
+  );
   const selectedChain =
     (chainChoice ? chains.find((chain) => chain.chainId === chainChoice) : null) ??
     defaultChainFor(chains, connectedChainId);
@@ -395,21 +409,49 @@ function TopUpPanel({
         </div>
       ) : null}
 
-      {chains.length > 1 ? (
-        <label className="flex items-center gap-2 text-[11px] text-muted">
-          <span className="shrink-0">Network</span>
-          <select
-            value={selectedChain?.chainId ?? ""}
-            onChange={(e) => setChainChoice(e.target.value)}
-            className="flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent/50 focus:outline-none"
-          >
-            {chains.map((chain) => (
-              <option key={chain.chainId} value={chain.chainId}>
-                {chain.chainName}
-              </option>
-            ))}
-          </select>
-        </label>
+      {orderedChains.length > 1 ? (
+        <div>
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Network</div>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+            {orderedChains.map((chain) => {
+              const bal = chainBalances[chain.chainId];
+              const active = selectedChain?.chainId === chain.chainId;
+              return (
+                <button
+                  key={chain.chainId}
+                  type="button"
+                  onClick={() => {
+                    setChainChoice(chain.chainId);
+                    setCustomAssetId(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
+                    active
+                      ? "border-accent/60 bg-accent/10"
+                      : "border-border bg-surface-2 hover:border-border-strong",
+                  )}
+                >
+                  <ChainIcon
+                    chainId={chain.chainId}
+                    name={chain.chainName}
+                    size={20}
+                    className="shrink-0"
+                  />
+                  <span className="min-w-0 flex-1 leading-tight">
+                    <span className="block truncate text-[12px] font-medium text-fg">
+                      {chain.chainName}
+                    </span>
+                    {bal?.hasBalance ? (
+                      <span className="tabular block text-[10px] text-pos">
+                        {bal.label} {activeGroup}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
 
       {selectedAsset && bridgeAddress ? (
@@ -665,11 +707,11 @@ function DirectPolygonTopUp({ depositWalletAddress }: { depositWalletAddress: st
 // ── Withdraw (owner-only, relayer-executed, gasless) ────────────────────────
 
 /** EVM chains selectable as withdrawal destinations (login wallet address). */
-const WITHDRAW_CHAINS: { chainId: string; label: string; direct?: boolean }[] = [
-  { chainId: "137", label: "Polygon — direct, gasless", direct: true },
-  { chainId: "8453", label: "Base — via bridge" },
-  { chainId: "42161", label: "Arbitrum — via bridge" },
-  { chainId: "1", label: "Ethereum — via bridge" },
+const WITHDRAW_CHAINS: { chainId: string; name: string; note: string }[] = [
+  { chainId: "137", name: "Polygon", note: "direct · gasless" },
+  { chainId: "8453", name: "Base", note: "via bridge" },
+  { chainId: "42161", name: "Arbitrum", note: "via bridge" },
+  { chainId: "1", name: "Ethereum", note: "via bridge" },
 ];
 
 function WithdrawPanel({
@@ -705,8 +747,7 @@ function WithdrawPanel({
   const amountOk =
     Number.isFinite(parsed) && parsed >= 1 && (availableUsd === null || parsed <= availableUsd);
   const viaBridge = toChainId !== "137";
-  const chainLabel =
-    WITHDRAW_CHAINS.find((c) => c.chainId === toChainId)?.label.split(" — ")[0] ?? "Polygon";
+  const chainLabel = WITHDRAW_CHAINS.find((c) => c.chainId === toChainId)?.name ?? "Polygon";
 
   const submit = () => {
     withdraw.mutate(
@@ -744,23 +785,34 @@ function WithdrawPanel({
       </div>
 
       {bridgeEnabled ? (
-        <label className="block space-y-1 text-[11px] text-muted">
-          <span>Destination chain</span>
-          <select
-            value={toChainId}
-            onChange={(e) => {
-              setToChainId(e.target.value);
-              setConfirming(false);
-            }}
-            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg focus:border-accent/50 focus:outline-none"
-          >
-            {WITHDRAW_CHAINS.map((c) => (
-              <option key={c.chainId} value={c.chainId}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div>
+          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Arrives on</div>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            {WITHDRAW_CHAINS.map((c) => {
+              const active = toChainId === c.chainId;
+              return (
+                <button
+                  key={c.chainId}
+                  type="button"
+                  onClick={() => {
+                    setToChainId(c.chainId);
+                    setConfirming(false);
+                  }}
+                  className={cn(
+                    "flex flex-col items-center gap-1 rounded-md border px-2 py-2 text-center transition-colors",
+                    active
+                      ? "border-accent/60 bg-accent/10"
+                      : "border-border bg-surface-2 hover:border-border-strong",
+                  )}
+                >
+                  <ChainIcon chainId={c.chainId} name={c.name} size={22} />
+                  <span className="text-[12px] font-medium text-fg">{c.name}</span>
+                  <span className="text-[9px] text-muted">{c.note}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
 
       <div className="flex gap-2">

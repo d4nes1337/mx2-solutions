@@ -8,12 +8,16 @@ import type {
 } from "@mx2/db";
 import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
+import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { reconcileAndPersist } from "../trade/reconcile-status.js";
 
 export interface TradingAccountsRoutesDeps {
   sessions: SessionStore;
   auditStore: AuditStore;
   tradingAccounts: TradingAccountStore;
   accountClobCredentials: TradingAccountClobCredentialStore;
+  /** null when POLYGON_RPC_URL is unset — status then falls back to stored value. */
+  allowanceReader: AllowanceReader | null;
 }
 
 const toChecksum = (address: string): string => getAddress(address as `0x${string}`);
@@ -52,6 +56,15 @@ export const registerTradingAccountsRoutes = (
   ) => {
     const creds = await deps.accountClobCredentials.find(account.id);
     const credentialsReady = creds !== null;
+    // Reconcile internal accounts against on-chain reality (deposit wallet +
+    // pUSD balance) and persist forward promotions, so "needs activation"/
+    // "needs funding" reflect the truth instead of a stale stored snapshot.
+    const reconciledStatus = await reconcileAndPersist(
+      account,
+      deps.allowanceReader,
+      deps.tradingAccounts,
+    );
+    const effective = { ...account, status: reconciledStatus };
     return {
       id: account.id,
       kind: account.kind,
@@ -60,11 +73,12 @@ export const registerTradingAccountsRoutes = (
       funderAddress: account.funderAddress,
       signatureType: account.signatureType,
       signingMode: account.signingMode,
-      status: credentialsReady && account.status === "needs_credentials" ? "ready" : account.status,
+      status:
+        credentialsReady && reconciledStatus === "needs_credentials" ? "ready" : reconciledStatus,
       credentialsReady,
       isPrimary: account.isPrimary,
       depositWalletAddress: account.depositWalletAddress,
-      nextAction: nextAction(account, credentialsReady),
+      nextAction: nextAction(effective, credentialsReady),
       createdAt: account.createdAt.toISOString(),
       updatedAt: account.updatedAt.toISOString(),
     };

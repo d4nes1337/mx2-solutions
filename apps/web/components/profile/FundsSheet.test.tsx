@@ -167,6 +167,14 @@ describe("FundsSheet top-up (bridge-first)", () => {
     expect(screen.getByText(ADDRESSES.svm)).toBeInTheDocument();
   });
 
+  it("renders chain-logo buttons and switches network on click", () => {
+    render(sheet());
+    expect(screen.getByText("Deposit USDC on Ethereum")).toBeInTheDocument();
+    // Chain picker renders a labelled logo button per chain carrying the token.
+    fireEvent.click(screen.getByRole("button", { name: /Base logo Base/ }));
+    expect(screen.getByText("Deposit USDC on Base")).toBeInTheDocument();
+  });
+
   it("finds exotic routes through the More search (USDT on Tron)", () => {
     render(sheet());
     fireEvent.click(screen.getByRole("button", { name: "More ▾" }));

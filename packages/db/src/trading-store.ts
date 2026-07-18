@@ -109,6 +109,31 @@ export interface TradingAccountStore {
 
 const normalizeAddress = (address: string): string => address.toLowerCase();
 
+/**
+ * Progress ordering for internal (Privy) trading accounts. Re-provision runs on
+ * every login and is idempotent — it must NEVER walk an account backwards (the
+ * bug where a re-login reset an activated/funded wallet to `needs_deposit_wallet`
+ * and wiped its deposit address). `disabled` is a terminal opt-out that always wins.
+ */
+const INTERNAL_STATUS_RANK: Record<TradingAccountStatus, number> = {
+  disabled: -1,
+  needs_deposit_wallet: 0,
+  needs_funding: 1,
+  needs_delegation: 2,
+  needs_credentials: 3,
+  ready: 4,
+};
+
+/** Forward-only status resolution: keep the more-advanced of existing vs incoming. */
+export const resolveInternalStatus = (
+  existing: TradingAccountStatus,
+  incoming: TradingAccountStatus,
+): TradingAccountStatus => {
+  if (incoming === "disabled") return "disabled";
+  if (existing === "disabled") return "disabled";
+  return INTERNAL_STATUS_RANK[incoming] >= INTERNAL_STATUS_RANK[existing] ? incoming : existing;
+};
+
 const ensurePrimary = async (
   db: Database,
   ownerWalletAddress: string,
@@ -261,16 +286,24 @@ export const createTradingAccountStore = (db: Database): TradingAccountStore => 
     const funderAddress = depositWalletAddress;
     if (existing) {
       const wasArchived = existing.archivedAt !== null;
+      // Idempotent re-provision must not clobber progress: keep the existing
+      // deposit wallet when the caller omits one, and never regress status.
+      const resolvedDepositWallet = depositWalletAddress ?? existing.depositWalletAddress;
+      const resolvedFunder = depositWalletAddress ?? existing.funderAddress;
+      const resolvedStatus = resolveInternalStatus(
+        existing.status as TradingAccountStatus,
+        opts.status,
+      );
       const [row] = await db
         .update(tradingAccounts)
         .set({
           label: opts.label ?? existing.label,
-          funderAddress,
+          funderAddress: resolvedFunder,
           signatureType: 3,
-          signingMode: opts.status === "ready" ? "server" : "unavailable",
-          status: opts.status,
+          signingMode: resolvedStatus === "ready" ? "server" : "unavailable",
+          status: resolvedStatus,
           privyWalletId: opts.privyWalletId,
-          depositWalletAddress,
+          depositWalletAddress: resolvedDepositWallet,
           metadata: opts.metadata ?? existing.metadata,
           // Re-provisioning restores a soft-deleted account: the Privy wallet
           // (same address, same funds) still exists, so "Create" = un-archive.

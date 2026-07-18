@@ -4,6 +4,31 @@ _Last updated: 2026-07-18_
 
 ## Recent
 
+- **Deposit/withdrawal path polish + withdrawals enabled (built; D-034).** Fixed two wallet
+  lifecycle bugs by making status reflect on-chain truth instead of a stale snapshot:
+  (1) _activation wouldn't stick_ — every login's idempotent re-provision clobbered the
+  activated row (reset status to `needs_deposit_wallet`, nulled the deposit address); the
+  internal-account upsert is now non-destructive + forward-only (`resolveInternalStatus`), and
+  activation persists `needs_funding` immediately (the deposit wallet is counterfactual — usable
+  before the proxy mines). (2) _funded wallet still nagged_ — there was no `needs_funding→funded`
+  transition; a new `reconcileInternalStatus` reads the deposit-wallet pUSD balance on
+  `GET /api/trading-accounts` (via the injected `AllowanceReader`) and promotes forward,
+  persisting once. Funded wallets now read "Funded ✓ — deposit & withdraw ready" (no-popup
+  trading authorize is a separate, not-yet-built step). Header gained a pUSD balance pill +
+  Deposit button (`HeaderWallet`). Deposit + withdraw chain pickers are now Polymarket-style
+  logo buttons (`ChainIcon`, dependency-free SVGs) showing the connected wallet's per-chain
+  balance on EVM chains (`useChainTokenBalances`), funded chains sorted first. Withdrawals
+  enabled per owner: direct Polygon + cross-chain bridge — code defaults stay fail-closed,
+  turned on via env (`FEATURE_WALLET_WITHDRAW`/`FEATURE_BRIDGE_WITHDRAWALS`) on the
+  relayer-backed deployment; destination is always the login wallet (R-031). Tests: reconcile +
+  forward-only status units, ChainIcon, HeaderWallet, FundsSheet chain-picker smoke; browser-
+  verified both pickers (light + dark). **Real-money withdrawal must be validated with a
+  low-value transfer on the deployed env before broad use.**
+- **Bridge deposit fix (built).** `POST /deposit` field was `polymarketWalletAddress`; the live
+  Bridge requires `address` (400 `"address is required"` otherwise), and the response nests the
+  family map under `address` (singular) with a `tron` key normalized to `tvm`. Client + schema
+  corrected; contract locked by `client.test.ts`. Also fixed an infinite "Preparing your deposit
+  address…" spinner that masked the error.
 - **Bridge-first deposits by default (built; D-033).** `FEATURE_BRIDGE_FUNDING` now defaults
   ON (deposit-address generation only; withdrawals stay off + cross-checked) so every
   environment gets multi-chain top-ups without env changes. Funds sheet reworked token-first:

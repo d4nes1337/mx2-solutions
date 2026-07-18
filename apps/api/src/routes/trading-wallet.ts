@@ -274,7 +274,14 @@ export const registerTradingWalletRoutes = (
       }
 
       const ready = deployment.value.deployed || isDepositWalletConfirmed(deployment.value.state);
-      const status = ready ? "needs_funding" : "needs_deposit_wallet";
+      // The deposit wallet is counterfactual: its deterministic address can
+      // receive funds before the proxy is mined. Once activation has an address
+      // and the deploy tx is away, open funding immediately (needs_funding)
+      // instead of parking at needs_deposit_wallet until the tx confirms — that
+      // stale "activate again" state was one of the two activation bugs.
+      const status = deployment.value.depositWalletAddress
+        ? "needs_funding"
+        : "needs_deposit_wallet";
       const account = await deps.tradingAccounts.upsertInternalPrivy({
         ownerWalletAddress: user.walletAddress,
         signerAddress: wallet.embeddedAddress,
@@ -321,7 +328,7 @@ export const registerTradingWalletRoutes = (
           transactionId: deployment.value.transactionId,
           transactionHash: deployment.value.transactionHash,
         },
-        nextAction: ready ? "top_up" : "activate_deposit_wallet",
+        nextAction: account.status === "needs_funding" ? "top_up" : "activate_deposit_wallet",
       };
     },
   );

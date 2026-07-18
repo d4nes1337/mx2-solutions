@@ -11,10 +11,10 @@ import {
   Wallet,
   Zap,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useActivateDepositWallet,
   useArchiveTradingAccount,
-  useBootstrapAllowances,
   useSetPrimaryTradingAccount,
   useTradingWallet,
 } from "@/lib/queries";
@@ -74,10 +74,11 @@ function StatusBadge({ account }: { account: TradingAccount }) {
         Needs funding
       </Badge>
     );
-  if (s === "needs_delegation")
+  // Funded: deposit/withdraw work; no-popup trading authorize is optional.
+  if (s === "needs_delegation" || s === "needs_credentials")
     return (
-      <Badge tone="warn" dot>
-        Needs delegation
+      <Badge tone="pos" dot>
+        Funded
       </Badge>
     );
   if (s === "ready")
@@ -111,9 +112,9 @@ export function WalletCard({
 }: WalletCardProps) {
   const setPrimary = useSetPrimaryTradingAccount();
   const activateDeposit = useActivateDepositWallet();
-  const bootstrap = useBootstrapAllowances();
   const archive = useArchiveTradingAccount();
   const walletStatus = useTradingWallet(true);
+  const qc = useQueryClient();
 
   const [topUpOpen, setTopUpOpen] = useState(autoOpenTopUp);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -123,8 +124,7 @@ export function WalletCard({
 
   const isPrivy = account.kind === "internal_privy";
   const isLoginWallet = account.signerAddress.toLowerCase() === loginAddress.toLowerCase();
-  const isBusy =
-    setPrimary.isPending || activateDeposit.isPending || bootstrap.isPending || archive.isPending;
+  const isBusy = setPrimary.isPending || activateDeposit.isPending || archive.isPending;
 
   const handleActivate = () => {
     activateDeposit.mutate(undefined, {
@@ -134,19 +134,16 @@ export function WalletCard({
     });
   };
 
-  const handleBootstrap = () => {
-    bootstrap.mutate(undefined, {
-      onError: (e) => {
-        console.error("Bootstrap failed", e);
-      },
-    });
+  // Re-read the account — status reconciles against the on-chain pUSD balance
+  // server-side, so a just-arrived deposit clears the "needs funding" prompt.
+  const handleCheckFunds = () => {
+    void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+    void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
   };
 
   const activateError = activateDeposit.isError
     ? ((activateDeposit.error as Error)?.message ?? "Activation failed")
-    : null;
-  const bootstrapError = bootstrap.isError
-    ? ((bootstrap.error as Error)?.message ?? "Bootstrap failed")
     : null;
 
   return (
@@ -264,11 +261,10 @@ export function WalletCard({
             </Button>
           )}
 
-          {/* Privy: bootstrap (after funding, if status still needs_funding) */}
+          {/* Privy: re-check for an arrived deposit (status reconciles on read) */}
           {isPrivy && account.status === "needs_funding" && depositWalletAddress && (
-            <Button size="sm" variant="outline" disabled={isBusy} onClick={handleBootstrap}>
-              {bootstrap.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
-              Check & activate trading
+            <Button size="sm" variant="outline" disabled={isBusy} onClick={handleCheckFunds}>
+              Check funds
             </Button>
           )}
           {/* Spacer so remove sits on the right */}
@@ -316,7 +312,6 @@ export function WalletCard({
 
         {/* Errors */}
         {activateError && <p className="mt-2 text-[12px] text-neg">{activateError}</p>}
-        {bootstrapError && <p className="mt-2 text-[12px] text-neg">{bootstrapError}</p>}
       </div>
 
       {isPrivy && depositWalletAddress && (

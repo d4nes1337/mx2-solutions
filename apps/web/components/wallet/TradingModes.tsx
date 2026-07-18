@@ -1,12 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Coins, Loader2, ShieldCheck, Wallet, Zap } from "lucide-react";
-import {
-  useActivateDepositWallet,
-  useBootstrapAllowances,
-  useProvisionTradingWallet,
-} from "@/lib/queries";
+import { Check, Coins, Loader2, RefreshCcw, ShieldCheck, Wallet, Zap } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useActivateDepositWallet, useProvisionTradingWallet } from "@/lib/queries";
 import type { TradingAccount } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "@/components/ui";
 import { FundsSheet } from "@/components/profile/FundsSheet";
@@ -127,9 +124,9 @@ function nextCopy(account: TradingAccount | null, privyEnabled: boolean) {
   }
   if (account.status === "needs_delegation" || account.status === "needs_credentials") {
     return {
-      title: "Authorize trading",
-      body: "Finish the trading permissions so orders can be prepared without extra wallet popups.",
-      button: "Check funds and activate",
+      title: "Your trading wallet is funded",
+      body: "You can add more anytime, or withdraw to your login wallet. Enabling no-popup trading is an optional next step.",
+      button: "Add funds",
     };
   }
   if (account.status === "ready") {
@@ -155,17 +152,28 @@ export function TradingSetupPanel({
 }) {
   const provisionWallet = useProvisionTradingWallet();
   const activateDeposit = useActivateDepositWallet();
-  const bootstrap = useBootstrapAllowances();
+  const qc = useQueryClient();
   const [fundsOpen, setFundsOpen] = useState(false);
   const copy = nextCopy(account, privyEnabled);
 
-  const busy = provisionWallet.isPending || activateDeposit.isPending || bootstrap.isPending;
+  const busy = provisionWallet.isPending || activateDeposit.isPending;
   const canOpenFunds = Boolean(account?.depositWalletAddress);
+  const funded =
+    account?.status === "ready" ||
+    account?.status === "needs_delegation" ||
+    account?.status === "needs_credentials";
   const mainError =
     (provisionWallet.error as Error | null)?.message ??
     (activateDeposit.error as Error | null)?.message ??
-    (bootstrap.error as Error | null)?.message ??
     null;
+
+  // "Check funds" just re-reads the account, which reconciles status against the
+  // on-chain pUSD balance server-side — no allowance bootstrap needed to deposit.
+  const checkFunds = () => {
+    void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+    void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+    void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
+  };
 
   const runPrimary = () => {
     if (!privyEnabled) return;
@@ -177,12 +185,15 @@ export function TradingSetupPanel({
       activateDeposit.mutate();
       return;
     }
-    if (account.status === "needs_funding" || account.status === "ready") {
+    if (
+      account.status === "needs_funding" ||
+      account.status === "ready" ||
+      account.status === "needs_delegation" ||
+      account.status === "needs_credentials"
+    ) {
+      // Funded and beyond: the primary action is just adding more funds — no
+      // blocking "authorize" nag (deposit/withdraw already work).
       setFundsOpen(true);
-      return;
-    }
-    if (account.status === "needs_delegation" || account.status === "needs_credentials") {
-      bootstrap.mutate();
     }
   };
 
@@ -192,8 +203,12 @@ export function TradingSetupPanel({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={account?.status === "ready" ? "pos" : "accent"} dot>
-                {account?.status === "ready" ? "Trading enabled" : "Trading setup"}
+              <Badge tone={funded ? "pos" : "accent"} dot>
+                {account?.status === "ready"
+                  ? "Trading enabled"
+                  : funded
+                    ? "Funded"
+                    : "Trading setup"}
               </Badge>
               {account?.depositWalletAddress ? (
                 <span className="font-mono text-[11px] text-muted">
@@ -212,7 +227,7 @@ export function TradingSetupPanel({
             {copy.button ? (
               <Button
                 type="button"
-                variant={account?.status === "ready" ? "outline" : "primary"}
+                variant={funded ? "outline" : "primary"}
                 disabled={busy || (copy.button === "Add funds" && !canOpenFunds)}
                 onClick={runPrimary}
               >
@@ -225,14 +240,8 @@ export function TradingSetupPanel({
               </Button>
             ) : null}
             {account?.status === "needs_funding" && canOpenFunds ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={bootstrap.isPending}
-                onClick={() => bootstrap.mutate()}
-              >
-                <ShieldCheck size={12} aria-hidden />
+              <Button type="button" size="sm" variant="ghost" onClick={checkFunds}>
+                <RefreshCcw size={12} aria-hidden />
                 Check funds
               </Button>
             ) : null}

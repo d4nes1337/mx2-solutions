@@ -336,7 +336,12 @@ export function useActivateDepositWallet() {
     mutationFn: () =>
       api.post<TradingWalletActivationResponse>("/api/trading-wallet/activate-deposit-wallet"),
     onSuccess: () => {
+      // Activation changes both the account status and the wallet snapshot —
+      // refresh every wallet view so the card doesn't lag a poll cycle behind.
       void qc.invalidateQueries({ queryKey: ["trading-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-health"] });
+      void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
     },
   });
 }
