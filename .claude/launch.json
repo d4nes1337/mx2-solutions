@@ -15,6 +15,15 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@mx2/web", "dev"],
       "port": 3000
+    },
+    {
+      "name": "web-funds-demo",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "NEXT_PUBLIC_FUNDS_DEMO=1 pnpm --filter @mx2/web dev"
+      ],
+      "port": 3000
     }
   ]
 }

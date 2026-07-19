@@ -33,6 +33,7 @@ const sessions: SessionStore = {
     userWallet: WALLET,
     tokenHash: "h",
     expiresAt: new Date(Date.now() + 1_000_000),
+    scope: null,
     createdAt: new Date(),
     revokedAt: null,
   }),
@@ -124,6 +125,7 @@ const makeBridgeStore = (): BridgeStore & { addresses: BridgeAddressRow[] } => {
     listAddresses: async (w, kind) =>
       addresses.filter((a) => a.walletAddress === w && (!kind || a.kind === kind)),
     listPollableAddresses: async () => [],
+    listActivePollableAddresses: async () => [],
     markAddressChecked: async () => {},
     upsertDepositsFromStatus: async (address, transactions) => {
       const changed: { row: never; previousState: string | null }[] = [];
@@ -170,6 +172,8 @@ const makeBridgeStore = (): BridgeStore & { addresses: BridgeAddressRow[] } => {
     listWithdrawalsByWallet: async () => [],
     updateWithdrawalState: async () => null,
     updateWithdrawalsFromStatus: async () => ({ changed: [] }),
+    advanceWithdrawalState: async () => null,
+    listWithdrawalsByStates: async () => [],
   };
 };
 
@@ -386,6 +390,51 @@ describe("deposit addresses + tracked deposits", () => {
       headers: { cookie: COOKIE },
     });
     expect(third.json().deposits[0].state).toBe("completed");
+    await app.close();
+  });
+
+  it("refresh=1 hits the Bridge at most once per address per interval", async () => {
+    const bridgeStore = makeBridgeStore();
+    // This store variant actually stamps lastCheckedAt (the shared fake
+    // no-ops it so older tests can refresh back-to-back).
+    bridgeStore.markAddressChecked = async (id: string) => {
+      const row = bridgeStore.addresses.find((a) => a.id === id);
+      if (row) row.lastCheckedAt = new Date();
+    };
+    let statusCalls = 0;
+    const bridgeClient = makeBridgeClient({
+      getStatus: async () => {
+        statusCalls += 1;
+        return ok({ transactions: [] });
+      },
+    });
+    const { app } = await buildFundsApp({ bridgeClient, bridgeStore });
+    await app.inject({
+      method: "POST",
+      url: "/api/funds/deposit-addresses",
+      headers: { cookie: COOKIE },
+    });
+
+    await app.inject({
+      method: "GET",
+      url: "/api/funds/deposits?refresh=1",
+      headers: { cookie: COOKIE },
+    });
+    await app.inject({
+      method: "GET",
+      url: "/api/funds/deposits?refresh=1",
+      headers: { cookie: COOKIE },
+    });
+    expect(statusCalls).toBe(1); // second call inside the interval skipped
+
+    // Address becomes stale again → next refresh hits the Bridge.
+    bridgeStore.addresses[0]!.lastCheckedAt = new Date(Date.now() - 10_000);
+    await app.inject({
+      method: "GET",
+      url: "/api/funds/deposits?refresh=1",
+      headers: { cookie: COOKIE },
+    });
+    expect(statusCalls).toBe(2);
     await app.close();
   });
 

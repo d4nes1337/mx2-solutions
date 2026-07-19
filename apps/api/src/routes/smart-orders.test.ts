@@ -222,6 +222,7 @@ const buildSmartOrdersApp = (opts: {
       userWallet: WALLET,
       tokenHash: "h",
       expiresAt: new Date(Date.now() + 1_000_000),
+      scope: null,
       createdAt: new Date(),
       revokedAt: null,
     }),
@@ -324,7 +325,7 @@ const buildSmartOrdersApp = (opts: {
         (opts.orders ?? []).filter(
           (o) => (o.metadata as Record<string, unknown> | null)?.["ruleId"] === ruleId,
         ),
-      updateFillState: async () => {},
+      updateFillState: async () => true,
     } satisfies OrderIntentStore,
     flags: {
       get: async () => null,
@@ -929,6 +930,22 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     expect(body.orders).toHaveLength(1);
     expect(body.orders[0].filledSize).toBe("10");
     expect(body.orders[0].avgFillPrice).toBe("0.405");
+    await app.close();
+  });
+
+  it("never surfaces another wallet's intent, even when a trigger links it", async () => {
+    const { app } = buildSmartOrdersApp({
+      triggers: [trigger("rule-1", { orderIntentId: "intent-foreign" })],
+      orders: [order({ id: "intent-foreign", walletAddress: "0xsomeoneelse", metadata: {} })],
+    });
+    const id = await createStrategy(app);
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/smart-orders/${id}/timeline`,
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().orders).toHaveLength(0);
     await app.close();
   });
 

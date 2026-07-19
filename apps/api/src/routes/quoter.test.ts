@@ -41,6 +41,7 @@ const sessRow = (): SessionRow => ({
   userWallet: WALLET,
   tokenHash: "hash",
   expiresAt: new Date(Date.now() + 1_000_000),
+  scope: null,
   createdAt: new Date(),
   revokedAt: null,
 });

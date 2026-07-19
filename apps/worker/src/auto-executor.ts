@@ -2,6 +2,7 @@ import type { AppConfig } from "@mx2/config";
 import type { Logger } from "@mx2/observability";
 import type {
   AuditStore,
+  NotificationOutboxStore,
   RuleStore,
   TriggerStore,
   OrderIntentStore,
@@ -75,6 +76,9 @@ export interface AutoExecutorDeps {
    * configured). W4: reads the deposit wallet's pUSD (INTEGRATION §23).
    */
   balanceOfUsdc?: ((owner: string) => Promise<number>) | null;
+  /** Notification outbox (FEATURE_NOTIFICATIONS): informational "auto-executed"
+   * messages — deliberately without a sign link (nothing left to sign). */
+  outbox?: NotificationOutboxStore;
 }
 
 export interface AutoExecuteInput {
@@ -397,6 +401,27 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
         { ruleId: rule.id, triggerId, intentId: intent.id, clobOrderId },
         "Auto-execution order submitted (POLY_1271 deposit-wallet path)",
       );
+      if (deps.outbox) {
+        await deps.outbox
+          .enqueue({
+            walletAddress: wallet,
+            kind: "order_auto_executed",
+            dedupeKey: `trigger:${triggerId}:auto`,
+            payload: {
+              triggerId,
+              ruleId: rule.id,
+              ruleName: null,
+              side: action.side,
+              price: action.price,
+              size: action.size,
+              orderType: action.orderType,
+              intentId: intent.id,
+            },
+          })
+          .catch((e: unknown) =>
+            deps.logger.warn({ err: e, triggerId }, "auto-exec notification enqueue failed"),
+          );
+      }
     },
   };
 };

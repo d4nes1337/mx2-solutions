@@ -1,5 +1,11 @@
 import type { Logger } from "@mx2/observability";
-import type { AuditStore, RuleStore, TriggerStore, ConditionalRuleRow } from "@mx2/db";
+import type {
+  AuditStore,
+  NotificationOutboxStore,
+  RuleStore,
+  TriggerStore,
+  ConditionalRuleRow,
+} from "@mx2/db";
 import {
   conditionLeaves,
   isTerminal,
@@ -90,6 +96,12 @@ export interface RuleEvaluatorOptions {
    * absent (the default), every rule degrades to manual confirmation.
    */
   autoExecutor?: AutoExecutor;
+  /**
+   * Notification outbox (FEATURE_NOTIFICATIONS). When present, alert triggers
+   * and orders parked at awaiting_user enqueue an external notification —
+   * idempotent by dedupe key, so a re-evaluated trigger never double-notifies.
+   */
+  outbox?: NotificationOutboxStore;
   /** How often to reconcile the active rule set from the DB. Default 5 s. */
   reloadIntervalMs?: number;
   /** How often to tick rules for staleness / window completion. Default 1 s. */
@@ -117,6 +129,8 @@ export interface RuleEvaluatorOptions {
 interface ActiveRule {
   readonly id: string;
   readonly walletAddress: string;
+  /** User-facing strategy name (v2 rows; null for legacy v1). */
+  readonly name: string | null;
   /** Primary token (order market for v2; the single token for v1 rows). */
   readonly tokenId: string;
   /** Every token the strategy references — its subscription set. */
@@ -132,8 +146,16 @@ interface ActiveRule {
 }
 
 export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEvaluatorManager => {
-  const { logger, ruleStore, triggerStore, auditStore, subscribe, unsubscribe, autoExecutor } =
-    opts;
+  const {
+    logger,
+    ruleStore,
+    triggerStore,
+    auditStore,
+    subscribe,
+    unsubscribe,
+    autoExecutor,
+    outbox,
+  } = opts;
   const reloadIntervalMs = opts.reloadIntervalMs ?? 5_000;
   const tickIntervalMs = opts.tickIntervalMs ?? 1_000;
   const refreshIntervalMs = opts.refreshIntervalMs ?? 10_000;
@@ -211,6 +233,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     rules.set(row.id, {
       id: row.id,
       walletAddress: row.walletAddress,
+      name: row.name,
       tokenId: row.tokenId,
       tokens,
       moveTokens,
@@ -331,6 +354,47 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
             bestBid: result.trigger.bestBid,
           },
         });
+
+        // External notification (FEATURE_NOTIFICATIONS). Idempotent by dedupe
+        // key; failures never block the trigger — the row already exists and
+        // the in-app surface still shows it.
+        if (outbox && (action.kind === "alert" || (action.kind === "order" && !isAuto))) {
+          try {
+            if (action.kind === "alert") {
+              await outbox.enqueue({
+                walletAddress: ar.walletAddress,
+                kind: "rule_alert",
+                dedupeKey: `trigger:${trig.id}:alert`,
+                payload: {
+                  triggerId: trig.id,
+                  ruleId: ar.id,
+                  ruleName: ar.name,
+                  bestBid: result.trigger.bestBid ?? null,
+                  bestAsk: result.trigger.bestAsk ?? null,
+                },
+              });
+            } else {
+              await outbox.enqueue({
+                walletAddress: ar.walletAddress,
+                kind: "order_awaiting_signature",
+                dedupeKey: `trigger:${trig.id}:sign`,
+                payload: {
+                  triggerId: trig.id,
+                  ruleId: ar.id,
+                  ruleName: ar.name,
+                  side: action.side,
+                  price: action.price,
+                  size: action.size,
+                  orderType: action.orderType,
+                  bestBid: result.trigger.bestBid ?? null,
+                  bestAsk: result.trigger.bestAsk ?? null,
+                },
+              });
+            }
+          } catch (e) {
+            logger.warn({ err: e, triggerId: trig.id }, "notification enqueue failed");
+          }
+        }
 
         if (action.kind === "stop_strategy") {
           // The strategy's whole purpose is stopping another one — do it now,

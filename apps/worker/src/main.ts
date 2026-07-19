@@ -14,6 +14,11 @@ import {
   createClobCredentialStore,
   createTradingAccountStore,
   createTradingAccountClobCredentialStore,
+  createNotificationChannelStore,
+  createNotificationOutboxStore,
+  createLinkCodeStore,
+  createSignLinkTokenStore,
+  type NotificationOutboxStore,
 } from "@mx2/db";
 import {
   createAuthenticatedClobClient,
@@ -32,6 +37,13 @@ import { createQuoterManager, type QuoterManager } from "./quoter/manager.js";
 import { createLiveCapableProvider } from "./quoter/executor-provider.js";
 import { createRewardsPoller, type RewardsPoller } from "./quoter/rewards-poller.js";
 import { createQuoterStore } from "@mx2/db";
+import { createTelegramApi } from "./telegram/api.js";
+import { createDiscordApi } from "./discord/api.js";
+import { createTelegramBot, type TelegramBot } from "./telegram-bot.js";
+import {
+  createNotificationDispatcher,
+  type NotificationDispatcher,
+} from "./notification-dispatcher.js";
 
 /**
  * Long-running worker process. Hosts the Polymarket WebSocket ingestion and the
@@ -57,6 +69,13 @@ const main = async (): Promise<void> => {
   );
 
   const marketSnapshots = createMarketSnapshotStore(dbHandle.db);
+
+  // Notification outbox — producers (evaluator, auto-executor, order-sync,
+  // bridge poller) enqueue; the dispatcher below delivers. Absent when the
+  // master flag is off: nothing is ever enqueued.
+  const outbox: NotificationOutboxStore | undefined = config.features.notifications
+    ? createNotificationOutboxStore(dbHandle.db)
+    : undefined;
 
   // The evaluator drives WS subscriptions for the tokens its rules watch, while
   // the feed pushes normalized book/reconnect/tick-size events back to it. They
@@ -115,6 +134,7 @@ const main = async (): Promise<void> => {
               return async (owner: string) => Number(await readBalance(owner)) / 1e6;
             })()
           : null,
+        ...(outbox ? { outbox } : {}),
       });
       logger.warn(
         "FEATURE_CONDITIONAL_LIVE_EXECUTION is ON — auto rules will submit real orders unattended",
@@ -139,6 +159,7 @@ const main = async (): Promise<void> => {
       },
       isFeedConnected: () => feedRef.current?.state() === "connected",
       ...(autoExecutor ? { autoExecutor } : {}),
+      ...(outbox ? { outbox } : {}),
     });
   } else {
     logger.warn("FEATURE_CONDITIONAL_RULES is off — rule evaluator disabled");
@@ -262,15 +283,61 @@ const main = async (): Promise<void> => {
         baseUrl: config.polymarket.clobBaseUrl,
       }),
       auditStore: createAuditStore(dbHandle.db),
+      ...(outbox ? { outbox } : {}),
     });
   } else {
     logger.warn("No encryption master key — order fill sync disabled");
   }
 
   // Bridge status polling (deposits + withdrawal legs) — read-only against
-  // the Bridge, so it needs no signing/relayer prerequisites.
+  // the Bridge, so it needs no signing/relayer prerequisites. When bridge
+  // withdrawals are on (config already requires the relayer stack for that
+  // flag), the poller additionally polls the relayer for Polygon-leg
+  // confirmations — reads only, but the SDK factory needs the signer bridge.
   let bridgePoller: BridgePoller | null = null;
   if (config.features.bridgeFunding || config.features.bridgeWithdrawals) {
+    let withdrawalLegDeps = {};
+    if (config.features.bridgeWithdrawals) {
+      const pollerSigner = createConfiguredTradingSigner({
+        enabled: config.features.privySigning,
+        isProduction: config.env === "production",
+        mockSignerPrivateKey: config.mockSignerPrivateKey,
+        privy:
+          config.privy.appId && config.privy.appSecret && config.privy.authorizationKey
+            ? {
+                appId: config.privy.appId,
+                appSecret: config.privy.appSecret,
+                authorizationPrivateKey: config.privy.authorizationKey,
+                keyQuorumId: config.privy.keyQuorumId,
+                tradingPolicyId: config.privy.tradingPolicyId,
+                rpcUrl: config.polygonRpcUrl,
+              }
+            : undefined,
+      });
+      withdrawalLegDeps = {
+        privyWallets: createPrivyWalletStore(dbHandle.db),
+        depositWalletRelayer: createConfiguredDepositWalletRelayer({
+          enabled: config.features.relayer,
+          relayerUrl: config.polymarket.relayer.url,
+          builderApiKey: config.polymarket.relayer.builderApiKey,
+          builderSecret: config.polymarket.relayer.builderSecret,
+          builderPassphrase: config.polymarket.relayer.builderPassphrase,
+          chainId: config.polymarket.chainId,
+          polygonRpcUrl: config.polygonRpcUrl,
+          signTypedData: async (owner, typedData) => {
+            if (!owner.ownerWalletId) {
+              throw new Error("Deposit-wallet relayer requires a provisioned Privy wallet id.");
+            }
+            const signed = await pollerSigner.signOrder({
+              wallet: { walletId: owner.ownerWalletId, address: owner.ownerAddress },
+              typedData,
+            });
+            if (!signed.ok) throw new Error(signed.error.message);
+            return signed.value.signature;
+          },
+        }),
+      };
+    }
     bridgePoller = createBridgePoller({
       logger,
       bridgeStore: createBridgeStore(dbHandle.db),
@@ -279,6 +346,56 @@ const main = async (): Promise<void> => {
         builderCode: config.polymarket.builderCode,
       }),
       auditStore: createAuditStore(dbHandle.db),
+      ...withdrawalLegDeps,
+      ...(outbox ? { outbox } : {}),
+    });
+  }
+
+  // External delivery: Telegram inbound bot loop + the channel-agnostic
+  // dispatcher (Telegram messages, Discord DMs). Config load already
+  // fail-closed each flag without its credentials — assertions just narrow.
+  let telegramBot: TelegramBot | null = null;
+  let notificationDispatcher: NotificationDispatcher | null = null;
+  if (outbox && (config.features.telegramBot || config.features.discordBot)) {
+    const channels = createNotificationChannelStore(dbHandle.db);
+    const signTokens = createSignLinkTokenStore(dbHandle.db);
+    const notifAudit = createAuditStore(dbHandle.db);
+
+    let telegramApi: ReturnType<typeof createTelegramApi> | undefined;
+    if (config.features.telegramBot) {
+      const botToken = config.notifications.telegramBotToken;
+      if (!botToken) throw new Error("FEATURE_TELEGRAM_BOT requires TELEGRAM_BOT_TOKEN");
+      telegramApi = createTelegramApi({ botToken });
+      telegramBot = createTelegramBot({
+        logger,
+        api: telegramApi,
+        channels,
+        linkCodes: createLinkCodeStore(dbHandle.db),
+        triggerStore: createTriggerStore(dbHandle.db),
+        signTokens,
+        auditStore: notifAudit,
+        appBaseUrl: config.baseUrl,
+        miniapp: config.features.telegramMiniapp,
+      });
+      logger.info("FEATURE_TELEGRAM_BOT is ON — bot long-poll enabled");
+    }
+
+    const discordApi =
+      config.features.discordBot && config.notifications.discordBotToken
+        ? createDiscordApi({ botToken: config.notifications.discordBotToken })
+        : undefined;
+    if (discordApi) logger.info("FEATURE_DISCORD_BOT is ON — DM delivery enabled");
+
+    notificationDispatcher = createNotificationDispatcher({
+      logger,
+      ...(telegramApi ? { api: telegramApi } : {}),
+      ...(discordApi ? { discordApi } : {}),
+      outbox,
+      channels,
+      signTokens,
+      auditStore: notifAudit,
+      appBaseUrl: config.baseUrl,
+      miniapp: config.features.telegramMiniapp,
     });
   }
 
@@ -287,6 +404,8 @@ const main = async (): Promise<void> => {
   rewardsPoller?.start();
   orderSync?.start();
   bridgePoller?.start();
+  telegramBot?.start();
+  notificationDispatcher?.start();
 
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
@@ -300,6 +419,8 @@ const main = async (): Promise<void> => {
     rewardsPoller?.stop();
     orderSync?.stop();
     bridgePoller?.stop();
+    telegramBot?.stop();
+    notificationDispatcher?.stop();
     marketFeed.close();
     await dbHandle.close();
     process.exit(0);

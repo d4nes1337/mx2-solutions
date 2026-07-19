@@ -104,11 +104,12 @@ const makeHarness = (
       },
     ) => {
       const row = intents.find((i) => i.id === id);
-      if (!row || !IN_FLIGHT.has(row.status)) return; // CAS: never regress terminal
+      if (!row || !IN_FLIGHT.has(row.status)) return false; // CAS: never regress terminal
       row.lastSyncedAt = update.lastSyncedAt;
       if (update.status !== undefined) row.status = update.status;
       if (update.filledSize !== undefined) row.filledSize = update.filledSize;
       if (update.avgFillPrice !== undefined) row.avgFillPrice = update.avgFillPrice;
+      return true;
     },
   } as unknown as OrderIntentStore;
 
@@ -228,11 +229,53 @@ describe("order-sync loop", () => {
     expect(h.audits).toHaveLength(0);
   });
 
-  it("skips the whole account when getOpenOrders fails", async () => {
+  it("stamps but never resolves intents when getOpenOrders fails (no starvation)", async () => {
     const h = makeHarness([makeIntent()], { open: "error" });
     await h.loop.runOnce();
     expect(h.intents[0]!.status).toBe("submitted");
-    expect(h.intents[0]!.lastSyncedAt).toBeNull();
+    // Stamped so a persistently broken account rotates to the back of the
+    // queue instead of starving other accounts' batch slots forever.
+    expect(h.intents[0]!.lastSyncedAt).not.toBeNull();
+    expect(h.audits).toHaveLength(0);
+  });
+
+  it("ignores settlement-FAILED trades when attributing fills", async () => {
+    // One CONFIRMED fill of 4 + one FAILED 'fill' of 6: the failed one never
+    // settled, so the order resolves as partially-filled-then-cancelled, NOT
+    // filled — reporting a position the user doesn't hold is the worse error.
+    const failed = { ...makerFill("6", "0.41"), id: "trade-failed", status: "FAILED" };
+    const h = makeHarness([makeIntent({ status: "acknowledged" })], {
+      open: [],
+      trades: [makerFill("4", "0.41"), failed],
+    });
+    await h.loop.runOnce();
+    expect(h.intents[0]!.status).toBe("cancelled");
+    expect(h.intents[0]!.filledSize).toBe("4");
+  });
+
+  it("uses the maker_orders breakdown for taker fills (weighted avg across levels)", async () => {
+    const takerTrade: UserTrade = {
+      id: "trade-taker",
+      taker_order_id: "clob-1",
+      market: "cond-1",
+      asset_id: TOKEN,
+      side: "BUY",
+      size: "10",
+      price: "0.42", // top-level price is NOT the weighted cost
+      status: "CONFIRMED",
+      match_time: "1700000000",
+      maker_orders: [
+        { order_id: "other-1", matched_amount: "6", price: "0.41" },
+        { order_id: "other-2", matched_amount: "4", price: "0.44" },
+      ],
+    };
+    const h = makeHarness([makeIntent({ status: "acknowledged" })], {
+      open: [],
+      trades: [takerTrade],
+    });
+    await h.loop.runOnce();
+    expect(h.intents[0]!.status).toBe("filled");
+    expect(Number(h.intents[0]!.avgFillPrice)).toBeCloseTo((6 * 0.41 + 4 * 0.44) / 10, 6);
   });
 
   it("stamps intents (no status change) when credentials are missing", async () => {

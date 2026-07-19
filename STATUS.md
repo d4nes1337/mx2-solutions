@@ -1,9 +1,55 @@
 # Project Status
 
-_Last updated: 2026-07-18_
+_Last updated: 2026-07-19_
 
 ## Recent
 
+- **Telegram/Discord notifications + mobile remote signing (built; D-037, ADR-0020).** The P1
+  "Telegram/mobile" expansion: users link a Telegram chat (single-use `t.me` code handshake
+  from the Wallet page, QR for desktop) or a Discord account (OAuth2 identify; the state IS the
+  link code) and get external notifications for the owner-approved event set — order awaiting
+  signature, alert triggers, auto-executed orders (informational, deliberately no sign link),
+  fills, deposit/withdrawal completions — default ON with per-kind opt-outs. Plumbing: migration
+  0018 (`notification_channels`, `channel_link_codes`, transactional `notification_outbox` with
+  dedupe keys + backoff, `sign_link_tokens`, `sessions.scope`), enqueue hooks in the rule
+  evaluator / auto-executor / order-sync / bridge poller, and two new worker jobs — a Telegram
+  long-poll bot (`/start` linking, `/unlink`, `/orders` re-mints expired links, Dismiss
+  callback) and a channel-agnostic dispatcher (Telegram messages, Discord REST DMs — no
+  discord.js). The **mobile sign page** `/m/t/[id]` (bare chrome, safe-area aware) authenticates
+  by exchanging the single-use 30-min sign-link token — or, inside Telegram, via Mini App
+  initData (HMAC-verified, 5-min replay window) — into a RESTRICTED session (`sessions.scope`)
+  that default-auth rejects everywhere except trigger detail/confirm/dismiss and the scoped
+  order submit (idempotency key pinned to its own awaiting trigger, browser accounts only).
+  It shows the fresh server preview + condition-still-holds, adds a Limit (editable ¢) /
+  Market (FAK at the touch + 2¢ cap) toggle, and signs with the MAIN wallet via
+  WalletConnect/injected — the EIP-712 signature is the only thing that can execute (owner
+  decision: no token-only execution). Fail-closed flag ladder `FEATURE_NOTIFICATIONS` →
+  `FEATURE_TELEGRAM_BOT`/`FEATURE_TELEGRAM_MINIAPP`/`FEATURE_DISCORD_BOT` (all default OFF);
+  runbook `docs/TELEGRAM_BOT_RUNBOOK.md`; risks R-042..R-044. Owner action items before
+  enabling: BotFather token, WalletConnect project id, https base URL (Mini App), Discord app +
+  guild. Tests: 675 root + 247 web green (new: notification store, linking/preferences routes,
+  Discord OAuth routes, initData verification vectors, bot update handling, dispatcher fan-out/
+  backoff/opt-outs, scoped-session route matrix, scoped order submit, mobile page states).
+- **Funds v2 — Polymarket-parity deposit/withdrawal UX (built; D-036).** The whole money flow
+  now moves like Polymarket's: the Funds sheet springs in (framer-motion behind LazyMotion
+  domMax, `m.*` only, reduced-motion aware), tabs cross-fade with animated height, and the
+  moment a deposit is detected a staged TransferTracker appears (Detected → Confirming on
+  {chain} → Arriving on Polygon → Complete) with a spring-filled connector, pulsing current
+  step, and cross-fading stage labels; completions get an animated checkmark draw + celebrate
+  burst and the header pUSD balance counts up. A global TransferPill (bottom-right, all pages)
+  tracks any in-flight transfer and click-throughs to the expanded History row; one FundsSheet
+  instance now lives in FundsHost driven by the funds-ui store (header, WalletCard,
+  `/wallet?topup=1` all open it). Confirmations are real and fast: adaptive polling (4s while
+  anything is in flight, slow idle; server bounds Bridge pulls to 1/address/5s), the worker
+  polls active bridge addresses every 12s (60s full sweep), bridge-withdrawal Polygon legs are
+  now polled against the relayer (first writer of the previously-dead `polygon_confirmed`
+  state, forward-only rank guard), and stuck withdrawals get 2h reconciliation flags. All money
+  UI rendered from one normalized ActiveTransfer model (`apps/web/lib/transfers.ts`). Dev demo
+  harness: `NEXT_PUBLIC_FUNDS_DEMO=1` (launch config `web-funds-demo`) plays fabricated
+  transfer sequences end-to-end with zero real money. Tests: 618 root + 243 web all green
+  (new: bridge-store state tables, poller relayer/cadence/stuck-flag, withdrawals-route bridge
+  refresh, funds refresh rate-bound, transfers mapping (29), TransferPill, HeaderWallet
+  store-driven). Prod build clean, shared first-load JS unchanged at 106 kB.
 - **Deposit/withdrawal path polish + withdrawals enabled (built; D-034).** Fixed two wallet
   lifecycle bugs by making status reflect on-chain truth instead of a stale snapshot:
   (1) _activation wouldn't stick_ — every login's idempotent re-provision clobbered the

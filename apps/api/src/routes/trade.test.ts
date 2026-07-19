@@ -161,6 +161,7 @@ const makeSessRow = (): SessionRow => ({
   userWallet: WALLET,
   tokenHash: "hash",
   expiresAt: new Date(Date.now() + 1_000_000),
+  scope: null,
   createdAt: new Date(),
   revokedAt: null,
 });
@@ -219,7 +220,7 @@ const mockOrderIntents: OrderIntentStore = {
   listForSync: async () => [],
   findByIds: async () => [],
   listByRuleMetadata: async () => [],
-  updateFillState: async () => {},
+  updateFillState: async () => true,
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {
@@ -418,6 +419,7 @@ const buildTestApp = (
     tradingClobClient?: AuthenticatedClobClient;
     geoblockClient?: GeoblockClient;
     tradingSigner?: TradingSigner;
+    triggerStore?: TriggerStore;
     depositWalletRelayer?: DepositWalletRelayer;
     privyWallets?: PrivyWalletStore;
     delegations?: DelegationStore;
@@ -447,7 +449,7 @@ const buildTestApp = (
     orderIntents: overrides.orderIntents ?? mockOrderIntents,
     runtimeFlags: overrides.runtimeFlags ?? mockRuntimeFlags,
     ruleStore: mockRuleStore,
-    triggerStore: mockTriggerStore,
+    triggerStore: overrides.triggerStore ?? mockTriggerStore,
     privyWallets: overrides.privyWallets ?? mockPrivyWallets,
     delegations: overrides.delegations ?? mockDelegations,
     ...(overrides.withdrawals ? { withdrawals: overrides.withdrawals } : {}),
@@ -2497,6 +2499,9 @@ describe("POST /api/trading-wallet/withdraw", () => {
         return null;
       },
       updateWithdrawalsFromStatus: async () => ({ changed: [] }),
+      listActivePollableAddresses: async () => [],
+      advanceWithdrawalState: async () => null,
+      listWithdrawalsByStates: async () => [],
     };
     return { store, rows };
   };
@@ -2831,6 +2836,142 @@ describe("POST /api/trading-wallet/bootstrap-allowances (deposit-wallet path, W2
     expect(res.statusCode).toBe(502);
     expect(events).toContain("allowance.failed");
     expect(marked).toHaveLength(0);
+    await app.close();
+  });
+});
+
+// ── Restricted (sign-link / Mini App) session submission ─────────────────────
+// A scoped session may submit ONLY the browser-signed order of its own
+// awaiting trigger — the EIP-712 wallet signature is the execution proof.
+
+describe("POST /api/trade/orders (restricted sessions)", () => {
+  const mockSessionsScoped: SessionStore = {
+    ...mockSessions,
+    findByTokenHash: async () => ({
+      ...makeSessRow(),
+      scope: { type: "trigger", triggerId: "trig-1" },
+    }),
+  };
+
+  const scopedOrderBody = (idempotencyKey: string) => ({
+    tradingAccountId: TRADING_ACCOUNT_ID,
+    idempotencyKey,
+    conditionId: "0xcondition",
+    price: "0.45",
+    size: "100",
+    orderType: "GTC",
+    order: {
+      salt: "123456",
+      maker: FUNDER,
+      signer: WALLET,
+      tokenId: "0xtoken",
+      makerAmount: "45000000",
+      takerAmount: "100000000",
+      side: "BUY",
+      signatureType: 2,
+      timestamp: "1700000000000",
+      metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      builder: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      expiration: "0",
+      signature: "0xsig",
+    },
+  });
+
+  const awaitingTriggerStore: TriggerStore = {
+    ...mockTriggerStore,
+    findByIdForWallet: async (id, wallet) =>
+      id === "trig-1" && wallet === WALLET
+        ? {
+            id: "trig-1",
+            ruleId: "rule-1",
+            walletAddress: WALLET,
+            triggeredAt: new Date(),
+            evidence: {},
+            reasonCodes: [],
+            status: "awaiting_user",
+            orderIntentId: null,
+            createdAt: new Date(),
+          }
+        : null,
+  };
+
+  const post = (app: ReturnType<typeof buildTestApp>, body: unknown) =>
+    app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify(body),
+    });
+
+  it("rejects a non-trigger idempotency key (403 SCOPE_FORBIDDEN)", async () => {
+    const app = buildTestApp({ cfg: configTradingEnabled, sessions: mockSessionsScoped });
+    const res = await post(app, scopedOrderBody("manual-key-1"));
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("SCOPE_FORBIDDEN");
+    await app.close();
+  });
+
+  it("rejects another trigger's idempotency key", async () => {
+    const app = buildTestApp({ cfg: configTradingEnabled, sessions: mockSessionsScoped });
+    const res = await post(app, scopedOrderBody("trigger:trig-OTHER"));
+    expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("rejects when the trigger is gone / no longer awaiting a signature", async () => {
+    // Default mockTriggerStore resolves no trigger — the fail-closed outcome.
+    const app = buildTestApp({ cfg: configTradingEnabled, sessions: mockSessionsScoped });
+    const res = await post(app, scopedOrderBody("trigger:trig-1"));
+    expect(res.statusCode).toBe(403);
+    expect(res.json().message as string).toContain("no longer awaiting");
+    await app.close();
+  });
+
+  it("accepts its own trigger's browser-signed order end-to-end", async () => {
+    const intentsStore: OrderIntentStore = {
+      ...mockOrderIntents,
+      create: async () => ({
+        id: "intent-scoped-1",
+        walletAddress: WALLET,
+        tradingAccountId: TRADING_ACCOUNT_ID,
+        idempotencyKey: "trigger:trig-1",
+        conditionId: "0xcondition",
+        tokenId: "0xtoken",
+        side: "BUY",
+        price: "0.45",
+        size: "100",
+        orderType: "GTC",
+        funder: FUNDER,
+        signer: WALLET,
+        signatureType: 2,
+        signingMode: "browser",
+        status: "pending",
+        clobOrderId: null,
+        errorMessage: null,
+        filledSize: "0",
+        avgFillPrice: null,
+        lastSyncedAt: null,
+        metadata: {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+      updateStatus: async () => {},
+    };
+    const submittingClob: AuthenticatedClobClient = {
+      ...mockTradingClobClient,
+      submitOrder: async () => ok({ orderID: "clob-scoped", status: "live" }),
+    };
+    const app = buildTestApp({
+      cfg: configTradingEnabled,
+      sessions: mockSessionsScoped,
+      triggerStore: awaitingTriggerStore,
+      orderIntents: intentsStore,
+      tradingClobClient: submittingClob,
+    });
+    const res = await post(app, scopedOrderBody("trigger:trig-1"));
+    expect(res.statusCode).toBe(201);
+    expect(res.json().intentId).toBe("intent-scoped-1");
+    expect(res.json().clobOrderId).toBe("clob-scoped");
     await app.close();
   });
 });

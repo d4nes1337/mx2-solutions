@@ -5,8 +5,11 @@ import type {
   AuditStore,
   MarketSnapshotRow,
   MarketSnapshotStore,
+  OrderIntentStore,
   RuleStore,
   SessionStore,
+  TradingAccountClobCredentialStore,
+  TradingAccountStore,
   TriggerStore,
 } from "@mx2/db";
 import {
@@ -23,7 +26,11 @@ import {
   type RuleDefinition,
   type StrategyDefinition,
 } from "@mx2/rules";
-import { makeRequireAuth } from "../middleware/require-auth.js";
+import {
+  makeRequireAuth,
+  makeRequireScopedAuth,
+  scopeAllowsTrigger,
+} from "../middleware/require-auth.js";
 
 export interface RulesRoutesDeps {
   config: AppConfig;
@@ -31,7 +38,11 @@ export interface RulesRoutesDeps {
   auditStore: AuditStore;
   ruleStore: RuleStore;
   triggerStore: TriggerStore;
+  orderIntents: OrderIntentStore;
   marketSnapshots: MarketSnapshotStore;
+  /** Primary-account context for the trigger detail (mobile sign page). */
+  tradingAccounts?: TradingAccountStore;
+  accountClobCredentials?: TradingAccountClobCredentialStore;
 }
 
 // ── Request validation ────────────────────────────────────────────────────────
@@ -168,6 +179,7 @@ const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggered
 
 export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
+  const requireScopedAuth = makeRequireScopedAuth({ sessions: deps.sessions });
 
   // Fail-closed gate: the whole feature is behind FEATURE_CONDITIONAL_RULES.
   const requireRulesEnabled = async (_req: FastifyRequest, reply: FastifyReply): Promise<void> => {
@@ -180,6 +192,9 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   };
 
   const guard = { preHandler: [requireAuth, requireRulesEnabled] };
+  // Trigger preview/confirm/dismiss additionally accept RESTRICTED sessions
+  // (sign links, Mini App). Handlers check scopeAllowsTrigger per trigger id.
+  const scopedGuard = { preHandler: [requireScopedAuth, requireRulesEnabled] };
 
   // ── POST /api/rules ─────────────────────────────────────────────────────────
   app.post("/api/rules", guard, async (req, reply) => {
@@ -332,17 +347,27 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   });
 
   // ── GET /api/rules/triggers ─────────────────────────────────────────────────
-  app.get("/api/rules/triggers", guard, async (req) => {
+  app.get("/api/rules/triggers", scopedGuard, async (req, reply) => {
     const user = req.user!;
+    // Wallet-wide listing: full sessions and Mini App sessions only — a
+    // single-trigger sign link must not enumerate the wallet's other orders.
+    if (req.authScope && req.authScope.type !== "telegram_wallet") {
+      reply.code(403);
+      return { error: "SCOPE_FORBIDDEN", message: "This session cannot list triggers." };
+    }
     const triggers = await deps.triggerStore.listAwaiting(user.walletAddress);
     return { triggers };
   });
 
   // ── GET /api/rules/triggers/:id ─────────────────────────────────────────────
   // Trigger + a FRESH preview + whether the condition still holds (docs/04 §6).
-  app.get("/api/rules/triggers/:id", guard, async (req, reply) => {
+  app.get("/api/rules/triggers/:id", scopedGuard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
+    if (!scopeAllowsTrigger(req.authScope, id)) {
+      reply.code(403);
+      return { error: "SCOPE_FORBIDDEN", message: "This session cannot access this trigger." };
+    }
     const trigger = await deps.triggerStore.findByIdForWallet(id, user.walletAddress);
     if (!trigger) {
       reply.code(404);
@@ -364,6 +389,33 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       if (snapshot) views[tokenId] = snapshotToView(snapshot);
     }
     const evaluation = evaluateExpression(def, views, nowMs);
+    // Primary trading-account context: the mobile sign page runs on a
+    // RESTRICTED session that cannot call /api/trading-accounts, so the
+    // signing addresses it needs ride along here.
+    let account: {
+      id: string;
+      label: string;
+      signerAddress: string;
+      funderAddress: string | null;
+      signingMode: string;
+      credentialsReady: boolean;
+    } | null = null;
+    if (deps.tradingAccounts) {
+      const primary = await deps.tradingAccounts.getPrimary(user.walletAddress);
+      if (primary) {
+        const creds = deps.accountClobCredentials
+          ? await deps.accountClobCredentials.find(primary.id)
+          : null;
+        account = {
+          id: primary.id,
+          label: primary.label,
+          signerAddress: primary.signerAddress,
+          funderAddress: primary.funderAddress,
+          signingMode: primary.signingMode,
+          credentialsReady: creds !== null,
+        };
+      }
+    }
     return {
       trigger,
       evidence: trigger.evidence,
@@ -379,6 +431,8 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         deps.config,
         (trigger.evidence as { triggeredAtMs?: number } | null)?.triggeredAtMs,
       ),
+      account,
+      tradingEnabled: deps.config.features.liveTrading,
       warning: deps.config.features.liveTrading
         ? "Live trading is ENABLED. Submitting this order will use real funds."
         : "Live trading is DISABLED. This preview is for demonstration only.",
@@ -388,9 +442,13 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   // ── POST /api/rules/triggers/:id/confirm ────────────────────────────────────
   // Bookkeeping after the user has signed + submitted via POST /api/trade/orders
   // (idempotencyKey "trigger:<id>"). Links the order intent and closes the rule.
-  app.post("/api/rules/triggers/:id/confirm", guard, async (req, reply) => {
+  app.post("/api/rules/triggers/:id/confirm", scopedGuard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
+    if (!scopeAllowsTrigger(req.authScope, id)) {
+      reply.code(403);
+      return { error: "SCOPE_FORBIDDEN", message: "This session cannot access this trigger." };
+    }
     const body = (req.body ?? {}) as Record<string, unknown>;
     const orderIntentId =
       typeof body["orderIntentId"] === "string" ? body["orderIntentId"] : undefined;
@@ -402,6 +460,15 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
     }
     if (trigger.status !== "awaiting_user") {
       return { ok: true, idempotent: true, status: trigger.status };
+    }
+    // The linked intent must be the caller's own — a foreign id here would
+    // otherwise surface someone else's order through the strategy timeline.
+    if (orderIntentId) {
+      const intent = await deps.orderIntents.findById(orderIntentId);
+      if (!intent || intent.walletAddress !== user.walletAddress) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "orderIntentId is not one of your orders." };
+      }
     }
     await deps.triggerStore.updateStatus(
       id,
@@ -419,9 +486,13 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   });
 
   // ── POST /api/rules/triggers/:id/dismiss ────────────────────────────────────
-  app.post("/api/rules/triggers/:id/dismiss", guard, async (req, reply) => {
+  app.post("/api/rules/triggers/:id/dismiss", scopedGuard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
+    if (!scopeAllowsTrigger(req.authScope, id)) {
+      reply.code(403);
+      return { error: "SCOPE_FORBIDDEN", message: "This session cannot access this trigger." };
+    }
     const trigger = await deps.triggerStore.findByIdForWallet(id, user.walletAddress);
     if (!trigger) {
       reply.code(404);

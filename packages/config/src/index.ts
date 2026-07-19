@@ -133,6 +133,29 @@ const EnvSchema = z.object({
   FEATURE_BRIDGE_FUNDING: boolFromEnv(true),
   FEATURE_BRIDGE_WITHDRAWALS: boolFromEnv(false),
 
+  // ── External notifications (Telegram/Discord) ─────────────────────────────
+  // Master switch for the notification pipeline (outbox enqueue + linking API).
+  // Delivery channels are gated separately below. No spend risk by itself, but
+  // defaults OFF: it emits user activity to external services once a channel
+  // flag is also on.
+  FEATURE_NOTIFICATIONS: boolFromEnv(false),
+  // Telegram bot: /start linking, outbox delivery, sign links. Requires the
+  // bot credentials below (validated fail-closed).
+  FEATURE_TELEGRAM_BOT: boolFromEnv(false),
+  // Telegram Mini App auth (initData verification). Requires the bot.
+  FEATURE_TELEGRAM_MINIAPP: boolFromEnv(false),
+  // Discord bot delivery (notifications-only). Requires DISCORD_BOT_TOKEN.
+  FEATURE_DISCORD_BOT: boolFromEnv(false),
+  // Bot credentials — sensitive secrets (docs/05): secret manager only, never
+  // logged, never committed, never exposed to the browser.
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_BOT_USERNAME: z.string().optional(),
+  DISCORD_BOT_TOKEN: z.string().optional(),
+  // Discord OAuth2 app (identify scope) — the account-linking handshake.
+  DISCORD_CLIENT_ID: z.string().optional(),
+  DISCORD_CLIENT_SECRET: z.string().optional(),
+  DISCORD_GUILD_INVITE_URL: z.string().url().optional(),
+
   // Maker loop (RFC-0003): quote_loop creation + SHADOW quoting + cockpit UI.
   // Places no orders and moves no funds by itself.
   FEATURE_MAKER_LOOP: boolFromEnv(false),
@@ -203,6 +226,14 @@ export type AppConfig = {
     adapterAddress: string | undefined;
     negRiskAdapterAddress: string | undefined;
   };
+  notifications: {
+    telegramBotToken: string | undefined;
+    telegramBotUsername: string | undefined;
+    discordBotToken: string | undefined;
+    discordClientId: string | undefined;
+    discordClientSecret: string | undefined;
+    discordGuildInviteUrl: string | undefined;
+  };
   features: {
     liveTrading: boolean;
     conditionalRules: boolean;
@@ -217,6 +248,10 @@ export type AppConfig = {
     bridgeWithdrawals: boolean;
     makerLoop: boolean;
     makerLoopLive: boolean;
+    notifications: boolean;
+    telegramBot: boolean;
+    telegramMiniapp: boolean;
+    discordBot: boolean;
   };
 };
 
@@ -281,6 +316,35 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
   // half-configured rather than 500 at request time.
   if (e.FEATURE_AI_CHAT && !e.ANTHROPIC_API_KEY) {
     throw new ConfigError("FEATURE_AI_CHAT=true requires ANTHROPIC_API_KEY.");
+  }
+
+  // Fail-closed ladder for external notifications: a delivery channel needs the
+  // master switch plus its own credentials, or the bot would fail per-message.
+  if (e.FEATURE_TELEGRAM_BOT) {
+    if (!e.FEATURE_NOTIFICATIONS || !e.TELEGRAM_BOT_TOKEN || !e.TELEGRAM_BOT_USERNAME) {
+      throw new ConfigError(
+        "FEATURE_TELEGRAM_BOT=true requires FEATURE_NOTIFICATIONS=true, TELEGRAM_BOT_TOKEN, " +
+          "and TELEGRAM_BOT_USERNAME.",
+      );
+    }
+  }
+  if (e.FEATURE_TELEGRAM_MINIAPP && !e.FEATURE_TELEGRAM_BOT) {
+    throw new ConfigError(
+      "FEATURE_TELEGRAM_MINIAPP=true requires FEATURE_TELEGRAM_BOT=true (initData is " +
+        "verified against the bot token).",
+    );
+  }
+  if (
+    e.FEATURE_DISCORD_BOT &&
+    (!e.FEATURE_NOTIFICATIONS ||
+      !e.DISCORD_BOT_TOKEN ||
+      !e.DISCORD_CLIENT_ID ||
+      !e.DISCORD_CLIENT_SECRET)
+  ) {
+    throw new ConfigError(
+      "FEATURE_DISCORD_BOT=true requires FEATURE_NOTIFICATIONS=true, DISCORD_BOT_TOKEN " +
+        "(DM delivery), and DISCORD_CLIENT_ID + DISCORD_CLIENT_SECRET (OAuth linking).",
+    );
   }
 
   // Fail-closed: withdrawals execute through the deposit-wallet relayer.
@@ -369,6 +433,14 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       adapterAddress: e.CTF_ADAPTER_ADDRESS,
       negRiskAdapterAddress: e.NEG_RISK_CTF_ADAPTER_ADDRESS,
     },
+    notifications: {
+      telegramBotToken: e.TELEGRAM_BOT_TOKEN,
+      telegramBotUsername: e.TELEGRAM_BOT_USERNAME,
+      discordBotToken: e.DISCORD_BOT_TOKEN,
+      discordClientId: e.DISCORD_CLIENT_ID,
+      discordClientSecret: e.DISCORD_CLIENT_SECRET,
+      discordGuildInviteUrl: e.DISCORD_GUILD_INVITE_URL,
+    },
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
       conditionalRules: e.FEATURE_CONDITIONAL_RULES,
@@ -383,6 +455,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       bridgeWithdrawals: e.FEATURE_BRIDGE_WITHDRAWALS,
       makerLoop: e.FEATURE_MAKER_LOOP,
       makerLoopLive: e.FEATURE_MAKER_LOOP_LIVE,
+      notifications: e.FEATURE_NOTIFICATIONS,
+      telegramBot: e.FEATURE_TELEGRAM_BOT,
+      telegramMiniapp: e.FEATURE_TELEGRAM_MINIAPP,
+      discordBot: e.FEATURE_DISCORD_BOT,
     },
   };
 };

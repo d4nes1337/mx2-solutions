@@ -118,6 +118,7 @@ const makeSessionRow = (walletAddress: string): SessionRow => ({
   userWallet: walletAddress,
   tokenHash: "hash",
   expiresAt: new Date(Date.now() + 1_000_000),
+  scope: null,
   createdAt: new Date(),
   revokedAt: null,
 });
@@ -164,7 +165,7 @@ const mockOrderIntents: OrderIntentStore = {
   listForSync: async () => [],
   findByIds: async () => [],
   listByRuleMetadata: async () => [],
-  updateFillState: async () => {},
+  updateFillState: async () => true,
 };
 
 const mockRuntimeFlags: RuntimeFlagStore = {

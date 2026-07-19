@@ -15,6 +15,7 @@ import type {
   RuleTriggerRow,
   RuntimeFlagStore,
   SessionStore,
+  SignLinkTokenStore,
   TriggerStore,
   UserStore,
   PrivyWalletStore,
@@ -266,6 +267,9 @@ const buildRulesApp = (opts: {
   ruleStore?: ReturnType<typeof makeRuleStore>;
   triggerStore?: ReturnType<typeof makeTriggerStore>;
   snapshotRow?: MarketSnapshotRow | null;
+  /** Scope of the session the cookie resolves to (null = full session). */
+  sessionScope?: unknown;
+  signTokens?: SignLinkTokenStore;
 }): { app: ReturnType<typeof buildApp>; h: Harness } => {
   const ruleStore = opts.ruleStore ?? makeRuleStore();
   const triggerStore = opts.triggerStore ?? makeTriggerStore();
@@ -293,14 +297,21 @@ const buildRulesApp = (opts: {
     forSubject: async () => [],
   };
   const sessions: SessionStore = {
-    create: async () => {
-      throw new Error("no");
-    },
+    create: async ({ userWallet, tokenHash, expiresAt, scope }) => ({
+      id: "s-created",
+      userWallet,
+      tokenHash,
+      expiresAt,
+      scope: scope ?? null,
+      createdAt: new Date(),
+      revokedAt: null,
+    }),
     findByTokenHash: async () => ({
       id: "s1",
       userWallet: WALLET,
       tokenHash: "h",
       expiresAt: new Date(Date.now() + 1_000_000),
+      scope: opts.sessionScope ?? null,
       createdAt: new Date(),
       revokedAt: null,
     }),
@@ -345,7 +356,12 @@ const buildRulesApp = (opts: {
       throw new Error("no");
     },
     findByIdempotencyKey: async () => null,
-    findById: async () => null,
+    // The confirm route validates linked-intent ownership — serve a row owned
+    // by the test wallet for any id so linking succeeds.
+    findById: async (id) =>
+      ({ id, walletAddress: WALLET, status: "submitted" }) as unknown as Awaited<
+        ReturnType<OrderIntentStore["findById"]>
+      >,
     listByWallet: async () => [],
     updateStatus: async () => {},
     countRecentByWallet: async () => 0,
@@ -353,7 +369,7 @@ const buildRulesApp = (opts: {
     listForSync: async () => [],
     findByIds: async () => [],
     listByRuleMetadata: async () => [],
-    updateFillState: async () => {},
+    updateFillState: async () => true,
   };
   const noopFlags: RuntimeFlagStore = {
     get: async () => null,
@@ -424,6 +440,7 @@ const buildRulesApp = (opts: {
     tradingClobClient: trading,
     tradingSigner: noopTradingSigner,
     geoblockClient: geo,
+    ...(opts.signTokens ? { signTokens: opts.signTokens } : {}),
   });
 
   return { app, h: { ruleStore, triggerStore, audits } };
@@ -631,6 +648,164 @@ describe("conditional rules routes", () => {
       payload: {},
     });
     expect(confirm2.json().idempotent).toBe(true);
+    await app.close();
+  });
+});
+
+// ── Restricted (sign-link) sessions ──────────────────────────────────────────
+// A sign-link session is scoped to ONE trigger: it may view/confirm/dismiss
+// that trigger only, and may never enumerate the wallet's other triggers.
+
+const seedTriggered = async () => {
+  const ruleStore = makeRuleStore();
+  const rule = await ruleStore.create({
+    walletAddress: WALLET,
+    conditionId: "cond-1",
+    tokenId: "tok-1",
+    side: "BUY",
+    definition: {
+      ...validRuleBody,
+      version: 1,
+      outcomeSide: "BUY",
+      recurrence: "once",
+      expiresAtMs: null,
+    } as unknown as RuleDefinition,
+    definitionHash: "deadbeef",
+    expiresAt: null,
+  });
+  rule.status = "TRIGGERED_AWAITING_USER";
+  const triggerStore = makeTriggerStore([
+    {
+      id: "trig-1",
+      ruleId: rule.id,
+      walletAddress: WALLET,
+      triggeredAt: new Date(),
+      evidence: {},
+      reasonCodes: [],
+      status: "awaiting_user",
+      orderIntentId: null,
+      createdAt: new Date(),
+    },
+  ]);
+  return { ruleStore, triggerStore };
+};
+
+const makeSignTokens = (): SignLinkTokenStore & { consumed: string[] } => {
+  const consumed: string[] = [];
+  return {
+    consumed,
+    create: async () => {
+      throw new Error("not used");
+    },
+    consume: async (hash) => {
+      if (consumed.length > 0) return null; // single-use
+      consumed.push(hash);
+      return {
+        id: "slt-1",
+        tokenHash: hash,
+        walletAddress: WALLET,
+        triggerId: "trig-1",
+        expiresAt: new Date(Date.now() + 60_000),
+        usedAt: new Date(),
+        createdAt: new Date(),
+      };
+    },
+  };
+};
+
+describe("restricted (sign-link) sessions", () => {
+  const scope = { type: "trigger", triggerId: "trig-1" };
+
+  it("may view exactly its own trigger", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, sessionScope: scope });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-1",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().preview).toBeTruthy();
+    await app.close();
+  });
+
+  it("is refused for any other trigger id (403, before existence checks)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, sessionScope: scope });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-other",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("SCOPE_FORBIDDEN");
+    await app.close();
+  });
+
+  it("cannot enumerate the wallet's triggers", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, sessionScope: scope });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("may confirm its own trigger (the post-signature bookkeeping)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, sessionScope: scope });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-1/confirm",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(triggerStore.rows[0]?.status).toBe("confirmed");
+    await app.close();
+  });
+
+  it("is rejected by ordinary authenticated routes (fail-closed default)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, sessionScope: scope });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+describe("POST /api/auth/sign-link/exchange", () => {
+  it("mints a trigger-scoped session cookie from a valid token, once", async () => {
+    const signTokens = makeSignTokens();
+    const { app } = buildRulesApp({ signTokens });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-link/exchange",
+      headers: { "content-type": "application/json" },
+      payload: { token: "raw-token-1234567890" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().triggerId).toBe("trig-1");
+    const setCookie = res.headers["set-cookie"];
+    expect(String(setCookie)).toContain("mx2_session=");
+    // The store only ever sees the hash, never the raw token.
+    expect(signTokens.consumed[0]).toMatch(/^[0-9a-f]{64}$/);
+
+    // Replay of the same (or any) token after consumption fails.
+    const replay = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-link/exchange",
+      headers: { "content-type": "application/json" },
+      payload: { token: "raw-token-1234567890" },
+    });
+    expect(replay.statusCode).toBe(401);
     await app.close();
   });
 });

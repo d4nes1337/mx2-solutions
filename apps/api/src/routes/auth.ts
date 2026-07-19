@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type {
   ChallengeStore,
@@ -5,7 +6,9 @@ import type {
   SessionStore,
   AllowlistStore,
   AuditStore,
+  NotificationChannelStore,
   PrivyWalletStore,
+  SignLinkTokenStore,
   TradingAccountStore,
 } from "@mx2/db";
 import type { AppConfig } from "@mx2/config";
@@ -19,8 +22,10 @@ import {
   CHALLENGE_TTL_MS,
 } from "../auth/eip712.js";
 import { generateSessionToken, hashSessionToken, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { verifyTelegramInitData } from "../auth/telegram-miniapp.js";
 import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
+import { makeRateLimit } from "../middleware/rate-limit.js";
 import type {} from "../auth/types.js";
 
 export interface AuthRoutesDeps {
@@ -33,7 +38,14 @@ export interface AuthRoutesDeps {
   tradingSigner: TradingSigner;
   privyWallets: PrivyWalletStore;
   tradingAccounts: TradingAccountStore;
+  /** Sign-link tokens (FEATURE_NOTIFICATIONS); the exchange route needs it. */
+  signTokens?: SignLinkTokenStore;
+  /** Channel links (FEATURE_TELEGRAM_MINIAPP); the Mini App login needs it. */
+  notificationChannels?: NotificationChannelStore;
 }
+
+/** Restricted-session lifetime: long enough to open, review, and sign. */
+export const SIGN_LINK_SESSION_TTL_SECONDS = 30 * 60;
 
 const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -256,6 +268,133 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
 
     return { ok: true, address };
   });
+
+  // ── POST /api/auth/sign-link/exchange ──────────────────────────────────────
+  // Trades a single-use sign-link token (minted into a Telegram notification)
+  // for a SHORT RESTRICTED session scoped to exactly one trigger. The scoped
+  // session can view/confirm/dismiss that trigger and submit ITS pre-signed
+  // order — nothing else (require-auth rejects it everywhere else). A leaked
+  // link can therefore only ever show one prepared order; executing still
+  // requires the main wallet's EIP-712 signature.
+  if (deps.signTokens) {
+    const signTokens = deps.signTokens;
+    const exchangeRateLimit = makeRateLimit({ limit: 10, windowMs: 60_000, scope: "sign-link" });
+    app.post(
+      "/api/auth/sign-link/exchange",
+      { preHandler: [exchangeRateLimit] },
+      async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const rawToken = typeof body["token"] === "string" ? body["token"] : null;
+        if (!rawToken || rawToken.length < 16 || rawToken.length > 128) {
+          reply.code(400);
+          return { error: "INVALID_REQUEST", message: "token is required" };
+        }
+        const consumed = await signTokens.consume(
+          createHash("sha256").update(rawToken, "utf8").digest("hex"),
+        );
+        if (!consumed) {
+          reply.code(401);
+          return {
+            error: "INVALID_TOKEN",
+            message: "This sign link is invalid, expired, or already used.",
+          };
+        }
+        const sessionToken = generateSessionToken();
+        const expiresAt = new Date(Date.now() + SIGN_LINK_SESSION_TTL_SECONDS * 1000);
+        await deps.sessions.create({
+          userWallet: consumed.walletAddress,
+          tokenHash: hashSessionToken(sessionToken),
+          expiresAt,
+          scope: { type: "trigger", triggerId: consumed.triggerId },
+        });
+        await deps.auditStore.emit({
+          actor: consumed.walletAddress,
+          action: "auth.scoped_session_created",
+          subject: `trigger:${consumed.triggerId}`,
+          metadata: { via: "sign_link", ttlSeconds: SIGN_LINK_SESSION_TTL_SECONDS },
+        });
+        void reply.setCookie(SESSION_COOKIE_NAME, sessionToken, {
+          httpOnly: true,
+          sameSite: deps.config.session.crossSite ? "none" : "strict",
+          path: "/",
+          secure: deps.config.session.cookieSecure,
+          maxAge: SIGN_LINK_SESSION_TTL_SECONDS,
+        });
+        return {
+          ok: true,
+          triggerId: consumed.triggerId,
+          walletAddress: consumed.walletAddress,
+          expiresAt: expiresAt.toISOString(),
+        };
+      },
+    );
+  }
+
+  // ── POST /api/auth/telegram-miniapp ────────────────────────────────────────
+  // Telegram Mini App login: verifies the webview's HMAC-signed initData
+  // against the bot token, resolves the LINKED wallet (linking always happens
+  // through the code handshake first), and mints a RESTRICTED wallet-scoped
+  // session — it can view/sign awaiting triggers, nothing else.
+  if (
+    deps.notificationChannels &&
+    deps.config.features.telegramMiniapp &&
+    deps.config.notifications.telegramBotToken
+  ) {
+    const channels = deps.notificationChannels;
+    const botToken = deps.config.notifications.telegramBotToken;
+    const miniappRateLimit = makeRateLimit({ limit: 20, windowMs: 60_000, scope: "miniapp-auth" });
+    app.post(
+      "/api/auth/telegram-miniapp",
+      { preHandler: [miniappRateLimit] },
+      async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const initData = typeof body["initData"] === "string" ? body["initData"] : null;
+        if (!initData || initData.length > 4096) {
+          reply.code(400);
+          return { error: "INVALID_REQUEST", message: "initData is required" };
+        }
+        const verified = verifyTelegramInitData(initData, botToken);
+        if (!verified) {
+          reply.code(401);
+          return { error: "INVALID_INIT_DATA", message: "Telegram login could not be verified." };
+        }
+        const channel = await channels.findActiveByExternalId("telegram", verified.userId);
+        if (!channel) {
+          reply.code(403);
+          return {
+            error: "NOT_LINKED",
+            message: "Link your Telegram account from the app's Wallet page first.",
+          };
+        }
+        const sessionToken = generateSessionToken();
+        const expiresAt = new Date(Date.now() + SIGN_LINK_SESSION_TTL_SECONDS * 1000);
+        await deps.sessions.create({
+          userWallet: channel.walletAddress,
+          tokenHash: hashSessionToken(sessionToken),
+          expiresAt,
+          scope: { type: "telegram_wallet" },
+        });
+        await deps.auditStore.emit({
+          actor: channel.walletAddress,
+          action: "auth.scoped_session_created",
+          subject: `notification_channel:${channel.id}`,
+          metadata: { via: "telegram_miniapp", ttlSeconds: SIGN_LINK_SESSION_TTL_SECONDS },
+        });
+        void reply.setCookie(SESSION_COOKIE_NAME, sessionToken, {
+          httpOnly: true,
+          sameSite: deps.config.session.crossSite ? "none" : "strict",
+          path: "/",
+          secure: deps.config.session.cookieSecure,
+          maxAge: SIGN_LINK_SESSION_TTL_SECONDS,
+        });
+        return {
+          ok: true,
+          walletAddress: channel.walletAddress,
+          expiresAt: expiresAt.toISOString(),
+        };
+      },
+    );
+  }
 
   // Revoke the current session.
   app.post("/api/auth/logout", { preHandler: requireAuth }, async (req, reply) => {

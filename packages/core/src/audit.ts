@@ -68,6 +68,13 @@ export const AUDIT_ACTIONS = [
   "allowance.failed",
   "delegation.expired",
   "delegation.expiring",
+  "notification.channel_link_requested",
+  "notification.channel_linked",
+  "notification.channel_unlinked",
+  "notification.preferences_updated",
+  "notification.sent",
+  "notification.send_failed",
+  "auth.scoped_session_created",
   "system.startup",
 ] as const;
 

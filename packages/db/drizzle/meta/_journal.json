@@ -127,6 +127,13 @@
       "when": 1784500000001,
       "tag": "0017_audit_subject_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784500000002,
+      "tag": "0018_notifications",
+      "breakpoints": true
     }
   ]
 }

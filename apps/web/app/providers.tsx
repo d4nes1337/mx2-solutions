@@ -9,6 +9,7 @@ import { wagmiConfig } from "@/lib/wagmi";
 import { useSession } from "@/lib/auth";
 import { useFeatureFlags, useProvisionTradingWallet } from "@/lib/queries";
 import { ThemeProvider, useTheme, type Theme } from "@/lib/theme";
+import { MotionProvider } from "@/components/motion/MotionProvider";
 
 // RainbowKit takes a JS theme object, not CSS vars — keep it in step with the
 // app theme. Paper is a light theme with the same brand accent.
@@ -46,8 +47,10 @@ export function Providers({ children }: { children: ReactNode }) {
       <WagmiProvider config={wagmiConfig}>
         <QueryClientProvider client={queryClient}>
           <ThemedRainbowKit>
-            <AutoProvisionTradingWallet />
-            {children}
+            <MotionProvider>
+              <AutoProvisionTradingWallet />
+              {children}
+            </MotionProvider>
           </ThemedRainbowKit>
         </QueryClientProvider>
       </WagmiProvider>

@@ -3,6 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { FEED_LIMIT, hottestScore, newVolumeScore, sortEventsByScore } from "./feeds";
+import {
+  BRIDGE_WITHDRAWAL_TERMINAL_STATES,
+  DEPOSIT_TERMINAL_STATES,
+  WALLET_WITHDRAWAL_TERMINAL_STATES,
+} from "./transfers";
 import type {
   CreateRuleRequest,
   EquityHistoryResponse,
@@ -51,6 +56,11 @@ import type {
   TriggerDetailResponse,
   TriggersResponse,
   UpsertExternalTradingAccountRequest,
+  LinkCodeResponse,
+  NotificationChannelItem,
+  NotificationChannelsResponse,
+  NotificationKind,
+  SignLinkExchangeResponse,
 } from "./types";
 
 /**
@@ -72,6 +82,12 @@ export const POLL = {
   triggers: 4_000,
   triggerDetail: 3_000,
   marketTrades: 10_000,
+  /** Funds transfers with something in flight — near-live confirmations. */
+  transfersActive: 4_000,
+  /** Funds transfers with nothing pending. */
+  transfersIdle: 60_000,
+  /** While a link code is outstanding — catch the bot-side /start completing. */
+  notificationChannelsLinking: 3_000,
 } as const;
 
 // ── Public read-only data ────────────────────────────────────────────────────
@@ -406,15 +422,29 @@ export function useWithdraw() {
   });
 }
 
+type WithdrawalsResponse = {
+  withdrawals: WalletWithdrawalItem[];
+  bridgeWithdrawals?: BridgeWithdrawalItem[];
+};
+
+const hasPendingWithdrawal = (data: WithdrawalsResponse | undefined): boolean =>
+  Boolean(
+    data &&
+    (data.withdrawals.some((w) => !WALLET_WITHDRAWAL_TERMINAL_STATES.has(w.state)) ||
+      data.bridgeWithdrawals?.some((w) => !BRIDGE_WITHDRAWAL_TERMINAL_STATES.has(w.state))),
+  );
+
 export function useWithdrawals(enabled = true) {
   return useQuery({
     queryKey: ["withdrawals"],
-    queryFn: () =>
-      api.get<{ withdrawals: WalletWithdrawalItem[]; bridgeWithdrawals?: BridgeWithdrawalItem[] }>(
-        "/api/trading-wallet/withdrawals",
-      ),
+    queryFn: () => api.get<WithdrawalsResponse>("/api/trading-wallet/withdrawals"),
     enabled,
-    staleTime: 15_000,
+    staleTime: 3_000,
+    // Adaptive: poll fast only while a withdrawal is actually in flight —
+    // each fetch also refreshes relayer/bridge state server-side. Idle: no
+    // polling at all (mutations invalidate the key).
+    refetchInterval: (query) =>
+      hasPendingWithdrawal(query.state.data) ? POLL.transfersActive : false,
   });
 }
 
@@ -458,25 +488,44 @@ export function useBridgeQuote() {
   });
 }
 
-/** Tracked bridge deposits; refetches trigger a bounded live status pull. */
-export function useBridgeDeposits(enabled = true) {
+/**
+ * Tracked bridge deposits; refetches trigger a bounded live status pull
+ * (the server skips addresses checked within the last 5s, so the fast
+ * cadence — and multiple tabs — can't hammer the Bridge).
+ * `watching` forces the fast cadence while the deposit-address screen is
+ * visible: the user is likely mid-transfer even before the first row exists.
+ */
+export function useBridgeDeposits(enabled = true, opts?: { watching?: boolean }) {
+  const watching = Boolean(opts?.watching);
   return useQuery({
     queryKey: ["bridge-deposits"],
     queryFn: () => api.get<{ deposits: BridgeDepositItem[] }>("/api/funds/deposits?refresh=1"),
     enabled,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
+    staleTime: 3_000,
+    refetchInterval: (query) =>
+      watching || query.state.data?.deposits.some((d) => !DEPOSIT_TERMINAL_STATES.has(d.state))
+        ? POLL.transfersActive
+        : POLL.transfersIdle,
   });
 }
 
-/** On-chain USDC.e balances for the deposit wallet + signer EOA. */
-export function useTradingWalletBalance(enabled = true) {
+/**
+ * On-chain USDC.e balances for the deposit wallet + signer EOA. Polls fast
+ * while USDC.e sits unconverted (that balance dropping to zero is how the
+ * UI observes "conversion complete") or while a caller is watching.
+ */
+export function useTradingWalletBalance(enabled = true, opts?: { watching?: boolean }) {
+  const watching = Boolean(opts?.watching);
   return useQuery({
     queryKey: ["trading-wallet-balance"],
     queryFn: () => api.get<TradingWalletBalanceResponse>("/api/trading-wallet/balance"),
     enabled,
-    staleTime: 30_000,
+    staleTime: 3_000,
     retry: false, // 400/503 when not provisioned or RPC unset — show nothing.
+    refetchInterval: (query) =>
+      watching || (query.state.data?.depositWalletUnconvertedUsdc ?? 0) > 0.009
+        ? POLL.transfersActive
+        : false,
   });
 }
 
@@ -667,5 +716,76 @@ export function useDismissTrigger() {
   return useMutation({
     mutationFn: (id: string) => api.post<{ ok: boolean }>(`/api/rules/triggers/${id}/dismiss`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["triggers"] }),
+  });
+}
+
+// ── Sign links (mobile trigger signing) ──────────────────────────────────────
+
+/** Trade a single-use sign-link token for a trigger-scoped session cookie. */
+export function useExchangeSignLink() {
+  return useMutation({
+    mutationFn: (token: string) =>
+      api.post<SignLinkExchangeResponse>("/api/auth/sign-link/exchange", { token }),
+  });
+}
+
+/** Telegram Mini App login: signed initData → wallet-scoped session cookie. */
+export function useTelegramMiniappAuth() {
+  return useMutation({
+    mutationFn: (initData: string) =>
+      api.post<{ ok: boolean; walletAddress: string; expiresAt: string }>(
+        "/api/auth/telegram-miniapp",
+        { initData },
+      ),
+  });
+}
+
+// ── Notification channels (Telegram/Discord linking) ─────────────────────────
+
+export function useNotificationChannels(enabled: boolean, linking = false) {
+  return useQuery({
+    queryKey: ["notification-channels"],
+    queryFn: () => api.get<NotificationChannelsResponse>("/api/notifications/channels"),
+    enabled,
+    refetchInterval: linking ? POLL.notificationChannelsLinking : false,
+  });
+}
+
+export function useCreateLinkCode() {
+  return useMutation({
+    mutationFn: (channel: "telegram" | "discord") =>
+      api.post<LinkCodeResponse>("/api/notifications/link-code", { channel }),
+  });
+}
+
+export function useUpdateChannelPreferences() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      preferences,
+    }: {
+      id: string;
+      preferences: Partial<Record<NotificationKind, boolean>>;
+    }) => api.patch<NotificationChannelItem>(`/api/notifications/channels/${id}`, { preferences }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-channels"] }),
+  });
+}
+
+export function useUnlinkChannel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.del<{ ok: boolean }>(`/api/notifications/channels/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-channels"] }),
+  });
+}
+
+/** Mint the Discord OAuth authorize URL (state = single-use link code). */
+export function useDiscordOauthUrl() {
+  return useMutation({
+    mutationFn: () =>
+      api.get<{ url: string; guildInviteUrl: string | null }>(
+        "/api/notifications/discord/oauth-url",
+      ),
   });
 }

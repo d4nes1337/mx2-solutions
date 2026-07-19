@@ -8,8 +8,12 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    // Mirror the "@/*" -> "./*" path alias from tsconfig.json.
-    alias: { "@": fileURLToPath(new URL(".", import.meta.url)) },
+    alias: {
+      // Component tests get plain elements instead of the animation runtime.
+      "motion/react": fileURLToPath(new URL("./test/motion-shim.tsx", import.meta.url)),
+      // Mirror the "@/*" -> "./*" path alias from tsconfig.json.
+      "@": fileURLToPath(new URL(".", import.meta.url)),
+    },
   },
   test: {
     globals: true,

@@ -119,6 +119,7 @@ const buildAuthApp = async (opts: {
       userWallet: o.userWallet,
       tokenHash: o.tokenHash,
       expiresAt: o.expiresAt,
+      scope: null,
       createdAt: new Date(),
       revokedAt: null,
     }),

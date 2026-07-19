@@ -121,6 +121,13 @@ export const sessions = pgTable(
     userWallet: text("user_wallet").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /**
+     * NULL = full session (browser login). Non-null = restricted session minted
+     * from a sign-link token or Telegram Mini App auth (migration 0018);
+     * require-auth rejects these by default — only explicitly scoped routes
+     * accept them. Shape: { type: "trigger", triggerId } | { type: "telegram_wallet" }.
+     */
+    scope: jsonb("scope"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
@@ -748,3 +755,125 @@ export const strategyDrafts = pgTable(
 
 export type StrategyDraftRow = typeof strategyDrafts.$inferSelect;
 export type NewStrategyDraftRow = typeof strategyDrafts.$inferInsert;
+
+/**
+ * External notification channels (migration 0018). One row per linked
+ * Telegram chat / Discord user per login wallet. Linking always goes through a
+ * single-use channel_link_codes code minted by the authenticated wallet, so an
+ * external account can never attach itself to a wallet it doesn't control.
+ * `preferences` holds per-kind opt-outs; a kind absent from the map is ON.
+ */
+export const notificationChannels = pgTable(
+  "notification_channels",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    channel: text("channel").notNull(), // telegram | discord
+    /** Telegram chat id / Discord user id. */
+    externalId: text("external_id").notNull(),
+    externalUsername: text("external_username"),
+    status: text("status").notNull().default("active"), // active | revoked
+    preferences: jsonb("preferences")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("notification_channels_wallet_idx").on(t.walletAddress),
+    // Bot-side lookup: which wallet does this chat belong to?
+    index("notification_channels_external_idx").on(t.channel, t.externalId),
+    // One ACTIVE link per external account per channel (revoked rows are history).
+    uniqueIndex("notification_channels_active_external_unique")
+      .on(t.channel, t.externalId)
+      .where(sql`status = 'active'`),
+  ],
+);
+
+export type NotificationChannelRow = typeof notificationChannels.$inferSelect;
+export type NewNotificationChannelRow = typeof notificationChannels.$inferInsert;
+
+/**
+ * Single-use channel-linking codes (migration 0018). The code itself only ever
+ * lives in the t.me deep link / user's DM; the DB stores SHA256(code). 10-min
+ * TTL, consumed at most once (atomic UPDATE ... WHERE used_at IS NULL).
+ */
+export const channelLinkCodes = pgTable(
+  "channel_link_codes",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    codeHash: text("code_hash").notNull().unique(),
+    walletAddress: text("wallet_address").notNull(),
+    channel: text("channel").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("channel_link_codes_wallet_idx").on(t.walletAddress)],
+);
+
+export type ChannelLinkCodeRow = typeof channelLinkCodes.$inferSelect;
+
+/**
+ * Transactional outbox for external notifications (migration 0018). Producers
+ * (rule evaluator, auto-executor, order-sync, bridge poller) enqueue with an
+ * idempotent dedupe_key; the worker dispatcher is the single consumer and
+ * advances status pending → sent | skipped | failed (terminal after max
+ * attempts) with exponential backoff via next_attempt_at.
+ */
+export const notificationOutbox = pgTable(
+  "notification_outbox",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    walletAddress: text("wallet_address").notNull(),
+    kind: text("kind").notNull(),
+    dedupeKey: text("dedupe_key").notNull().unique(),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lastError: text("last_error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("notification_outbox_due_idx").on(t.status, t.nextAttemptAt),
+    index("notification_outbox_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type NotificationOutboxRow = typeof notificationOutbox.$inferSelect;
+export type NewNotificationOutboxRow = typeof notificationOutbox.$inferInsert;
+
+/**
+ * Single-use sign-link tokens (migration 0018). Minted by the dispatcher when
+ * an order-awaiting-signature notification is sent; the raw token only lives in
+ * the message URL, the DB stores SHA256(token). Exchanging one yields a
+ * trigger-scoped session (sessions.scope) — it can view exactly one prepared
+ * order; executing still requires the main-wallet EIP-712 signature.
+ */
+export const signLinkTokens = pgTable(
+  "sign_link_tokens",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    tokenHash: text("token_hash").notNull().unique(),
+    walletAddress: text("wallet_address").notNull(),
+    triggerId: uuid("trigger_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sign_link_tokens_trigger_idx").on(t.triggerId)],
+);
+
+export type SignLinkTokenRow = typeof signLinkTokens.$inferSelect;

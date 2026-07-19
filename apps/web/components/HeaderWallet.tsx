@@ -4,13 +4,14 @@
  * Header trading-balance pill + Deposit button. Visible once the user is signed
  * in and their Arima deposit wallet exists, so funding is always one click away
  * (like Polymarket's persistent Deposit button). Balance is pUSD in the deposit
- * wallet; Deposit opens the same Funds sheet used on the Wallet page.
+ * wallet, counting up live when funds land; Deposit opens the single global
+ * Funds sheet (FundsHost).
  */
-import { useState } from "react";
 import { ArrowDownToLine } from "lucide-react";
 import { useSession } from "@/lib/auth";
 import { useTradingWallet, useTradingWalletBalance } from "@/lib/queries";
-import { FundsSheet } from "@/components/profile/FundsSheet";
+import { useFundsUi } from "@/lib/funds-ui";
+import { AnimatedNumber, FlashOnChange } from "@/components/motion";
 
 export function HeaderWallet() {
   const session = useSession();
@@ -19,41 +20,42 @@ export function HeaderWallet() {
   const provisioned = wallet.data?.provisioned === true;
   const depositWalletAddress = wallet.data?.depositWalletAddress ?? null;
   const balance = useTradingWalletBalance(signedIn && provisioned && !!depositWalletAddress);
-  const [open, setOpen] = useState(false);
+  const openSheet = useFundsUi((s) => s.openSheet);
 
   // Nothing to show until there's a funded-capable wallet.
   if (!signedIn || !provisioned || !depositWalletAddress) return null;
 
   const pusd = balance.data?.depositWalletUsdc;
-  const amount = pusd == null ? (balance.isLoading ? "…" : "—") : `$${pusd.toFixed(2)}`;
 
   return (
-    <>
-      <div className="flex items-center overflow-hidden rounded-md border border-border bg-surface-2">
-        {/* Balance — full label on desktop, tighter on mobile */}
-        <span className="tabular flex items-baseline gap-1 px-2.5 py-1.5 text-[13px] font-semibold text-fg">
-          {amount}
-          <span className="hidden text-[9px] font-medium uppercase tracking-wide text-faint sm:inline">
-            pUSD
-          </span>
+    <div className="flex items-center overflow-hidden rounded-md border border-border bg-surface-2">
+      {/* Balance — full label on desktop, tighter on mobile. Counts up and
+          flashes green when a deposit lands. */}
+      <span className="tabular flex items-baseline gap-1 px-2.5 py-1.5 text-[13px] font-semibold text-fg">
+        {pusd == null ? (
+          balance.isLoading ? (
+            "…"
+          ) : (
+            "—"
+          )
+        ) : (
+          <FlashOnChange value={pusd}>
+            <AnimatedNumber value={pusd} format={(n) => `$${n.toFixed(2)}`} />
+          </FlashOnChange>
+        )}
+        <span className="hidden text-[9px] font-medium uppercase tracking-wide text-faint sm:inline">
+          pUSD
         </span>
-        {/* Deposit */}
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="flex items-center gap-1 self-stretch border-l border-border bg-brand px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-brand-strong"
-        >
-          <ArrowDownToLine size={13} aria-hidden />
-          <span className="hidden sm:inline">Deposit</span>
-        </button>
-      </div>
-
-      <FundsSheet
-        open={open}
-        onClose={() => setOpen(false)}
-        depositWalletAddress={depositWalletAddress}
-        signerAddress={wallet.data?.embeddedAddress ?? null}
-      />
-    </>
+      </span>
+      {/* Deposit */}
+      <button
+        type="button"
+        onClick={() => openSheet("topup")}
+        className="flex items-center gap-1 self-stretch border-l border-border bg-brand px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-brand-strong"
+      >
+        <ArrowDownToLine size={13} aria-hidden />
+        <span className="hidden sm:inline">Deposit</span>
+      </button>
+    </div>
   );
 }

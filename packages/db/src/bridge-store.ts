@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   bridgeAddresses,
@@ -60,6 +73,43 @@ export interface UpsertDepositsResult {
   changed: { row: BridgeDepositRow; previousState: string | null }[];
 }
 
+// ── Bridge withdrawal state machine ──────────────────────────────────────────
+
+/** Terminal bridge-withdrawal states — rows here never move again. */
+export const WITHDRAWAL_TERMINAL = new Set([
+  "completed",
+  "failed_address",
+  "failed_polygon",
+  "failed_bridge",
+]);
+
+/** Ordered ranks for the happy path — forward-only, like deposits. */
+export const BRIDGE_WITHDRAWAL_STATE_RANK: Record<string, number> = {
+  requested: 0,
+  address_created: 1,
+  polygon_submitted: 2,
+  polygon_confirmed: 3,
+  bridging: 4,
+  completed: 5,
+};
+
+/** Deposit states considered terminal (mirrors DEPOSIT_STATE_RANK top). */
+const DEPOSIT_TERMINAL = ["completed", "failed"];
+
+/**
+ * Relayer transaction state → bridge-withdrawal Polygon-leg outcome. Takes a
+ * plain string so this package stays free of polymarket-client imports.
+ * Non-final relayer states map to null (no transition yet).
+ */
+export const bridgeWithdrawalStateFromRelayer = (
+  relayerState: string,
+): "polygon_confirmed" | "failed_polygon" | null =>
+  relayerState === "STATE_MINED" || relayerState === "STATE_CONFIRMED"
+    ? "polygon_confirmed"
+    : relayerState === "STATE_FAILED" || relayerState === "STATE_INVALID"
+      ? "failed_polygon"
+      : null;
+
 export interface BridgeStore {
   /** Idempotent per (wallet, kind, address): re-saving refreshes nothing. */
   saveAddress(row: NewBridgeAddressRow): Promise<BridgeAddressRow>;
@@ -72,6 +122,17 @@ export interface BridgeStore {
    * Oldest-checked first, bounded by `limit`.
    */
   listPollableAddresses(staleBefore: Date, limit: number): Promise<BridgeAddressRow[]>;
+  /**
+   * Pollable addresses that are ACTIVE: carrying a non-terminal deposit or
+   * withdrawal, or created within `activeWindowMs` (a fresh deposit address
+   * has no rows yet but the user is likely mid-transfer). Drives the fast
+   * poller cadence without hitting the Bridge for long-idle addresses.
+   */
+  listActivePollableAddresses(
+    staleBefore: Date,
+    limit: number,
+    activeWindowMs?: number,
+  ): Promise<BridgeAddressRow[]>;
   markAddressChecked(id: string): Promise<void>;
   /**
    * Merge provider status transactions into deposit rows. Insert-or-forward:
@@ -116,14 +177,20 @@ export interface BridgeStore {
     address: BridgeAddressRow,
     transactions: readonly BridgeStatusTransactionInput[],
   ): Promise<{ changed: { row: BridgeWithdrawalRow; previousState: string }[] }>;
+  /**
+   * Forward-only sibling of updateWithdrawalState: refuses terminal rows and
+   * rank regressions (a slow relayer poll returning MINED must never pull a
+   * row already at `bridging` back to `polygon_confirmed`). Failure states are
+   * writable from any non-terminal state. Returns null when nothing moved.
+   */
+  advanceWithdrawalState(
+    id: string,
+    state: string,
+    patch?: Parameters<BridgeStore["updateWithdrawalState"]>[2],
+  ): Promise<BridgeWithdrawalRow | null>;
+  /** Withdrawals currently in one of `states`, oldest first. */
+  listWithdrawalsByStates(states: readonly string[], limit: number): Promise<BridgeWithdrawalRow[]>;
 }
-
-const WITHDRAWAL_TERMINAL = new Set([
-  "completed",
-  "failed_address",
-  "failed_polygon",
-  "failed_bridge",
-]);
 
 export const createBridgeStore = (db: Database): BridgeStore => {
   return {
@@ -168,6 +235,46 @@ export const createBridgeStore = (db: Database): BridgeStore => {
         .from(bridgeAddresses)
         .where(
           or(isNull(bridgeAddresses.lastCheckedAt), lt(bridgeAddresses.lastCheckedAt, staleBefore)),
+        )
+        .orderBy(asc(bridgeAddresses.lastCheckedAt))
+        .limit(limit);
+    },
+
+    async listActivePollableAddresses(staleBefore, limit, activeWindowMs = 30 * 60 * 1000) {
+      const activeSince = new Date(Date.now() - activeWindowMs);
+      const activeDeposit = db
+        .select({ one: sql`1` })
+        .from(bridgeDeposits)
+        .where(
+          and(
+            eq(bridgeDeposits.bridgeAddressId, bridgeAddresses.id),
+            notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL),
+          ),
+        );
+      const activeWithdrawal = db
+        .select({ one: sql`1` })
+        .from(bridgeWithdrawals)
+        .where(
+          and(
+            eq(bridgeWithdrawals.bridgeAddressId, bridgeAddresses.id),
+            notInArray(bridgeWithdrawals.state, [...WITHDRAWAL_TERMINAL]),
+          ),
+        );
+      return db
+        .select()
+        .from(bridgeAddresses)
+        .where(
+          and(
+            or(
+              isNull(bridgeAddresses.lastCheckedAt),
+              lt(bridgeAddresses.lastCheckedAt, staleBefore),
+            ),
+            or(
+              gt(bridgeAddresses.createdAt, activeSince),
+              exists(activeDeposit),
+              exists(activeWithdrawal),
+            ),
+          ),
         )
         .orderBy(asc(bridgeAddresses.lastCheckedAt))
         .limit(limit);
@@ -289,6 +396,38 @@ export const createBridgeStore = (db: Database): BridgeStore => {
         .where(eq(bridgeWithdrawals.id, id))
         .returning();
       return row ?? null;
+    },
+
+    async advanceWithdrawalState(id, state, patch) {
+      const [existing] = await db
+        .select()
+        .from(bridgeWithdrawals)
+        .where(eq(bridgeWithdrawals.id, id))
+        .limit(1);
+      if (!existing || WITHDRAWAL_TERMINAL.has(existing.state)) return null;
+      if (!state.startsWith("failed")) {
+        const nextRank = BRIDGE_WITHDRAWAL_STATE_RANK[state];
+        const currentRank = BRIDGE_WITHDRAWAL_STATE_RANK[existing.state] ?? 0;
+        if (nextRank === undefined || nextRank <= currentRank) return null;
+      }
+      // Compare-and-set on the observed state: a concurrent writer wins and
+      // this call reports "nothing moved" instead of clobbering it.
+      const [row] = await db
+        .update(bridgeWithdrawals)
+        .set({ state, ...(patch ?? {}), updatedAt: sql`now()` })
+        .where(and(eq(bridgeWithdrawals.id, id), eq(bridgeWithdrawals.state, existing.state)))
+        .returning();
+      return row ?? null;
+    },
+
+    async listWithdrawalsByStates(states, limit) {
+      if (states.length === 0) return [];
+      return db
+        .select()
+        .from(bridgeWithdrawals)
+        .where(inArray(bridgeWithdrawals.state, [...states]))
+        .orderBy(asc(bridgeWithdrawals.createdAt))
+        .limit(limit);
     },
 
     async updateWithdrawalsFromStatus(address, transactions) {

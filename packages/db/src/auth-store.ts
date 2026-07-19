@@ -85,18 +85,30 @@ export const createUserStore = (db: Database): UserStore => ({
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
+/**
+ * Restriction attached to non-browser sessions (sign-link / Mini App logins).
+ * A null scope is a full session; require-auth rejects scoped sessions unless
+ * the route explicitly opts in (see middleware/require-auth.ts).
+ */
+export type SessionScope = { type: "trigger"; triggerId: string } | { type: "telegram_wallet" };
+
 export interface SessionStore {
-  create(opts: { userWallet: string; tokenHash: string; expiresAt: Date }): Promise<SessionRow>;
+  create(opts: {
+    userWallet: string;
+    tokenHash: string;
+    expiresAt: Date;
+    scope?: SessionScope | null;
+  }): Promise<SessionRow>;
   /** Returns the session only if it exists, has not expired, and has not been revoked. */
   findByTokenHash(tokenHash: string): Promise<SessionRow | null>;
   revoke(tokenHash: string): Promise<void>;
 }
 
 export const createSessionStore = (db: Database): SessionStore => ({
-  async create({ userWallet, tokenHash, expiresAt }) {
+  async create({ userWallet, tokenHash, expiresAt, scope }) {
     const [row] = await db
       .insert(sessions)
-      .values({ userWallet, tokenHash, expiresAt })
+      .values({ userWallet, tokenHash, expiresAt, scope: scope ?? null })
       .returning();
     if (!row) throw new Error("Failed to create session");
     return row;

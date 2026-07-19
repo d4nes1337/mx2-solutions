@@ -21,6 +21,9 @@ import {
   createDelegationStore,
   createBridgeStore,
   createDraftStore,
+  createNotificationChannelStore,
+  createLinkCodeStore,
+  createSignLinkTokenStore,
 } from "@mx2/db";
 import {
   createGammaClient,
@@ -34,6 +37,7 @@ import { buildApp } from "./app.js";
 import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
 import { createDepositWalletRelayerFromConfig } from "./trade/deposit-wallet-relayer-factory.js";
 import { createAnthropicAiClient } from "./ai/client.js";
+import { createDiscordOauthClient } from "./lib/discord-oauth.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
 const main = async (): Promise<void> => {
@@ -61,6 +65,18 @@ const main = async (): Promise<void> => {
   const withdrawals = createWithdrawalStore(dbHandle.db);
   const bridgeStore = createBridgeStore(dbHandle.db);
   const draftStore = createDraftStore(dbHandle.db);
+  const notificationChannels = createNotificationChannelStore(dbHandle.db);
+  const linkCodes = createLinkCodeStore(dbHandle.db);
+  const signTokens = createSignLinkTokenStore(dbHandle.db);
+  const discordOauth =
+    config.features.discordBot &&
+    config.notifications.discordClientId &&
+    config.notifications.discordClientSecret
+      ? createDiscordOauthClient({
+          clientId: config.notifications.discordClientId,
+          clientSecret: config.notifications.discordClientSecret,
+        })
+      : undefined;
   const triggerStore = createTriggerStore(dbHandle.db);
   const privyWallets = createPrivyWalletStore(dbHandle.db);
   const delegations = createDelegationStore(dbHandle.db);
@@ -106,6 +122,10 @@ const main = async (): Promise<void> => {
     withdrawals,
     bridgeStore,
     draftStore,
+    notificationChannels,
+    linkCodes,
+    signTokens,
+    ...(discordOauth ? { discordOauth } : {}),
     triggerStore,
     privyWallets,
     delegations,

@@ -6,6 +6,7 @@ import { useSession } from "@/lib/auth";
 import { useTradingAccounts, useTradingWallet } from "@/lib/queries";
 import { Empty, Spinner } from "@/components/ui";
 import { WalletsSection } from "@/components/profile/WalletsSection";
+import { NotificationsSection } from "@/components/profile/NotificationsSection";
 import { TradingModeCards, TradingSetupPanel } from "@/components/wallet/TradingModes";
 
 export default function WalletPage() {
@@ -43,6 +44,7 @@ function WalletPageInner() {
         <>
           <TradingSetupPanel account={internal} privyEnabled={privyEnabled} />
           <WalletsSection signedIn={signedIn} autoOpenTopUp={autoOpenTopUp} />
+          <NotificationsSection signedIn={signedIn} />
           <TradingModeCards />
           <details className="rounded-xl border border-border bg-surface-2 px-4 py-3">
             <summary className="cursor-pointer text-[13px] font-medium text-muted">

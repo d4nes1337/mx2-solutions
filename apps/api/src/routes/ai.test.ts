@@ -267,7 +267,7 @@ const buildAiApp = (opts: {
     listForSync: async () => [],
     findByIds: async () => [],
     listByRuleMetadata: async () => [],
-    updateFillState: async () => {},
+    updateFillState: async () => true,
   };
   const flags: RuntimeFlagStore = {
     get: async () => null,

@@ -21,11 +21,9 @@ vi.mock("@/lib/queries", () => ({
   useTradingWallet: () => state.wallet,
   useTradingWalletBalance: () => state.balance,
 }));
-vi.mock("@/components/profile/FundsSheet", () => ({
-  FundsSheet: ({ open }: { open: boolean }) => (open ? <div>FUNDS_SHEET_OPEN</div> : null),
-}));
 
 import { HeaderWallet } from "./HeaderWallet";
+import { useFundsUi } from "@/lib/funds-ui";
 
 beforeEach(() => {
   state.session = { data: { allowlisted: true } };
@@ -37,15 +35,18 @@ beforeEach(() => {
     },
   };
   state.balance = { data: { depositWalletUsdc: 12.5 }, isLoading: false };
+  useFundsUi.setState({ open: false, tab: "history", focusTransferId: null });
 });
 
 describe("HeaderWallet", () => {
-  it("shows the pUSD balance and opens the funds sheet on Deposit", () => {
+  it("shows the pUSD balance and opens the global funds sheet on Deposit", () => {
     render(<HeaderWallet />);
     expect(screen.getByText("$12.50")).toBeInTheDocument();
-    expect(screen.queryByText("FUNDS_SHEET_OPEN")).toBeNull();
+    expect(useFundsUi.getState().open).toBe(false);
     fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByText("FUNDS_SHEET_OPEN")).toBeInTheDocument();
+    // The sheet itself lives in FundsHost — the button drives the store.
+    expect(useFundsUi.getState().open).toBe(true);
+    expect(useFundsUi.getState().tab).toBe("topup");
   });
 
   it("renders nothing when signed out", () => {

@@ -192,6 +192,46 @@ export interface FeatureFlags {
   bridgeWithdrawals: boolean;
   makerLoop: boolean;
   makerLoopLive: boolean;
+  notifications: boolean;
+  telegramBot: boolean;
+  telegramMiniapp: boolean;
+  discordBot: boolean;
+}
+
+// ── Notification channels (Telegram/Discord) ─────────────────────────────────
+
+export type NotificationKind =
+  | "order_awaiting_signature"
+  | "rule_alert"
+  | "order_auto_executed"
+  | "order_filled"
+  | "deposit_completed"
+  | "withdrawal_completed";
+
+export interface NotificationChannelItem {
+  id: string;
+  channel: "telegram" | "discord";
+  externalUsername: string | null;
+  status: "active" | "revoked";
+  /** Per-kind opt-outs; a kind absent from the map is ON. */
+  preferences: Partial<Record<NotificationKind, boolean>>;
+  createdAt: string;
+}
+
+export interface NotificationChannelsResponse {
+  channels: NotificationChannelItem[];
+  kinds: NotificationKind[];
+  telegramEnabled: boolean;
+  discordEnabled: boolean;
+}
+
+export interface LinkCodeResponse {
+  code: string;
+  expiresAt: string;
+  /** t.me deep link (telegram only). */
+  deepLink: string | null;
+  /** Project guild invite (discord only). */
+  guildInviteUrl: string | null;
 }
 
 export interface TradeStatus {
@@ -943,7 +983,25 @@ export interface TriggerDetailResponse {
     signatureType: number;
     timestamp: string;
   };
+  /** Primary trading-account signing context (for the mobile sign page,
+   * whose restricted session cannot call /api/trading-accounts). */
+  account: {
+    id: string;
+    label: string;
+    signerAddress: string;
+    funderAddress: string | null;
+    signingMode: "browser" | "server";
+    credentialsReady: boolean;
+  } | null;
+  tradingEnabled: boolean;
   warning: string;
+}
+
+export interface SignLinkExchangeResponse {
+  ok: boolean;
+  triggerId: string;
+  walletAddress: string;
+  expiresAt: string;
 }
 
 // The challenge envelope returned by GET /api/auth/challenge.

@@ -509,6 +509,8 @@ export interface OrderIntentStore {
    * Fill-reconciliation write (worker single-writer). Statuses only ever
    * advance: a terminal intent (filled/cancelled/failed/unknown) is never
    * overwritten — the update is compare-and-set on the in-flight statuses.
+   * Returns whether a row was actually updated (CAS won) so callers can gate
+   * audit emission on the write having landed.
    */
   updateFillState(
     id: string,
@@ -519,7 +521,7 @@ export interface OrderIntentStore {
       lastSyncedAt: Date;
       errorMessage?: string;
     },
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
@@ -581,16 +583,28 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
 
   async sumRuleAutoNotional(ruleId, since) {
     // Auto intents carry the deterministic key "auto:<ruleId>:<triggerId>".
+    // Conservative accounting per status: in-flight/filled intents commit the
+    // full order notional; a cancelled intent (e.g. a GTD that expired after a
+    // partial fill) still spent its FILLED portion — counting it at zero would
+    // let repeated partial fills leak past the daily cap. Only 'failed'
+    // (never reached the book) counts as nothing.
     const [row] = await db
       .select({
-        total: sql<string>`coalesce(sum((${orderIntents.price})::numeric * (${orderIntents.size})::numeric), 0)::text`,
+        total: sql<string>`coalesce(sum(
+          case
+            when ${orderIntents.status} = 'cancelled'
+              then coalesce(${orderIntents.filledSize}, '0')::numeric
+                   * coalesce(${orderIntents.avgFillPrice}, ${orderIntents.price})::numeric
+            else (${orderIntents.price})::numeric * (${orderIntents.size})::numeric
+          end
+        ), 0)::text`,
       })
       .from(orderIntents)
       .where(
         and(
           sql`${orderIntents.idempotencyKey} like ${`auto:${ruleId}:%`}`,
           gte(orderIntents.createdAt, since),
-          sql`${orderIntents.status} not in ('failed', 'cancelled')`,
+          sql`${orderIntents.status} != 'failed'`,
         ),
       );
     return Number(row?.total ?? 0);
@@ -640,7 +654,7 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
   },
 
   async updateFillState(id, update) {
-    await db
+    const rows = await db
       .update(orderIntents)
       .set({
         lastSyncedAt: update.lastSyncedAt,
@@ -653,7 +667,9 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
       // CAS: only in-flight intents are writable — never regress a terminal.
       .where(
         and(eq(orderIntents.id, id), inArray(orderIntents.status, ["submitted", "acknowledged"])),
-      );
+      )
+      .returning({ id: orderIntents.id });
+    return rows.length > 0;
   },
 });
 

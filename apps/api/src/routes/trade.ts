@@ -9,6 +9,7 @@ import type {
   OrderIntentStore,
   RuntimeFlagStore,
   TradingAccountRow,
+  TriggerStore,
 } from "@mx2/db";
 import type {
   AuthenticatedClobClient,
@@ -23,7 +24,7 @@ import {
   buildClobAuthTypedData,
 } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
-import { makeRequireAuth } from "../middleware/require-auth.js";
+import { makeRequireAuth, makeRequireScopedAuth } from "../middleware/require-auth.js";
 import { makeGeoblockCheck } from "../middleware/geoblock.js";
 import { encryptCredentials, decryptCredentials, fingerprintSecret } from "../auth/crypto.js";
 
@@ -38,6 +39,9 @@ export interface TradeRoutesDeps {
   tradingClobClient: AuthenticatedClobClient;
   geoblockClient: GeoblockClient;
   tradingSigner: TradingSigner;
+  /** Required for RESTRICTED (sign-link / Mini App) sessions to submit their
+   * trigger's order; absent → scoped submission is refused fail-closed. */
+  triggerStore?: TriggerStore;
 }
 
 const isTradingPaused = async (deps: TradeRoutesDeps): Promise<boolean> => {
@@ -154,6 +158,7 @@ const accountNotReady = async (
 
 export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
+  const requireScopedAuth = makeRequireScopedAuth({ sessions: deps.sessions });
   const geoblockCheck = makeGeoblockCheck({
     geoblockClient: deps.geoblockClient,
     auditStore: deps.auditStore,
@@ -356,9 +361,11 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
 
   // ── POST /api/trade/orders ─────────────────────────────────────────────────
   // Authenticated + trading enabled + geoblock. Idempotent by idempotencyKey.
+  // Also accepts RESTRICTED sessions (sign links / Mini App) — constrained
+  // below to the browser-signed order of exactly their own awaiting trigger.
   app.post(
     "/api/trade/orders",
-    { preHandler: [requireAuth, geoblockCheck] },
+    { preHandler: [requireScopedAuth, geoblockCheck] },
     async (req, reply) => {
       if (!(await assertTradingEnabled(deps, reply))) return;
       const user = req.user!;
@@ -393,6 +400,32 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         };
       }
 
+      // Restricted sessions: structurally constrained to their own trigger's
+      // browser-signed order BEFORE any other processing. The EIP-712 wallet
+      // signature (validated on the browser path below) is the execution
+      // proof — a leaked link alone can never execute anything.
+      const scopedTriggerId = req.authScope
+        ? (/^trigger:(.+)$/.exec(idempotencyKey)?.[1] ?? null)
+        : null;
+      if (req.authScope) {
+        const forbid = (message: string) => {
+          reply.code(403);
+          return { error: "SCOPE_FORBIDDEN", message };
+        };
+        if (!deps.triggerStore) {
+          return forbid("Scoped order submission is not available on this server.");
+        }
+        if (!scopedTriggerId) {
+          return forbid("This session can only submit its prepared triggered order.");
+        }
+        if (req.authScope.type === "trigger" && req.authScope.triggerId !== scopedTriggerId) {
+          return forbid("This session can only submit its own prepared order.");
+        }
+        if (account.signingMode !== "browser") {
+          return forbid("Remote signing requires the main wallet's signature (browser account).");
+        }
+      }
+
       // Idempotency: if a matching intent already exists, return its current state.
       const existing = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
       if (existing) {
@@ -409,6 +442,22 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
           status: existing.status,
           idempotent: true,
         };
+      }
+
+      // Scoped sessions submit only while their trigger still awaits the user
+      // (replays return the existing intent above and never reach this check).
+      if (req.authScope && scopedTriggerId && deps.triggerStore) {
+        const trigger = await deps.triggerStore.findByIdForWallet(
+          scopedTriggerId,
+          user.walletAddress,
+        );
+        if (!trigger || trigger.status !== "awaiting_user") {
+          reply.code(403);
+          return {
+            error: "SCOPE_FORBIDDEN",
+            message: "The prepared order is no longer awaiting a signature.",
+          };
+        }
       }
 
       // Rate-limit guardrail (shared with the auto-execution path via the same
@@ -704,10 +753,12 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         return { error: "CANCEL_FAILED", message: result.error.message };
       }
 
-      // Update any matching intent to cancelled.
+      // Update any matching intent to cancelled — but never regress a terminal
+      // status the fill-sync loop already resolved (a CLOB cancel of an
+      // already-filled order can answer 200 without actually cancelling).
       const intents = await deps.orderIntents.listByWallet(user.walletAddress, 100);
       const matching = intents.find((i) => i.clobOrderId === clobOrderId);
-      if (matching) {
+      if (matching && ["submitted", "acknowledged", "unknown"].includes(matching.status)) {
         await deps.orderIntents.updateStatus(matching.id, "cancelled");
       }
 

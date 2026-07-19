@@ -3,6 +3,7 @@ import { decryptCredentials } from "@mx2/core";
 import type { Logger } from "@mx2/observability";
 import type {
   AuditStore,
+  NotificationOutboxStore,
   OrderIntentRow,
   OrderIntentStore,
   TradingAccountClobCredentialStore,
@@ -36,6 +37,8 @@ export interface OrderSyncOptions {
   accountClobCredentials: TradingAccountClobCredentialStore;
   tradingClobClient: AuthenticatedClobClient;
   auditStore: AuditStore;
+  /** Notification outbox (FEATURE_NOTIFICATIONS): fill notifications. */
+  outbox?: NotificationOutboxStore;
   intervalMs?: number;
   /** Intents younger than this are never resolved to cancelled on absence —
    * the CLOB's open-orders view can lag a fresh submission. */
@@ -51,20 +54,38 @@ export interface OrderSyncLoop {
 }
 
 /** Total size + weighted notional matched for one of OUR order ids in a trade set. */
-const fillsForOrder = (
+export const fillsForOrder = (
   trades: readonly UserTrade[],
   clobOrderId: string,
 ): { size: number; notional: number } => {
   let size = 0;
   let notional = 0;
   for (const trade of trades) {
+    // A FAILED trade never settled on-chain and is not retried — counting it
+    // would report a fill for a position the user does not hold.
+    if (trade.status === "FAILED") continue;
     if (trade.taker_order_id === clobOrderId) {
-      const s = Number(trade.size);
-      const p = Number(trade.price);
-      if (Number.isFinite(s) && Number.isFinite(p)) {
-        size += s;
-        notional += s * p;
+      // Our taker order swept one or more maker levels; maker_orders carries
+      // the per-level breakdown, which is the accurate weighted cost. The
+      // top-level price is a fallback when the breakdown is absent.
+      if (trade.maker_orders.length > 0) {
+        for (const maker of trade.maker_orders) {
+          const s = Number(maker.matched_amount);
+          const p = Number(maker.price);
+          if (Number.isFinite(s) && Number.isFinite(p)) {
+            size += s;
+            notional += s * p;
+          }
+        }
+      } else {
+        const s = Number(trade.size);
+        const p = Number(trade.price);
+        if (Number.isFinite(s) && Number.isFinite(p)) {
+          size += s;
+          notional += s * p;
+        }
       }
+      continue; // our id cannot also appear in maker_orders of our own taker trade
     }
     for (const maker of trade.maker_orders) {
       if (maker.order_id === clobOrderId) {
@@ -90,6 +111,7 @@ export const createOrderSyncLoop = (opts: OrderSyncOptions): OrderSyncLoop => {
     accountClobCredentials,
     tradingClobClient,
     auditStore,
+    outbox,
   } = opts;
   const intervalMs = opts.intervalMs ?? 20_000;
   const disappearGraceMs = opts.disappearGraceMs ?? 120_000;
@@ -175,20 +197,32 @@ export const createOrderSyncLoop = (opts: OrderSyncOptions): OrderSyncLoop => {
 
     const openResult = await tradingClobClient.getOpenOrders(address, creds);
     if (!openResult.ok) {
-      // Transient upstream failure: leave everything untouched and retry.
-      logger.warn(
+      // Upstream failure: statuses stay untouched, but STAMP lastSyncedAt so a
+      // persistently broken account (e.g. revoked L2 key → 401 forever) rotates
+      // to the back of the listForSync queue instead of starving every other
+      // account's batch slots on each pass.
+      warnThrottled(
+        `open-orders:${account.id}`,
+        "Order-sync: getOpenOrders failed — stamping and retrying later",
         { tradingAccountId: account.id, error: openResult.error.code },
-        "Order-sync: getOpenOrders failed — skipping account this pass",
       );
+      for (const intent of intents)
+        await orderIntents.updateFillState(intent.id, { lastSyncedAt: now });
       return;
     }
     const openById = new Map<string, OpenOrder>(openResult.value.map((o) => [o.id, o]));
+    // Bound the trades lookback to this group's oldest intent (minus a settle
+    // buffer) — keeps the paginated fetch small enough to never truncate on
+    // busy accounts (truncation is a hard error in getUserTrades).
+    const oldestCreatedMs = Math.min(...intents.map((i) => i.createdAt.getTime()));
+    const afterUnixSec = String(Math.max(0, Math.floor(oldestCreatedMs / 1000) - 3_600));
     /** One trades fetch per token per pass, shared across this account's intents. */
     const tradesByToken = new Map<string, UserTrade[] | null>();
     const tradesFor = async (tokenId: string): Promise<UserTrade[] | null> => {
       if (!tradesByToken.has(tokenId)) {
         const result = await tradingClobClient.getUserTrades(address, creds, {
           asset_id: tokenId,
+          after: afterUnixSec,
         });
         tradesByToken.set(tokenId, result.ok ? result.value : null);
         if (!result.ok) {
@@ -210,20 +244,25 @@ export const createOrderSyncLoop = (opts: OrderSyncOptions): OrderSyncLoop => {
         const matched = Number(open.size_matched);
         const prevFilled = Number(intent.filledSize);
         const progressed = Number.isFinite(matched) && matched > prevFilled + SIZE_EPS;
-        if (intent.status === "submitted") {
-          await audit("order.acknowledged", intent, { filledSize: open.size_matched });
-        }
-        if (progressed && matched > SIZE_EPS) {
-          await audit("order.partially_filled", intent, {
-            filledSize: open.size_matched,
-            originalSize: open.original_size,
-          });
-        }
-        await orderIntents.updateFillState(intent.id, {
-          ...(intent.status === "submitted" ? { status: "acknowledged" as const } : {}),
+        const wasSubmitted = intent.status === "submitted";
+        // Write first, audit only if the CAS landed — a concurrent user cancel
+        // must not be followed by a stale "acknowledged" audit entry.
+        const applied = await orderIntents.updateFillState(intent.id, {
+          ...(wasSubmitted ? { status: "acknowledged" as const } : {}),
           ...(Number.isFinite(matched) ? { filledSize: String(matched) } : {}),
           lastSyncedAt: now,
         });
+        if (applied) {
+          if (wasSubmitted) {
+            await audit("order.acknowledged", intent, { filledSize: open.size_matched });
+          }
+          if (progressed && matched > SIZE_EPS) {
+            await audit("order.partially_filled", intent, {
+              filledSize: open.size_matched,
+              originalSize: open.original_size,
+            });
+          }
+        }
         continue;
       }
 
@@ -240,25 +279,47 @@ export const createOrderSyncLoop = (opts: OrderSyncOptions): OrderSyncLoop => {
       const avgFillPrice = totalFilled > SIZE_EPS ? String(notional / totalFilled) : null;
 
       if (totalFilled >= orderSize - SIZE_EPS && orderSize > 0) {
-        await orderIntents.updateFillState(intent.id, {
+        const applied = await orderIntents.updateFillState(intent.id, {
           status: "filled",
           filledSize: String(totalFilled),
           avgFillPrice,
           lastSyncedAt: now,
         });
-        await audit("order.filled", intent, { filledSize: String(totalFilled), avgFillPrice });
+        if (applied) {
+          await audit("order.filled", intent, { filledSize: String(totalFilled), avgFillPrice });
+          if (outbox) {
+            try {
+              await outbox.enqueue({
+                walletAddress: intent.walletAddress,
+                kind: "order_filled",
+                dedupeKey: `fill:${intent.id}`,
+                payload: {
+                  intentId: intent.id,
+                  side: intent.side,
+                  size: Number(intent.size),
+                  filledSize: String(totalFilled),
+                  avgFillPrice,
+                },
+              });
+            } catch (e) {
+              logger.warn({ err: e, intentId: intent.id }, "fill notification enqueue failed");
+            }
+          }
+        }
       } else {
-        await orderIntents.updateFillState(intent.id, {
+        const applied = await orderIntents.updateFillState(intent.id, {
           status: "cancelled",
           filledSize: String(totalFilled),
           avgFillPrice,
           lastSyncedAt: now,
         });
-        await audit("order.cancelled", intent, {
-          filledSize: String(totalFilled),
-          avgFillPrice,
-          partiallyFilled: totalFilled > SIZE_EPS,
-        });
+        if (applied) {
+          await audit("order.cancelled", intent, {
+            filledSize: String(totalFilled),
+            avgFillPrice,
+            partiallyFilled: totalFilled > SIZE_EPS,
+          });
+        }
       }
     }
   };

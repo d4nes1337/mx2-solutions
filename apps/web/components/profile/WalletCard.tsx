@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -20,7 +20,7 @@ import {
 } from "@/lib/queries";
 import type { TradingAccount } from "@/lib/types";
 import { Badge, Button, cn } from "@/components/ui";
-import { FundsSheet } from "./FundsSheet";
+import { useFundsUi } from "@/lib/funds-ui";
 
 function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -116,8 +116,13 @@ export function WalletCard({
   const walletStatus = useTradingWallet(true);
   const qc = useQueryClient();
 
-  const [topUpOpen, setTopUpOpen] = useState(autoOpenTopUp);
+  const openSheet = useFundsUi((s) => s.openSheet);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Deep link /wallet?topup=1 → open the global Funds sheet on Add funds.
+  useEffect(() => {
+    if (autoOpenTopUp) openSheet("topup");
+  }, [autoOpenTopUp, openSheet]);
 
   const depositWalletAddress =
     account.depositWalletAddress ?? walletStatus.data?.depositWalletAddress ?? null;
@@ -255,7 +260,7 @@ export function WalletCard({
             <Button
               size="sm"
               variant={account.nextAction === "top_up" ? "primary" : "ghost"}
-              onClick={() => setTopUpOpen(true)}
+              onClick={() => openSheet("topup")}
             >
               Add funds
             </Button>
@@ -313,15 +318,6 @@ export function WalletCard({
         {/* Errors */}
         {activateError && <p className="mt-2 text-[12px] text-neg">{activateError}</p>}
       </div>
-
-      {isPrivy && depositWalletAddress && (
-        <FundsSheet
-          open={topUpOpen}
-          onClose={() => setTopUpOpen(false)}
-          depositWalletAddress={depositWalletAddress}
-          signerAddress={account.signerAddress}
-        />
-      )}
     </>
   );
 }

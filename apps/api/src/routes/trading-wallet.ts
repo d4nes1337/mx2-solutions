@@ -10,6 +10,7 @@ import type {
   TradingAccountStore,
   WithdrawalStore,
 } from "@mx2/db";
+import { bridgeWithdrawalStateFromRelayer } from "@mx2/db";
 import {
   PUSD_ADDRESS,
   buildPusdTransfer,
@@ -49,6 +50,14 @@ export interface TradingWalletRoutesDeps {
  * to the user as QUOTE_TOO_LOW with the actual quote attached.
  */
 const BRIDGE_WITHDRAW_MAX_DEVIATION_BPS = 100;
+
+/**
+ * GET /withdrawals refresh bounds: the UI polls fast (~4s) while a transfer
+ * is in flight, so Bridge status pulls are limited per address per interval
+ * and per request — the relayer has no such bound (it's our own infra).
+ */
+const REFRESH_MIN_INTERVAL_MS = 5_000;
+const WITHDRAWAL_REFRESH_ADDRESS_LIMIT = 3;
 
 /**
  * Withdrawal body — deliberately STRICT: a smuggled `destination` (or any
@@ -794,10 +803,14 @@ export const registerTradingWalletRoutes = (
 
   // ── GET /api/trading-wallet/withdrawals ───────────────────────────────────
   // Withdrawal history for the Funds sheet. Best-effort: refreshes the state
-  // of still-pending rows from the relayer (failures keep the stored state).
+  // of still-pending rows — direct rows and bridge Polygon legs from the
+  // relayer, in-transit bridge legs from the Bridge status API (bounded by
+  // lastCheckedAt so the UI's fast polling can't hammer the Bridge). Failures
+  // keep the stored state.
   app.get("/api/trading-wallet/withdrawals", { preHandler: requireAuth }, async (req) => {
     const user = req.user!;
     const rows = await deps.withdrawals.listByWallet(user.walletAddress, 50);
+    const bridgeRows = await deps.bridgeStore.listWithdrawalsByWallet(user.walletAddress, 50);
 
     const wallet = await deps.privyWallets.find(user.walletAddress);
     if (wallet && deps.depositWalletRelayer.enabled) {
@@ -819,9 +832,80 @@ export const registerTradingWalletRoutes = (
           if (state.value.transactionHash) row.transactionHash = state.value.transactionHash;
         }
       }
+
+      // Bridge withdrawals stuck on the Polygon leg: ask the relayer.
+      for (const row of bridgeRows) {
+        if (row.state !== "polygon_submitted" || !row.relayerTransactionId) continue;
+        const previousState = row.state;
+        const state = await deps.depositWalletRelayer.getTransactionState(
+          owner,
+          row.relayerTransactionId,
+        );
+        if (!state.ok) continue;
+        const next = bridgeWithdrawalStateFromRelayer(state.value.state);
+        if (!next) continue;
+        const updated = await deps.bridgeStore.advanceWithdrawalState(row.id, next, {
+          ...(state.value.transactionHash ? { polygonTxHash: state.value.transactionHash } : {}),
+          ...(next === "failed_polygon" ? { error: state.value.state } : {}),
+        });
+        if (!updated) continue;
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "wallet.bridge.withdraw_state_changed",
+          subject: `bridge_withdrawal:${row.id}`,
+          metadata: {
+            from: previousState,
+            to: updated.state,
+            source: "relayer",
+            relayerTransactionId: row.relayerTransactionId,
+          },
+        });
+        row.state = updated.state;
+        if (updated.polygonTxHash) row.polygonTxHash = updated.polygonTxHash;
+      }
     }
 
-    const bridgeRows = await deps.bridgeStore.listWithdrawalsByWallet(user.walletAddress, 50);
+    // Bridge withdrawals in transit: pull the hop-address status, at most
+    // once per REFRESH_MIN_INTERVAL_MS per address (lastCheckedAt-bounded).
+    const inTransit = bridgeRows.filter(
+      (row) =>
+        (row.state === "polygon_confirmed" || row.state === "bridging") && row.bridgeAddressId,
+    );
+    if (inTransit.length > 0) {
+      const addressRows = await deps.bridgeStore.listAddresses(user.walletAddress, "withdrawal");
+      const staleBefore = Date.now() - REFRESH_MIN_INTERVAL_MS;
+      let refreshed = 0;
+      for (const row of inTransit) {
+        if (refreshed >= WITHDRAWAL_REFRESH_ADDRESS_LIMIT) break;
+        const address = addressRows.find((a) => a.id === row.bridgeAddressId);
+        if (!address) continue;
+        if (address.lastCheckedAt && address.lastCheckedAt.getTime() >= staleBefore) continue;
+        refreshed += 1;
+        const status = await deps.bridgeClient.getStatus(address.address);
+        await deps.bridgeStore.markAddressChecked(address.id);
+        // Keep later rows from re-hitting the same address this request.
+        address.lastCheckedAt = new Date();
+        if (!status.ok) continue;
+        const { changed } = await deps.bridgeStore.updateWithdrawalsFromStatus(
+          address,
+          status.value.transactions.map((tx) => ({ status: tx.status, txHash: tx.txHash })),
+        );
+        for (const change of changed) {
+          await deps.auditStore.emit({
+            actor: user.walletAddress,
+            action: "wallet.bridge.withdraw_state_changed",
+            subject: `bridge_withdrawal:${change.row.id}`,
+            metadata: { from: change.previousState, to: change.row.state, source: "bridge" },
+          });
+          const local = bridgeRows.find((r) => r.id === change.row.id);
+          if (local) {
+            local.state = change.row.state;
+            if (change.row.bridgeTxHash) local.bridgeTxHash = change.row.bridgeTxHash;
+          }
+        }
+      }
+    }
+
     return {
       withdrawals: rows.map((r) => ({
         id: r.id,

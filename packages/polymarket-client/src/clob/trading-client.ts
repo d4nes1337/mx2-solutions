@@ -92,6 +92,8 @@ const DEFAULT_BASE_URL = "https://clob.polymarket.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
 /** First-page cursor for GET /data/orders (matches @polymarket/clob-client INITIAL_CURSOR). */
 const INITIAL_CURSOR = "MA==";
+/** Terminal cursor (base64 "-1", matches @polymarket/clob-client END_CURSOR). */
+const END_CURSOR = "LTE=";
 
 const buildL1Headers = (params: DeriveApiKeyParams): Record<string, string> => ({
   POLY_ADDRESS: params.address,
@@ -292,33 +294,52 @@ export const createAuthenticatedClobClient = (
     },
 
     async getOpenOrders(address, creds) {
+      // Paginated ({data, next_cursor}, END cursor "LTE="). Truncation is an
+      // ERROR, not a partial success: callers infer "cancelled/filled" from an
+      // order's ABSENCE, so an incomplete list must never be trusted.
       const requestPath = "/data/orders";
       const headersResult = await l2Headers(address, creds, { method: "GET", requestPath });
       if (!headersResult.ok) return err(headersResult.error);
-      const result = await doFetch(
-        `${baseUrl}${requestPath}?next_cursor=${INITIAL_CURSOR}`,
-        {
-          method: "GET",
-          headers: headersResult.value,
-        },
-        OpenOrdersResponseSchema,
-        timeoutMs,
-      );
-      if (!result.ok) return err(result.error);
-      return ok(result.value.data);
+      const orders: OpenOrder[] = [];
+      let cursor = INITIAL_CURSOR;
+      const MAX_PAGES = 10;
+      for (let page = 0; page < MAX_PAGES && cursor !== END_CURSOR; page++) {
+        const result = await doFetch(
+          `${baseUrl}${requestPath}?next_cursor=${cursor}`,
+          {
+            method: "GET",
+            headers: headersResult.value,
+          },
+          OpenOrdersResponseSchema,
+          timeoutMs,
+        );
+        if (!result.ok) return err(result.error);
+        orders.push(...result.value.data);
+        cursor = result.value.next_cursor;
+      }
+      if (cursor !== END_CURSOR) {
+        return err(
+          upstreamError(0, `open orders exceeded ${MAX_PAGES} pages — refusing partial list`),
+        );
+      }
+      return ok(orders);
     },
 
     async getUserTrades(address, creds, params) {
       // L2 HMAC signs the request path only (query appended after) — mirrors
       // getOpenOrders and @polymarket/clob-client's getTrades pagination:
-      // response {data, next_cursor}, END cursor "LTE=".
+      // response {data, next_cursor}, END cursor "LTE=". Same truncation rule
+      // as getOpenOrders: callers decide filled-vs-cancelled from the SUM of
+      // fills, so a partial list must surface as an error (fail closed).
+      // Offset cursors can also re-serve a trade when new fills land between
+      // pages — dedupe by trade id.
       const requestPath = "/data/trades";
       const headersResult = await l2Headers(address, creds, { method: "GET", requestPath });
       if (!headersResult.ok) return err(headersResult.error);
-      const trades: UserTrade[] = [];
+      const byId = new Map<string, UserTrade>();
       let cursor = INITIAL_CURSOR;
       const MAX_PAGES = 5;
-      for (let page = 0; page < MAX_PAGES && cursor !== "LTE="; page++) {
+      for (let page = 0; page < MAX_PAGES && cursor !== END_CURSOR; page++) {
         const query = new URLSearchParams({ next_cursor: cursor });
         if (params?.asset_id) query.set("asset_id", params.asset_id);
         if (params?.market) query.set("market", params.market);
@@ -334,10 +355,13 @@ export const createAuthenticatedClobClient = (
           timeoutMs,
         );
         if (!result.ok) return err(result.error);
-        trades.push(...result.value.data);
+        for (const trade of result.value.data) byId.set(trade.id, trade);
         cursor = result.value.next_cursor;
       }
-      return ok(trades);
+      if (cursor !== END_CURSOR) {
+        return err(upstreamError(0, `trades exceeded ${MAX_PAGES} pages — refusing partial list`));
+      }
+      return ok([...byId.values()]);
     },
   };
 };

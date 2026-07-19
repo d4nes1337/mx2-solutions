@@ -35,6 +35,12 @@ const QuoteSchema = z
 
 /** Addresses refreshed per on-request status pull (bounds Bridge traffic). */
 const REFRESH_ADDRESS_LIMIT = 5;
+/**
+ * Skip addresses checked more recently than this. The UI polls ~4s while a
+ * deposit is in flight (and across tabs); this keeps the Bridge seeing at
+ * most one status call per address per interval server-wide.
+ */
+const REFRESH_MIN_INTERVAL_MS = 5_000;
 
 const addressTypeForChain = (chainName: string): "evm" | "svm" | "btc" | "tvm" => {
   const normalized = chainName.toLowerCase();
@@ -303,10 +309,13 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
 
       if ((req.query as Record<string, string>)["refresh"] === "1") {
         // Bounded on-request status pull — covers deployments where the
-        // worker poller is off, without unbounded Bridge traffic.
-        const addresses = (
-          await deps.bridgeStore.listAddresses(user.walletAddress, "deposit")
-        ).slice(0, REFRESH_ADDRESS_LIMIT);
+        // worker poller is off, without unbounded Bridge traffic. Stalest
+        // first, skipping anything checked within REFRESH_MIN_INTERVAL_MS.
+        const staleBefore = Date.now() - REFRESH_MIN_INTERVAL_MS;
+        const addresses = (await deps.bridgeStore.listAddresses(user.walletAddress, "deposit"))
+          .filter((row) => !row.lastCheckedAt || row.lastCheckedAt.getTime() < staleBefore)
+          .sort((a, b) => (a.lastCheckedAt?.getTime() ?? 0) - (b.lastCheckedAt?.getTime() ?? 0))
+          .slice(0, REFRESH_ADDRESS_LIMIT);
         for (const address of addresses) {
           const status = await deps.bridgeClient.getStatus(address.address);
           if (!status.ok) continue; // fail-soft: stale rows beat a hard error

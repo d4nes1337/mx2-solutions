@@ -23,6 +23,9 @@ import type {
   WithdrawalStore,
   BridgeStore,
   DraftStore,
+  NotificationChannelStore,
+  LinkCodeStore,
+  SignLinkTokenStore,
 } from "@mx2/db";
 import type {
   GammaClient,
@@ -36,6 +39,7 @@ import type {
 import { createBridgeClient, createDisabledDepositWalletRelayer } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
+import type { DiscordOauthClient } from "./lib/discord-oauth.js";
 import { registerEventsRoutes } from "./routes/events.js";
 import { registerFeedRoutes } from "./routes/feed.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
@@ -50,6 +54,7 @@ import { registerAdminRoutes } from "./routes/admin.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
 import { registerShowcasesRoutes } from "./routes/showcases.js";
+import { registerNotificationsRoutes } from "./routes/notifications.js";
 import { registerQuoterRoutes } from "./routes/quoter.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import type { AiClient } from "./ai/client.js";
@@ -87,6 +92,14 @@ export interface AppDeps {
   bridgeStore?: BridgeStore;
   /** Server-synced builder drafts; omitted only in tests that never touch draft routes. */
   draftStore?: DraftStore;
+  /** Notification channel links; omitted only in tests that never touch notification routes. */
+  notificationChannels?: NotificationChannelStore;
+  /** Channel link codes; omitted only in tests that never touch notification routes. */
+  linkCodes?: LinkCodeStore;
+  /** Sign-link tokens; enables the scoped sign-link exchange when present. */
+  signTokens?: SignLinkTokenStore;
+  /** Discord OAuth linking client (FEATURE_DISCORD_BOT). */
+  discordOauth?: DiscordOauthClient;
   gammaClient: GammaClient;
   clobClient: ClobClient;
   dataClient: DataClient;
@@ -143,6 +156,8 @@ export const buildApp = (deps: AppDeps) => {
 
   // Expose req.user on every request (null until auth middleware sets it).
   app.decorateRequest("user", null);
+  // Session restriction marker (null = full session; see auth/types.ts).
+  app.decorateRequest("authScope", null);
 
   // CORS: in development allow any localhost origin (needed for the test HTML page).
   // In staging/production allow exactly the configured frontend origin (APP_BASE_URL).
@@ -205,6 +220,8 @@ export const buildApp = (deps: AppDeps) => {
     tradingSigner: deps.tradingSigner,
     privyWallets: deps.privyWallets,
     tradingAccounts,
+    ...(deps.signTokens ? { signTokens: deps.signTokens } : {}),
+    ...(deps.notificationChannels ? { notificationChannels: deps.notificationChannels } : {}),
   });
   registerProfileRoutes(fastifyApp, {
     dataClient: deps.dataClient,
@@ -222,6 +239,7 @@ export const buildApp = (deps: AppDeps) => {
       },
       listAddresses: async () => [],
       listPollableAddresses: async () => [],
+      listActivePollableAddresses: async () => [],
       markAddressChecked: async () => {},
       upsertDepositsFromStatus: async () => ({ changed: [] }),
       listDepositsByWallet: async () => [],
@@ -230,6 +248,8 @@ export const buildApp = (deps: AppDeps) => {
       listWithdrawalsByWallet: async () => [],
       updateWithdrawalState: async () => null,
       updateWithdrawalsFromStatus: async () => ({ changed: [] }),
+      advanceWithdrawalState: async () => null,
+      listWithdrawalsByStates: async () => [],
     } satisfies BridgeStore);
   registerFundsRoutes(fastifyApp, {
     config: deps.config,
@@ -248,6 +268,16 @@ export const buildApp = (deps: AppDeps) => {
       draftStore: deps.draftStore,
     });
   }
+  if (deps.notificationChannels && deps.linkCodes) {
+    registerNotificationsRoutes(fastifyApp, {
+      config: deps.config,
+      sessions: deps.sessions,
+      auditStore: deps.auditStore,
+      notificationChannels: deps.notificationChannels,
+      linkCodes: deps.linkCodes,
+      ...(deps.discordOauth ? { discordOauth: deps.discordOauth } : {}),
+    });
+  }
   registerTradeRoutes(fastifyApp, {
     config: deps.config,
     sessions: deps.sessions,
@@ -259,6 +289,7 @@ export const buildApp = (deps: AppDeps) => {
     tradingClobClient: deps.tradingClobClient,
     geoblockClient: deps.geoblockClient,
     tradingSigner: deps.tradingSigner,
+    triggerStore: deps.triggerStore,
   });
   const allowanceReader =
     deps.allowanceReader ??
@@ -304,7 +335,10 @@ export const buildApp = (deps: AppDeps) => {
     auditStore: deps.auditStore,
     ruleStore: deps.ruleStore,
     triggerStore: deps.triggerStore,
+    orderIntents: deps.orderIntents,
     marketSnapshots: deps.marketSnapshots,
+    tradingAccounts,
+    accountClobCredentials,
   });
   registerSmartOrdersRoutes(fastifyApp, {
     config: deps.config,

@@ -728,9 +728,11 @@ export const registerSmartOrdersRoutes = (
       deps.orderIntents.findByIds(intentIds),
       deps.orderIntents.listByRuleMetadata(id),
     ]);
-    const orders = [...new Map([...linked, ...byMetadata].map((o) => [o.id, o])).values()].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    );
+    // findByIds is not wallet-scoped — re-filter so a foreign intent id that
+    // slipped into a trigger link can never surface another user's order.
+    const orders = [...new Map([...linked, ...byMetadata].map((o) => [o.id, o])).values()]
+      .filter((o) => o.walletAddress === user.walletAddress)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     return {
       strategyId: row.id,
@@ -808,12 +810,15 @@ export const registerSmartOrdersRoutes = (
         }
       }
 
+      // Cap the total live-lookup fan-out: this endpoint is public, and each
+      // snapshot-miss token costs one upstream CLOB call. 8 total keeps the
+      // worst case at the pre-existing ceiling (4 expr markets × book+history).
       const tokens = [
         ...new Set([
           ...(draftDef !== null ? referencedTokenIds(draftDef) : []),
           ...parsed.data.extraTokenIds,
         ]),
-      ];
+      ].slice(0, 8);
       const nowMs = Date.now();
       const views = await loadViews(
         deps,
