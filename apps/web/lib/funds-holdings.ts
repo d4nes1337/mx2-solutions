@@ -148,11 +148,33 @@ const holdingUsd = (symbol: string, amount: number, prices: Record<string, numbe
 };
 
 /**
+ * Symbols that denote the same underlying asset and must fold to one row. POL
+ * and MATIC are the same Polygon coin (post-rename; the Bridge lists both, and
+ * the native coin is also readable via the 0x…1010 predeploy), so a wallet
+ * would otherwise show its balance twice.
+ */
+const GROUP_ALIAS: Record<string, string> = { MATIC: "POL", WMATIC: "POL" };
+const canonicalGroup = (group: string): string => GROUP_ALIAS[group] ?? group;
+
+/** Below this a holding is dust — hidden so the list stays "real assets only". */
+const DUST_USD = 0.01;
+const DUST_AMOUNT = 1e-4;
+
+/** When folding variants of one asset, prefer a priced entry, then the larger balance. */
+const preferHolding = (cand: WalletHolding, existing: WalletHolding): boolean => {
+  const candPriced = cand.usd != null;
+  const exPriced = existing.usd != null;
+  if (candPriced !== exPriced) return candPriced;
+  return cand.amount > existing.amount;
+};
+
+/**
  * Fold the six chains' raw balances into a sorted holdings list. Positive
- * balances only; multiple variants of one group on one chain collapse to a
- * single row keyed by (group, chain), keeping the largest-balance variant as
- * the send target. Sorted by USD desc (unknown price last), then amount, then
- * chain order.
+ * balances only; variants of one asset on one chain collapse to a single row
+ * keyed by (canonical group, chain) — USDC≡USDC.e, POL≡MATIC — keeping the
+ * priced/larger variant as the send target. Dust (sub-cent, or a sub-epsilon
+ * unpriced amount) is dropped. Sorted by USD desc (unknown price last), then
+ * amount, then chain order.
  */
 export function buildHoldings(
   scans: ChainScan[],
@@ -165,12 +187,11 @@ export function buildHoldings(
       if (raw == null || raw <= 0n) return;
       const amount = Number(formatUnits(raw, token.decimals));
       if (!(amount > 0)) return;
-      const key = `${token.group}:${scan.chainId}`;
-      const existing = byKey.get(key);
-      if (existing && existing.amount >= amount) return;
-      byKey.set(key, {
+      const group = canonicalGroup(token.group);
+      const key = `${group}:${scan.chainId}`;
+      const cand: WalletHolding = {
         key,
-        group: token.group,
+        group,
         symbol: token.asset.token.symbol,
         chainId: scan.chainId,
         chainName: token.asset.chainName,
@@ -178,13 +199,17 @@ export function buildHoldings(
         amount,
         decimals: token.decimals,
         usd: holdingUsd(token.asset.token.symbol, amount, prices),
-      });
+      };
+      const existing = byKey.get(key);
+      if (!existing || preferHolding(cand, existing)) byKey.set(key, cand);
     });
   }
-  return [...byKey.values()].sort(
-    (a, b) =>
-      (b.usd ?? -1) - (a.usd ?? -1) ||
-      b.amount - a.amount ||
-      (CHAIN_ORDER[a.chainId] ?? 99) - (CHAIN_ORDER[b.chainId] ?? 99),
-  );
+  return [...byKey.values()]
+    .filter((h) => (h.usd != null ? h.usd >= DUST_USD : h.amount >= DUST_AMOUNT))
+    .sort(
+      (a, b) =>
+        (b.usd ?? -1) - (a.usd ?? -1) ||
+        b.amount - a.amount ||
+        (CHAIN_ORDER[a.chainId] ?? 99) - (CHAIN_ORDER[b.chainId] ?? 99),
+    );
 }

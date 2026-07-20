@@ -97,7 +97,7 @@ export function FundsSheet({
       open={open}
       onClose={onClose}
       label="Funds"
-      panelClassName="w-full max-w-md rounded-t-xl border border-border bg-bg p-5 shadow-xl sm:rounded-xl"
+      panelClassName="flex h-[min(88svh,620px)] w-full max-w-md flex-col overflow-hidden rounded-t-xl border border-border bg-bg shadow-xl sm:rounded-xl"
     >
       <button
         type="button"
@@ -108,10 +108,13 @@ export function FundsSheet({
         <X size={16} />
       </button>
 
-      <h2 className="mb-1 text-[15px] font-semibold text-fg">Funds</h2>
-      <p className="mb-3 text-xs text-muted">
-        Top up with crypto from any major chain, withdraw to your login wallet, track transfers.
-      </p>
+      {/* Pinned header — stays put so the sheet is one stable size across
+          tabs/steps; only the body below scrolls. */}
+      <div className="flex-none px-5 pt-4">
+        <h2 className="mb-1 text-[15px] font-semibold text-fg">Funds</h2>
+        <p className="mb-3 text-xs text-muted">
+          Top up with crypto from any major chain, withdraw to your login wallet, track transfers.
+        </p>
 
       {/* Balances strip: where the money is — trading account vs your wallet. */}
       <div className="mb-3 grid grid-cols-2 gap-2">
@@ -193,9 +196,11 @@ export function FundsSheet({
           size="md"
           grow
         />
+        </div>
       </div>
 
-      <TabPanes activeKey={tab}>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+        <TabPanes activeKey={tab}>
         {tab === "topup" ? (
           <TopUpPanel
             depositWalletAddress={depositWalletAddress}
@@ -211,7 +216,8 @@ export function FundsSheet({
         ) : (
           <HistoryPanel open={open} />
         )}
-      </TabPanes>
+        </TabPanes>
+      </div>
     </SheetShell>
   );
 }

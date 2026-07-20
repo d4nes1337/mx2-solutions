@@ -151,6 +151,32 @@ describe("buildHoldings", () => {
     expect(usdc[0]!.symbol).toBe("USDC.e");
   });
 
+  it("folds POL≡MATIC on one chain to a single priced row and drops sub-cent dust", () => {
+    const pol = evmTokensForChain(
+      [
+        asset({ chainId: "137", symbol: "POL", address: NATIVE, decimals: 18 }),
+        // Same Polygon coin via the 0x…1010 predeploy — a duplicate balance.
+        asset({ chainId: "137", symbol: "MATIC", address: "0x0000000000000000000000000000000000001010", decimals: 18 }),
+      ],
+      "137",
+    );
+    const eth = evmTokensForChain(
+      [asset({ chainId: "1", chainName: "Ethereum", symbol: "WETH", address: WETH, decimals: 18 })],
+      "1",
+    );
+    const holdings = buildHoldings(
+      [
+        { chainId: "137", tokens: pol, balances: [977n * 10n ** 16n, 977n * 10n ** 16n] }, // 9.77 twice
+        { chainId: "1", tokens: eth, balances: [10n ** 12n] }, // 0.000001 WETH ≈ $0.003 dust
+      ],
+      { POL: 0.08, ETH: 3000 },
+    );
+    expect(holdings).toHaveLength(1); // MATIC folded into POL, dust WETH dropped
+    expect(holdings[0]!.group).toBe("POL");
+    expect(holdings[0]!.symbol).toBe("POL"); // priced native variant kept
+    expect(holdings[0]!.usd).toBeCloseTo(0.78, 2);
+  });
+
   it("leaves USD null (and sorts last) when a volatile price is unknown", () => {
     const holdings = buildHoldings(
       [
