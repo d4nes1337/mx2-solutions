@@ -343,6 +343,19 @@ export const conditionalRules = pgTable(
      * an active strategy can never be hidden from monitoring). No hard delete.
      */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    /**
+     * Stale-pause marker (migration 0019): set while the hold window is paused
+     * because market data went stale; cleared on resume or reset. Persisted so
+     * a worker restart mid-pause keeps honest accounting.
+     */
+    staleSince: timestamp("stale_since", { withTimezone: true }),
+    /**
+     * Versioned-edit linkage (migration 0019, D-020 stays intact): editing an
+     * armed strategy creates a new row that `supersedes` the old one; the old
+     * row gets `supersededBy`. Spend caps carry over on supersede.
+     */
+    supersedes: uuid("supersedes"),
+    supersededBy: uuid("superseded_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -377,12 +390,23 @@ export const ruleTriggers = pgTable(
       .default(sql`'[]'::jsonb`),
     status: text("status").notNull().default("awaiting_user"),
     orderIntentId: uuid("order_intent_id"),
+    /**
+     * Bounded auto-retry (migration 0019): when the auto-executor skipped for a
+     * recoverable reason (funds in transit, allowances pending), the sweeper may
+     * re-attempt this trigger until this deadline — after re-verifying the
+     * conditions fresh. NULL = no retry scheduled.
+     */
+    autoRetryUntil: timestamp("auto_retry_until", { withTimezone: true }),
+    autoRetryReason: text("auto_retry_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("rule_triggers_rule_idx").on(t.ruleId),
     index("rule_triggers_wallet_idx").on(t.walletAddress),
     index("rule_triggers_status_idx").on(t.status),
+    index("rule_triggers_retry_idx")
+      .on(t.status, t.autoRetryUntil)
+      .where(sql`"auto_retry_until" IS NOT NULL`),
   ],
 );
 
@@ -653,6 +677,12 @@ export const bridgeDeposits = pgTable(
     providerCreatedTimeMs: bigint("provider_created_time_ms", { mode: "number" })
       .notNull()
       .default(0),
+    /** Set when this row was retired in favor of another row for the same transfer. */
+    supersededByDepositId: uuid("superseded_by_deposit_id"),
+    /** User pressed Dismiss on a stuck record — hidden from active surfaces, kept in history. */
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    /** How the row reached `completed`: "provider" (normal) or "chain_reconciled". */
+    completionSource: text("completion_source"),
     raw: jsonb("raw"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

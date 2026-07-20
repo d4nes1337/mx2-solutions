@@ -73,6 +73,9 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         tokenId: o.tokenId,
         side: o.side,
         definition: o.definition,
+        staleSince: null,
+        supersedes: null,
+        supersededBy: null,
         definitionHash: o.definitionHash,
         status: "ACTIVE_WAITING",
         version: o.version ?? 1,
@@ -191,6 +194,9 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       return r;
     },
     addExecutedNotional: async () => {},
+    listStuckExecuting: async () => [],
+    revertExecuting: async () => null,
+    createSuperseding: async () => null,
   };
 };
 
@@ -211,6 +217,8 @@ const makeTriggerStore = (
         reasonCodes: [...o.reasonCodes],
         status: "awaiting_user",
         orderIntentId: null,
+        autoRetryUntil: null,
+        autoRetryReason: null,
         createdAt: new Date(),
       };
       rows.push(row);
@@ -233,6 +241,10 @@ const makeTriggerStore = (
         if (opts?.orderIntentId !== undefined) r.orderIntentId = opts.orderIntentId;
       }
     },
+    scheduleAutoRetry: async () => {},
+    clearAutoRetry: async () => {},
+    listAutoRetryable: async () => [],
+    listAutoRetryLapsed: async () => [],
   };
 };
 
@@ -624,6 +636,8 @@ describe("conditional rules routes", () => {
         reasonCodes: [],
         status: "awaiting_user",
         orderIntentId: null,
+        autoRetryUntil: null,
+        autoRetryReason: null,
         createdAt: new Date(),
       },
     ]);
@@ -684,6 +698,8 @@ const seedTriggered = async () => {
       reasonCodes: [],
       status: "awaiting_user",
       orderIntentId: null,
+      autoRetryUntil: null,
+      autoRetryReason: null,
       createdAt: new Date(),
     },
   ]);

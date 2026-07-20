@@ -353,10 +353,36 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
           state: d.state,
           providerStatus: d.providerStatus,
           txHash: d.txHash,
+          dismissedAt: d.dismissedAt,
+          completionSource: d.completionSource,
           createdAt: d.createdAt,
           updatedAt: d.updatedAt,
         })),
       };
+    },
+  );
+
+  // ── POST /api/funds/deposits/:id/dismiss — hide a stuck transfer record ───
+  // The record stays in history; only active surfaces (pill/tracker) drop it.
+  app.post(
+    "/api/funds/deposits/:id/dismiss",
+    { preHandler: requireAuth },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!ensureBridgeFundingEnabled(deps.config, reply)) return reply;
+      const user = req.user!;
+      const { id } = req.params as { id: string };
+      const dismissed = await deps.bridgeStore.dismissDeposit(user.walletAddress, id);
+      if (!dismissed) {
+        reply.code(404);
+        return { error: "NOT_FOUND", message: "Deposit not found or already dismissed." };
+      }
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "wallet.bridge.deposit_dismissed",
+        subject: `bridge_deposit:${id}`,
+        metadata: { state: dismissed.state },
+      });
+      return { ok: true, id: dismissed.id, dismissedAt: dismissed.dismissedAt };
     },
   );
 };

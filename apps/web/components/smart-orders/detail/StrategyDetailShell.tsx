@@ -10,7 +10,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Empty, LiveDot, Skeleton, cn } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Empty, LiveDot, Segmented, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
 import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/smart-orders/doc";
@@ -25,9 +25,11 @@ import {
   useStrategyTimeline,
   type StrategyEvaluation,
   type StrategyRow,
+  type StrategyTimeline,
 } from "@/lib/smart-orders/queries";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { LinkedOrders } from "./LinkedOrders";
+import { QuickEditSheet } from "../QuickEditSheet";
 
 /** 1-second local tick so the dwell bar advances smoothly between polls. */
 const useNow = (): number => {
@@ -149,29 +151,103 @@ function ConditionsPanel({
   );
 }
 
-/** Price history + threshold line for the first price-like condition. */
-function ConditionSparkline({ row }: { row: StrategyRow }) {
-  const doc = docFromDefinition(row.definitionV2);
-  const leaf = conditionLeavesOf(doc.expr).find(
-    ({ condition: c }) => (c.kind === "price" || c.kind === "trailing") && c.market.tokenId !== "",
-  );
-  const c = leaf?.condition;
-  const priceLike = c !== undefined && (c.kind === "price" || c.kind === "trailing") ? c : null;
-  const tokenId = priceLike !== null ? priceLike.market.tokenId : null;
-  const threshold = priceLike?.kind === "price" ? priceLike.threshold : null;
-  const label = priceLike !== null ? marketLabel(doc, priceLike.market) : "";
+/** Engine events → chart markers so the price line explains itself. */
+const timelineMarkers = (timeline: StrategyTimeline | undefined): { t: number; label?: string }[] =>
+  (timeline?.events ?? [])
+    .map((e) => {
+      const t = new Date(e.at).getTime();
+      if (e.action === "rule.triggered") return { t, label: "T" };
+      if (e.action === "rule.executed_auto") return { t, label: "$" };
+      if (e.action === "rule.execution.skipped") return { t, label: "!" };
+      if (
+        e.action === "rule.state_changed" &&
+        (e.metadata["reason"] === "STALE_PAUSED" || e.metadata["reason"] === "DATA_STALE")
+      )
+        return { t, label: "…" };
+      return null;
+    })
+    .filter((m): m is { t: number; label: string } => m !== null);
 
-  const history = useTokenPricesHistory(tokenId, "1w");
+const CHART_RANGES = [
+  { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" },
+  { value: "1m", label: "1M" },
+];
+
+/** One price chart per condition, threshold line + engine-event markers. */
+function ConditionCharts({
+  row,
+  timeline,
+}: {
+  row: StrategyRow;
+  timeline: StrategyTimeline | undefined;
+}) {
+  const [range, setRange] = useState("1d");
+  const doc = docFromDefinition(row.definitionV2);
+  const leaves = conditionLeavesOf(doc.expr).filter(
+    ({ condition: c }) =>
+      (c.kind === "price" || c.kind === "trailing" || c.kind === "price_move") &&
+      "market" in c &&
+      c.market.tokenId !== "",
+  );
+  // One chart per distinct token — two conditions on the same book share a chart.
+  const seen = new Set<string>();
+  const charts = leaves.filter(({ condition: c }) => {
+    const tokenId = "market" in c ? c.market.tokenId : "";
+    if (seen.has(tokenId)) return false;
+    seen.add(tokenId);
+    return true;
+  });
+  const markers = timelineMarkers(timeline);
+  if (charts.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-end">
+        <Segmented options={CHART_RANGES} value={range} onChange={setRange} size="sm" />
+      </div>
+      {charts.map(({ id, condition: c }) => (
+        <ConditionChart key={id} doc={doc} condition={c} range={range} markers={markers} />
+      ))}
+    </div>
+  );
+}
+
+function ConditionChart({
+  doc,
+  condition,
+  range,
+  markers,
+}: {
+  doc: ReturnType<typeof docFromDefinition>;
+  condition: ReturnType<typeof conditionLeavesOf>[number]["condition"];
+  range: string;
+  markers: { t: number; label?: string }[];
+}) {
+  const c = condition;
+  const tokenId = "market" in c ? c.market.tokenId : null;
+  const threshold = c.kind === "price" ? c.threshold : null;
+  const label = "market" in c ? marketLabel(doc, c.market) : "";
+  const history = useTokenPricesHistory(tokenId, range);
   if (tokenId === null) return null;
   const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
   if (history.isLoading) return <Skeleton className="h-[180px] w-full rounded-xl" />;
   if (series.length < 2) return null;
+  const firstT = series[0]!.t;
+  const visibleMarkers = markers.filter((m) => m.t >= firstT);
   return (
     <Card>
       <CardHeader
         right={
           threshold !== null ? (
             <span className="tabular text-[11px] text-muted">trigger {cents(threshold)}</span>
+          ) : c.kind === "trailing" ? (
+            <span className="tabular text-[11px] text-muted">
+              trailing {c.mode} · {cents(c.offset)} offset
+            </span>
+          ) : c.kind === "price_move" ? (
+            <span className="tabular text-[11px] text-muted">
+              {c.direction} {cents(c.deltaThreshold)} in {humanDuration(c.windowMs)}
+            </span>
           ) : undefined
         }
       >
@@ -183,6 +259,7 @@ function ConditionSparkline({ row }: { row: StrategyRow }) {
           height={180}
           valueFormat={(v) => cents(v)}
           {...(threshold !== null ? { baseline: threshold } : {})}
+          {...(visibleMarkers.length > 0 ? { markers: visibleMarkers } : {})}
         />
       </div>
     </Card>
@@ -199,6 +276,7 @@ export function StrategyDetailShell() {
   const control = useStrategyControl();
   const disarm = useStrategyDisarm();
   const now = useNow();
+  const [quickEdit, setQuickEdit] = useState(false);
 
   if (strategy.isLoading) {
     return (
@@ -257,9 +335,20 @@ export function StrategyDetailShell() {
                   <Badge tone={status.tone}>{status.label}</Badge>
                 )}
                 {isAuto ? (
-                  <Badge tone={row.autoDisabled ? "warn" : "brand"}>
-                    {row.autoDisabled ? "AUTO OFF" : "AUTO"}
-                  </Badge>
+                  row.autoDisabled ? (
+                    <Badge tone="warn" title="You disarmed automatic order placement">
+                      AUTO OFF
+                    </Badge>
+                  ) : row.autoDegraded ? (
+                    <Badge
+                      tone="warn"
+                      title="This strategy asks for automatic execution, but the server can't deliver it — triggers will wait for your confirmation."
+                    >
+                      AUTO UNAVAILABLE
+                    </Badge>
+                  ) : (
+                    <Badge tone="brand">AUTO</Badge>
+                  )
                 ) : null}
               </div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">{strategySentence(doc)}</p>
@@ -303,12 +392,14 @@ export function StrategyDetailShell() {
                 </Button>
               ) : null}
               {(active || paused) && row.version === 2 ? (
-                <Link
-                  href={`/smart-orders/${row.id}/edit`}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Edit parameters here — applies as a new version (canvas still available inside)"
+                  onClick={() => setQuickEdit(true)}
                 >
                   <Pencil size={11} aria-hidden /> Edit
-                </Link>
+                </Button>
               ) : null}
               {active || paused ? (
                 <Button
@@ -341,7 +432,7 @@ export function StrategyDetailShell() {
             row={row}
             {...(evaluation.data ? { evaluation: evaluation.data } : {})}
           />
-          <ConditionSparkline row={row} />
+          <ConditionCharts row={row} timeline={timeline.data} />
           <LinkedOrders orders={timeline.data?.orders ?? []} doc={doc} />
         </div>
         <ActivityTimeline
@@ -350,6 +441,40 @@ export function StrategyDetailShell() {
           createdAt={row.createdAt}
         />
       </div>
+
+      {/* Versioned-edit lineage: this row replaced / was replaced by another. */}
+      {row.supersedes || row.supersededBy ? (
+        <p className="text-[11px] text-faint">
+          {row.supersedes ? (
+            <>
+              Edited version of an earlier strategy —{" "}
+              <Link href={`/smart-orders/${row.supersedes}`} className="text-accent hover:underline">
+                view previous version
+              </Link>
+              . Spend caps carried over.
+            </>
+          ) : null}
+          {row.supersededBy ? (
+            <>
+              This strategy was replaced by an edit —{" "}
+              <Link
+                href={`/smart-orders/${row.supersededBy}`}
+                className="text-accent hover:underline"
+              >
+                view current version
+              </Link>
+              .
+            </>
+          ) : null}
+        </p>
+      ) : null}
+
+      <QuickEditSheet
+        row={row}
+        open={quickEdit}
+        onClose={() => setQuickEdit(false)}
+        onApplied={(newId) => router.push(`/smart-orders/${newId}`)}
+      />
     </div>
   );
 }

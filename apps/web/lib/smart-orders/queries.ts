@@ -33,11 +33,25 @@ export interface StrategyRow {
   tags: string[];
   /** Set when soft-hidden; only terminal strategies can be archived. */
   archivedAt: string | null;
+  /** Versioned-edit linkage: the strategy this one replaced / was replaced by. */
+  supersedes: string | null;
+  supersededBy: string | null;
   createdAt: string;
   updatedAt: string;
   definitionV2: StrategyDefinition;
   /** Detail endpoint only: per-strategy auto kill switch state (W8). */
   autoDisabled?: boolean;
+  /**
+   * True when the rule asks for auto execution but the server cannot deliver
+   * it (live execution disabled) — the trigger will wait for manual confirm.
+   */
+  autoDegraded?: boolean;
+  degradedReason?: string | null;
+}
+
+export interface AutoReadiness {
+  autoExecutionEnabled: boolean;
+  blockers: { code: string; detail: string }[];
 }
 
 export interface MarketFreshness {
@@ -165,6 +179,17 @@ export function useStrategy(id: string | null) {
   });
 }
 
+/** Why auto wouldn't execute right now (server flags + account setup). */
+export function useAutoReadiness(signedIn: boolean) {
+  return useQuery({
+    queryKey: ["smart-orders", "auto-readiness"],
+    queryFn: () => api.get<AutoReadiness>("/api/smart-orders/auto-readiness"),
+    enabled: signedIn,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+}
+
 export function useStrategyEvaluation(id: string | null) {
   return useQuery({
     queryKey: ["smart-orders", id, "eval"],
@@ -198,7 +223,9 @@ export function useStrategyDisarm() {
 export function useCreateStrategy() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (def: StrategyDefinition & { expiresAt?: string | null }) => {
+    mutationFn: (
+      def: StrategyDefinition & { expiresAt?: string | null; supersedes?: string },
+    ) => {
       const { expiresAtMs, version, ...rest } = def;
       void version;
       return api.post<StrategyRow>("/api/smart-orders", {

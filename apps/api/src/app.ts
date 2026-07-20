@@ -243,6 +243,10 @@ export const buildApp = (deps: AppDeps) => {
       markAddressChecked: async () => {},
       upsertDepositsFromStatus: async () => ({ changed: [] }),
       listDepositsByWallet: async () => [],
+      dismissDeposit: async () => null,
+      listNonTerminalDeposits: async () => [],
+      expireStaleDeposits: async () => [],
+      completeDepositFromChain: async () => null,
       createWithdrawal: async () => null,
       findWithdrawalByIdempotencyKey: async () => null,
       listWithdrawalsByWallet: async () => [],
@@ -318,6 +322,7 @@ export const buildApp = (deps: AppDeps) => {
     geoblockClient: deps.geoblockClient,
   });
   registerTradingAccountsRoutes(fastifyApp, {
+    config: deps.config,
     sessions: deps.sessions,
     auditStore: deps.auditStore,
     tradingAccounts,
@@ -351,6 +356,8 @@ export const buildApp = (deps: AppDeps) => {
     marketSnapshots: deps.marketSnapshots,
     gammaClient: deps.gammaClient,
     clobClient: deps.clobClient,
+    ...(deps.privyWallets ? { privyWallets: deps.privyWallets } : {}),
+    ...(deps.delegations ? { delegations: deps.delegations } : {}),
   });
   registerShowcasesRoutes(fastifyApp, {
     gammaClient: deps.gammaClient,

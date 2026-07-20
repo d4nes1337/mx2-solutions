@@ -718,3 +718,38 @@ durable event log, full failure-mode replay) per RFC-0001 — owner to prioritis
 | 6e — event-grouped search / event pages / siblings      | —      | **Built** | —                                                  |
 | 6f — smart-orders tags/archive/restart + filter bar     | —      | **Built** | migration 0013 on deploy                           |
 | 7 — beta hardening / release                            | Gate 6 | Pending   | prior slices                                       |
+
+---
+
+## 2026-07-19 — Full-cycle reliability slate (owner beta findings) — BUILT, verified locally
+
+All six owner-reported beta failures fixed in one slate (plan
+`i-have-problems-with-composed-adleman`; decisions D-038…D-043, ADR-0021,
+migration 0019 — applied locally, **pending deployment to the beta box**, where
+its backfill clears the owner's stuck "deposit detected" record):
+
+1. Authorize button now exists everywhere it matters (nextAction rung
+   `bootstrap_allowances` + wallet-card button + post-deposit CTA + badge).
+2. Withdraw button on the wallet page (opens the funds sheet's withdraw tab).
+3. Deposit records can no longer strand: identity ladder, 24 h expiry, Dismiss,
+   chain reconcile; funds-sheet shows "In trading account" vs "In your wallet"
+   and withdrawal invalidates on-chain balance queries.
+4. Amount presets (25/50/75/Max + manual) shared across withdraw + both
+   deposit panels.
+5. Auto mode: stale-pause hold windows, instant default, funds-arrival retry,
+   EXECUTING crash recovery, and loud AUTO UNAVAILABLE surfacing.
+6. Per-condition monitoring charts (threshold + engine-event markers + range
+   picker) and a quick-edit sheet with atomic versioned supersede.
+
+**Verification:** 61 test files / 690 tests green (incl. new stale-pause
+matrix, retry + recovery decision tables, nextAction ladder); v1↔v2 parity
+exact; all packages typecheck. Live local run: armed a real auto strategy via
+the API — instant default applied, `autoDegraded:true` labeled, worker
+triggered it in <1 s off the real CLOB WS, degraded cleanly to
+awaiting-confirmation; atomic supersede + lineage links verified end-to-end in
+the running UI.
+
+**Next:** build the mock-Polymarket E2E harness + full-cycle scenario (spec in
+plan §Slice 1/6); owner manual pass per OWNER_TESTING_GUIDE addendum; then the
+staged-enable ladder (readiness script + low-value capped trade) before any
+live-execution flag flip.

@@ -224,7 +224,11 @@ const makeHarness = (
     },
   } as unknown as AuthenticatedClobClient;
 
-  const triggerStore = { updateStatus: async () => {} } as unknown as TriggerStore;
+  const triggerStore = {
+    updateStatus: async () => {},
+    scheduleAutoRetry: async () => {},
+    clearAutoRetry: async () => {},
+  } as unknown as TriggerStore;
 
   // W4: the deposit-wallet account + per-account CLOB creds the live order
   // path requires. Present by default so the base harness is fully armed.

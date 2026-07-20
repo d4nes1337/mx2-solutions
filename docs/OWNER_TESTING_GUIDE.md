@@ -153,3 +153,50 @@ Never skip a rung. Each rung has an explicit owner sign-off.
 - Funds always sit in YOUR deposit wallet; the withdrawal path (Section 2) works
   independently of farming.
 - Capture the session's event stream + the audit log rows and file them with the bug.
+
+---
+
+## 2026-07-19 addendum — acceptance checklist for the full-cycle reliability slate
+
+Deploy prerequisites: run `pnpm db:migrate` (migration 0019 — its backfill
+retires your stuck "deposit detected" record automatically), restart api +
+worker (packages rebuilt from dist).
+
+Walk the cycle end-to-end and check each joint:
+
+1. **Deposit** (small amount via Arbitrum as before): tracker advances; if the
+   provider stalls but funds arrive, the record self-completes within ~1 poll
+   after 10 min ("chain reconciled"); a record with no progress for 24 h shows
+   "expired — never completed" and any stuck pending record older than 1 h has
+   a **Dismiss** action. The funds sheet now shows **In trading account** vs
+   **In your wallet** side by side.
+2. **Authorize**: after the deposit completes, the success card shows
+   **"Next: authorize trading"**; the wallet card shows a **Needs
+   authorization** badge and an **Authorize trading** primary button until the
+   on-chain allowances are clean.
+3. **Withdraw**: a **Withdraw** button now sits on the wallet card; amount
+   inputs everywhere have 25/50/75/Max presets; after a withdrawal, "In your
+   wallet" updates within seconds (no vanished funds).
+4. **Strategy setup**: new strategies default to **Instant** triggering; arming
+   an auto strategy while anything blocks unattended execution shows a warning
+   at save time and an **AUTO UNAVAILABLE** badge + banner afterward — with
+   the exact reasons.
+5. **Monitoring**: the strategy page shows one chart per watched market
+   (threshold line, 1D/1W/1M, engine-event markers), live condition readings,
+   and a timeline that names every skip/pause/retry in plain language
+   ("Trading balance $X < order $Y — will retry when your deposit lands").
+6. **Editing live**: the **Edit** button on the list/detail opens the quick-edit
+   sheet; **Apply changes** swaps in the new version atomically (old one shows
+   "replaced by an edit" with a link; spend caps carry over).
+7. **Data-lag behavior**: on a quiet market, the hold window now shows
+   "paused (waiting for fresh data)" then "resumed (quiet gap not counted)"
+   instead of silently restarting.
+8. **Staged enable (when satisfied with all of the above on staging):** run
+   `pnpm --filter @mx2/api run check-live-readiness`; set
+   `FEATURE_PRIVY_SIGNING=true FEATURE_LIVE_TRADING=true
+FEATURE_CONDITIONAL_LIVE_EXECUTION=true` on the deployment; arm ONE
+   low-value auto strategy with tight caps (≤$5/order) and watch it execute
+   unattended end-to-end; only then resume normal use. If a trigger fires
+   while funds are still bridging, expect "Auto-retry scheduled … will execute
+   when funds arrive" followed by execution or a Telegram "Auto-execution
+   needs you" notice within 30 min.

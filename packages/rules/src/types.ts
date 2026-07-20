@@ -156,6 +156,11 @@ export type ReasonCode =
   | "LEVELS_FAIL"
   | "DATA_FRESH"
   | "DATA_STALE"
+  // Stale-pause semantics (migration 0019): the hold window PAUSES on stale
+  // data and resumes if freshness returns within the grace, instead of
+  // resetting outright. Both are same-status transitions (audit-only flags).
+  | "STALE_PAUSED"
+  | "STALE_RESUMED"
   | "WINDOW_STARTED"
   | "WINDOW_COMPLETE"
   | "RECONNECT_RESET"

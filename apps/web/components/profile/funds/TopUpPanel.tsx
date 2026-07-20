@@ -12,7 +12,13 @@ import { parseUnits, formatUnits, erc20Abi } from "viem";
 import { Check, ExternalLink, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, ErrorNote, Spinner, cn } from "@/components/ui";
-import { useBridgeDepositAddresses, useFundsAssets, useSavedDepositAddresses } from "@/lib/queries";
+import {
+  useBridgeDepositAddresses,
+  useDismissDeposit,
+  useFundsAssets,
+  useSavedDepositAddresses,
+} from "@/lib/queries";
+import { AmountPresets } from "./AmountPresets";
 import {
   POLYGON_CHAIN_ID,
   POPULAR_GROUPS,
@@ -117,6 +123,7 @@ export function TopUpPanel({
   const hasBridgeAddress = Object.keys(familyAddresses).length > 0;
   const activity = useActiveTransfers({ enabled: bridgeEnabled, watching: hasBridgeAddress });
   const closeSheet = useFundsUi((s) => s.closeSheet);
+  const dismissDeposit = useDismissDeposit();
   const inboundActive = activity.active.filter((t) => t.direction === "in");
   const inboundArrived = activity.justCompleted.filter((t) => t.direction === "in");
 
@@ -301,7 +308,16 @@ export function TopUpPanel({
         ))}
         {inboundActive.map((t) => (
           <FadeRise key={t.id}>
-            <TransferTracker transfer={t} />
+            <TransferTracker
+              transfer={t}
+              // A deposit stuck non-terminal for over an hour is dismissible —
+              // the record moves to history; balances were never derived from it.
+              {...(t.kind === "deposit" &&
+              t.status === "pending" &&
+              Date.now() - t.createdAt > 60 * 60 * 1000
+                ? { onDismiss: () => dismissDeposit.mutate(t.id.replace(/^d-/, "")) }
+                : {})}
+            />
           </FadeRise>
         ))}
       </AnimatePresence>
@@ -481,29 +497,21 @@ function DirectPolygonTopUp({ depositWalletAddress }: { depositWalletAddress: st
               </span>
             </div>
           ) : (
-            <div className="flex gap-2">
-              <input
-                type="number"
+            <div className="space-y-2">
+              <AmountPresets
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={setAmount}
+                max={
+                  connectedBalance.data
+                    ? Number(formatUnits(connectedBalance.data.value, 6))
+                    : null
+                }
                 placeholder="Amount (USDC)"
-                min="0"
-                step="1"
-                className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
               />
-              {connectedBalanceFormatted !== null && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setAmount(connectedBalanceFormatted ?? "")}
-                >
-                  Max
-                </Button>
-              )}
               <Button
                 size="sm"
                 variant="primary"
+                className="w-full"
                 disabled={!amount || wrongChain || isSending}
                 onClick={handleSend}
               >

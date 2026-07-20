@@ -39,6 +39,7 @@ export interface ValidationIssue {
     | "QUOTE_LOOP_PARAMS_INVALID"
     | "QUOTE_LOOP_NO_HOLD"
     | "QUOTE_LOOP_RECURRENCE"
+    | "STALE_GRACE_OUT_OF_RANGE"
     | "TRAILING_OFFSET_OUT_OF_RANGE"
     | "QUOTE_LOOP_TRAILING_GATE";
   readonly message: string;
@@ -48,6 +49,7 @@ export interface ValidationIssue {
 
 const MAX_HOLD_MS = 86_400_000; // 1 day (matches v1 continuousWindow cap)
 const MAX_DATA_AGE_MS = 60_000;
+export const MAX_STALE_GRACE_MS = 300_000; // 5 min pause budget before a stale window resets
 const MAX_REPEATS = 100;
 const MAX_COOLDOWN_MS = 86_400_000;
 // price_move lookback bounds — the upper bound is the worker's ring-buffer
@@ -168,6 +170,11 @@ export const validateStrategyDefinition = (
     push("HOLD_WINDOW_OUT_OF_RANGE", "Hold duration must be between 0 and 24 hours.");
   if (!(def.maxDataAgeMs > 0 && def.maxDataAgeMs <= MAX_DATA_AGE_MS))
     push("DATA_AGE_OUT_OF_RANGE", "Data freshness must be between 1 and 60 seconds.");
+  if (
+    def.staleGraceMs !== undefined &&
+    !(def.staleGraceMs >= 0 && def.staleGraceMs <= MAX_STALE_GRACE_MS)
+  )
+    push("STALE_GRACE_OUT_OF_RANGE", "Stale grace must be between 0 and 5 minutes.");
   if (nowMs !== undefined && def.expiresAtMs !== null && def.expiresAtMs <= nowMs)
     push("EXPIRY_IN_PAST", "The expiry time is already in the past.");
 

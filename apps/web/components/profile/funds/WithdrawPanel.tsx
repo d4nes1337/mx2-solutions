@@ -19,6 +19,7 @@ import { useActiveTransfers } from "@/lib/use-active-transfers";
 import { ApiError } from "@/lib/api";
 import { ChainIcon } from "@/components/wallet/ChainIcon";
 import { AnimatedHeight, FadeRise } from "@/components/motion/primitives";
+import { AmountPresets } from "./AmountPresets";
 import { CopyButton } from "./shared";
 import { TransferTracker } from "./TransferTracker";
 import { TransferSuccess } from "./TransferSuccess";
@@ -173,32 +174,14 @@ export function WithdrawPanel({
         </div>
       ) : null}
 
-      <div className="flex gap-2">
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => {
-            setAmount(e.target.value);
-            setConfirming(false);
-          }}
-          placeholder={
-            availableUsd !== null ? `Amount (max $${availableUsd.toFixed(2)})` : "Amount (USD)"
-          }
-          min="1"
-          step="1"
-          className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
-        />
-        {availableUsd !== null && (
-          <Button
-            size="sm"
-            variant="ghost"
-            type="button"
-            onClick={() => setAmount(String(Math.floor(availableUsd * 100) / 100))}
-          >
-            Max
-          </Button>
-        )}
-      </div>
+      <AmountPresets
+        value={amount}
+        onChange={(next) => {
+          setAmount(next);
+          setConfirming(false);
+        }}
+        max={availableUsd}
+      />
 
       <AnimatedHeight>
         {!confirming ? (

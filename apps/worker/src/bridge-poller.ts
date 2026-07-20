@@ -2,12 +2,14 @@ import type { Logger } from "@mx2/observability";
 import type {
   AuditStore,
   BridgeAddressRow,
+  BridgeDepositRow,
   BridgeStore,
   NotificationOutboxStore,
   PrivyWalletStore,
 } from "@mx2/db";
 import {
   BRIDGE_WITHDRAWAL_STATE_RANK,
+  DEPOSIT_TERMINAL,
   WITHDRAWAL_TERMINAL,
   bridgeWithdrawalStateFromRelayer,
 } from "@mx2/db";
@@ -55,6 +57,16 @@ export interface BridgePollerDeps {
   privyWallets?: PrivyWalletStore;
   /** Notification outbox (FEATURE_NOTIFICATIONS): transfer completions. */
   outbox?: NotificationOutboxStore;
+  /**
+   * Chain-reconciliation probes (migration 0019): pUSD balance of a deposit
+   * wallet + the login-wallet → deposit-wallet resolution. Both present →
+   * a single pending deposit whose funds visibly arrived on-chain is
+   * auto-completed even when the provider status stalls.
+   */
+  balanceOfUsdc?: (owner: string) => Promise<number>;
+  getDepositWalletAddress?: (walletAddress: string) => Promise<string | null>;
+  /** No provider progress for this long → the deposit record expires (24h). */
+  expireAfterMs?: number;
 }
 
 const DEFAULT_INTERVAL_MS = 60_000;
@@ -66,6 +78,10 @@ const DEFAULT_ACTIVE_STALE_AFTER_MS = 10_000;
 const RELAYER_POLL_LIMIT = 20;
 /** Transfers non-terminal for longer than this get a reconciliation flag (2h). */
 const RECONCILE_AFTER_MS = 2 * 60 * 60 * 1000;
+/** Default expiry horizon for deposits the provider stopped advancing (24h). */
+const DEFAULT_EXPIRE_AFTER_MS = 24 * 60 * 60 * 1000;
+/** A pending deposit must be at least this old before chain-reconcile applies. */
+const CHAIN_RECONCILE_MIN_AGE_MS = 10 * 60 * 1000;
 
 const NON_TERMINAL_WITHDRAWAL_STATES = Object.keys(BRIDGE_WITHDRAWAL_STATE_RANK).filter(
   (state) => !WITHDRAWAL_TERMINAL.has(state),
@@ -87,6 +103,7 @@ export const createBridgePoller = (deps: BridgePollerDeps): BridgePoller => {
   let timer: ReturnType<typeof setInterval> | null = null;
   let inFlight = false;
   let lastIdlePassAt = 0;
+  let lastExpirePassAt = 0;
   const reconciled = new Set<string>();
 
   /** Pull provider status for one address and advance its transfer rows. */
@@ -169,7 +186,7 @@ export const createBridgePoller = (deps: BridgePollerDeps): BridgePoller => {
     // Reconciliation flag: stuck non-terminal deposits surface to admin.
     const deposits = await deps.bridgeStore.listDepositsByWallet(address.walletAddress);
     for (const deposit of deposits) {
-      const terminal = deposit.state === "completed" || deposit.state === "failed";
+      const terminal = DEPOSIT_TERMINAL.includes(deposit.state);
       const stuckMs = Date.now() - new Date(deposit.createdAt).getTime();
       if (terminal || stuckMs < RECONCILE_AFTER_MS || reconciled.has(deposit.id)) continue;
       reconciled.add(deposit.id);
@@ -179,6 +196,104 @@ export const createBridgePoller = (deps: BridgePollerDeps): BridgePoller => {
         subject: `bridge_deposit:${deposit.id}`,
         metadata: { state: deposit.state, stuckMs },
       });
+    }
+    await reconcileDepositsFromChain(address.walletAddress, deposits);
+  };
+
+  /**
+   * Chain reconciliation for the UNAMBIGUOUS case: exactly one pending
+   * deposit, and the deposit wallet's pUSD balance grew by ≥95% of its amount
+   * since the poller first watched it. The balance is already the system's
+   * source of truth for spendability (account promotion trusts it) — this
+   * aligns the transfer record with that truth when the provider status
+   * stalls. Multiple pending deposits stay banner-only (API-side flag): a
+   * balance can't be attributed to one of several transfers.
+   *
+   * The baseline is in-memory: after a worker restart it re-captures (which
+   * then includes the arrived funds), so a restart can only make this MORE
+   * conservative — never a false completion.
+   */
+  const chainBaselines = new Map<string, number>();
+  const reconcileDepositsFromChain = async (
+    walletAddress: string,
+    deposits: readonly BridgeDepositRow[],
+  ): Promise<void> => {
+    if (!deps.balanceOfUsdc || !deps.getDepositWalletAddress) return;
+    const pending = deposits.filter((d) => !DEPOSIT_TERMINAL.includes(d.state));
+    if (pending.length !== 1) {
+      chainBaselines.delete(walletAddress);
+      return;
+    }
+    const deposit = pending[0]!;
+    const ageMs = Date.now() - new Date(deposit.createdAt).getTime();
+    const expectedUsd = Number(deposit.fromAmountBaseUnit) / 1e6;
+    if (!Number.isFinite(expectedUsd) || expectedUsd <= 0) return;
+    try {
+      const depositWallet = await deps.getDepositWalletAddress(walletAddress);
+      if (!depositWallet) return;
+      const balance = await deps.balanceOfUsdc(depositWallet);
+      const baseline = chainBaselines.get(walletAddress);
+      if (baseline === undefined) {
+        chainBaselines.set(walletAddress, balance);
+        return;
+      }
+      if (ageMs < CHAIN_RECONCILE_MIN_AGE_MS) return;
+      if (balance - baseline < expectedUsd * 0.95) return;
+      const completed = await deps.bridgeStore.completeDepositFromChain(deposit.id);
+      if (!completed) return;
+      chainBaselines.delete(walletAddress);
+      await deps.auditStore.emit({
+        actor: "system",
+        action: "wallet.bridge.deposit_state_changed",
+        subject: `bridge_deposit:${deposit.id}`,
+        metadata: {
+          from: deposit.state,
+          to: "completed",
+          source: "chain_reconciled",
+          balance,
+          baseline,
+          expectedUsd,
+        },
+      });
+      deps.logger.info(
+        { depositId: deposit.id, balance, baseline, expectedUsd },
+        "bridge deposit completed from on-chain evidence (provider status stalled)",
+      );
+      if (deps.outbox) {
+        await deps.outbox
+          .enqueue({
+            walletAddress,
+            kind: "deposit_completed",
+            dedupeKey: `bridge_deposit:${deposit.id}:completed`,
+            payload: {},
+          })
+          .catch((e: unknown) =>
+            deps.logger.warn({ err: e }, "deposit notification enqueue failed"),
+          );
+      }
+    } catch (error) {
+      deps.logger.warn({ walletAddress, error }, "chain reconcile probe failed");
+    }
+  };
+
+  /** Deposits the provider stopped advancing past the horizon → expired. */
+  const expireAfterMs = deps.expireAfterMs ?? DEFAULT_EXPIRE_AFTER_MS;
+  const expireAbandonedDeposits = async (): Promise<void> => {
+    const changed = await deps.bridgeStore.expireStaleDeposits(
+      new Date(Date.now() - expireAfterMs),
+      50,
+    );
+    for (const change of changed) {
+      await deps.auditStore.emit({
+        actor: "system",
+        action: "wallet.bridge.deposit_state_changed",
+        subject: `bridge_deposit:${change.row.id}`,
+        metadata: { from: change.previousState, to: "expired" },
+      });
+      deps.logger.warn(
+        { depositId: change.row.id, from: change.previousState },
+        "bridge deposit expired without provider progress",
+      );
     }
   };
 
@@ -283,6 +398,10 @@ export const createBridgePoller = (deps: BridgePollerDeps): BridgePoller => {
 
       await pollWithdrawalRelayerLegs();
       await flagStuckWithdrawals();
+      if (Date.now() - lastExpirePassAt >= intervalMs) {
+        lastExpirePassAt = Date.now();
+        await expireAbandonedDeposits();
+      }
     } catch (error) {
       deps.logger.error({ error }, "bridge poller tick failed");
     } finally {

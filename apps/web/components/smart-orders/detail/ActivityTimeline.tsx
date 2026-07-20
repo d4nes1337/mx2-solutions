@@ -33,7 +33,21 @@ interface Entry {
 const REASON_LABELS: Record<string, { label: string; tone: Entry["tone"]; icon: LucideIcon }> = {
   WINDOW_STARTED: { label: "Conditions met — hold window started", tone: "brand", icon: Play },
   WINDOW_COMPLETE: { label: "Hold window completed", tone: "pos", icon: CheckCircle2 },
-  DATA_STALE: { label: "Market data went quiet — hold window reset", tone: "warn", icon: Clock },
+  STALE_PAUSED: {
+    label: "Market data went quiet — hold window paused (waiting for fresh data)",
+    tone: "warn",
+    icon: Clock,
+  },
+  STALE_RESUMED: {
+    label: "Fresh data returned — hold window resumed (quiet gap not counted)",
+    tone: "pos",
+    icon: Play,
+  },
+  DATA_STALE: {
+    label: "Data stayed quiet past the grace — hold window reset",
+    tone: "warn",
+    icon: Clock,
+  },
   PRICE_FAIL: { label: "Price left the range — hold window reset", tone: "muted", icon: RotateCcw },
   RECONNECT_RESET: { label: "Feed reconnected — hold window reset", tone: "warn", icon: RotateCcw },
   RESTART_RESET: { label: "Engine restarted — hold window reset", tone: "warn", icon: RotateCcw },
@@ -49,6 +63,41 @@ const fallbackReasonLabel = (reason: string): string =>
     .toLowerCase()
     .replaceAll("_", " ")
     .replace(/^./, (ch) => ch.toUpperCase());
+
+const usd = (v: unknown): string | null =>
+  typeof v === "number" && Number.isFinite(v) ? `$${v.toFixed(2)}` : null;
+
+/** Actionable copy for auto-execution skip reasons (audit `reason` codes). */
+const skipDetail = (meta: Record<string, unknown>): string => {
+  const reason = typeof meta["reason"] === "string" ? (meta["reason"] as string) : "";
+  switch (reason) {
+    case "insufficient_balance": {
+      const balance = usd(meta["balance"]);
+      const needed = usd(meta["orderNotional"]);
+      return balance && needed
+        ? `Trading balance ${balance} < order ${needed} — will retry when your deposit lands`
+        : "Trading balance below the order size — will retry when your deposit lands";
+    }
+    case "allowances_missing":
+      return "Trading not authorized yet — press “Authorize trading” in Wallet";
+    case "deposit_wallet_required":
+      return "No trading wallet — activate one in Wallet";
+    case "clob_credentials_missing":
+      return "Trading credentials not set up yet";
+    case "live_trading_disabled":
+      return "Live trading is disabled on this server";
+    case "delegation_expired":
+      return "Trading session expired — re-delegate in Wallet";
+    case "kill_switch":
+      return "Trading is globally paused";
+    case "rate_limited":
+      return "Order rate limit hit — will not auto-place this trigger";
+    case "limits_missing":
+      return "Strategy has no spend limits set — auto needs per-order/daily caps";
+    default:
+      return fallbackReasonLabel(reason);
+  }
+};
 
 const eventEntry = (e: TimelineEvent): Entry | null => {
   const meta = e.metadata;
@@ -76,8 +125,41 @@ const eventEntry = (e: TimelineEvent): Entry | null => {
         icon: AlertTriangle,
         tone: "warn",
         label: "Auto-execution skipped",
+        detail: skipDetail(meta),
+      };
+    case "rule.execution.retry_scheduled":
+      return {
+        key: e.id,
+        at,
+        icon: Clock,
+        tone: "brand",
+        label: "Auto-retry scheduled",
+        ...(typeof meta["until"] === "string"
+          ? { detail: `will execute when funds arrive (until ${timeLabel(new Date(meta["until"] as string).getTime())})` }
+          : {}),
+      };
+    case "rule.execution.retried":
+      return { key: e.id, at, icon: Play, tone: "brand", label: "Auto-retry — re-verifying and executing" };
+    case "rule.execution.retry_abandoned":
+      return {
+        key: e.id,
+        at,
+        icon: AlertTriangle,
+        tone: "warn",
+        label: "Auto-retry gave up — confirm manually",
         ...(typeof meta["reason"] === "string"
           ? { detail: fallbackReasonLabel(meta["reason"] as string) }
+          : {}),
+      };
+    case "rule.execution.recovered":
+      return {
+        key: e.id,
+        at,
+        icon: RotateCcw,
+        tone: "warn",
+        label: "Recovered after an interruption",
+        ...(typeof meta["outcome"] === "string"
+          ? { detail: fallbackReasonLabel(meta["outcome"] as string) }
           : {}),
       };
     case "rule.execution.failed":

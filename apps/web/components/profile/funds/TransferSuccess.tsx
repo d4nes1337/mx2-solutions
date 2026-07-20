@@ -4,9 +4,14 @@
  * The success moment: animated checkmark draw + celebrate burst. Rendered
  * only for completions OBSERVED this session (useActiveTransfers'
  * justCompleted), never for historical rows.
+ *
+ * When the account's next setup step is the allowance bootstrap, the primary
+ * CTA becomes "Authorize trading" — the exact moment the owner expected an
+ * authorize button and found nothing (beta finding).
  */
 import { Button } from "@/components/ui";
 import { CheckDraw } from "@/components/motion/primitives";
+import { useBootstrapAllowances, useTradingAccounts } from "@/lib/queries";
 import type { ActiveTransfer } from "@/lib/transfers";
 
 export function TransferSuccess({
@@ -19,6 +24,13 @@ export function TransferSuccess({
   primaryLabel?: string;
 }) {
   const inbound = transfer.direction === "in";
+  const accounts = useTradingAccounts(inbound);
+  const bootstrap = useBootstrapAllowances();
+  const needsAuthorize =
+    inbound &&
+    (accounts.data?.accounts ?? []).some(
+      (a) => a.kind === "internal_privy" && a.nextAction === "bootstrap_allowances",
+    );
   return (
     <div
       className="celebrate flex flex-col items-center gap-2 rounded-md border border-pos/30 bg-pos/5 p-4 text-center"
@@ -34,7 +46,26 @@ export function TransferSuccess({
         {transfer.amountLabel}
         {!inbound && transfer.chainName ? ` · ${transfer.chainName}` : ""}
       </div>
-      {onPrimary ? (
+      {needsAuthorize ? (
+        <>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={bootstrap.isPending}
+            onClick={() => bootstrap.mutate()}
+          >
+            {bootstrap.isPending ? "Authorizing…" : "Next: authorize trading"}
+          </Button>
+          <p className="text-[11px] leading-snug text-muted">
+            One-time, gasless approval so your strategies can place orders.
+          </p>
+          {bootstrap.isError ? (
+            <p className="text-[11px] text-neg">
+              {(bootstrap.error as Error)?.message ?? "Authorization failed"} — you can retry.
+            </p>
+          ) : null}
+        </>
+      ) : onPrimary ? (
         <Button size="sm" variant="primary" onClick={onPrimary}>
           {primaryLabel ?? (inbound ? "Start trading" : "Done")}
         </Button>

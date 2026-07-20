@@ -248,6 +248,9 @@ const mockRuleStore: RuleStore = {
   archive: async () => null,
   unarchive: async () => null,
   addExecutedNotional: async () => {},
+  listStuckExecuting: async () => [],
+  revertExecuting: async () => null,
+  createSuperseding: async () => null,
 };
 
 const mockTriggerStore: TriggerStore = {
@@ -257,6 +260,10 @@ const mockTriggerStore: TriggerStore = {
   findById: async () => null,
   findByIdForWallet: async () => null,
   listByWallet: async () => [],
+  scheduleAutoRetry: async () => {},
+  clearAutoRetry: async () => {},
+  listAutoRetryable: async () => [],
+  listAutoRetryLapsed: async () => [],
   listAwaiting: async () => [],
   hasForRule: async () => false,
   listByRule: async () => [],
@@ -2443,6 +2450,10 @@ describe("POST /api/trading-wallet/withdraw", () => {
   const makeBridgeStoreMock = () => {
     const rows = new Map<string, BridgeWithdrawalRow>();
     const store: BridgeStore = {
+      dismissDeposit: async () => null,
+      listNonTerminalDeposits: async () => [],
+      expireStaleDeposits: async () => [],
+      completeDepositFromChain: async () => null,
       saveAddress: async (row) =>
         ({
           id: "baddr-1",
@@ -2886,6 +2897,8 @@ describe("POST /api/trade/orders (restricted sessions)", () => {
             ruleId: "rule-1",
             walletAddress: WALLET,
             triggeredAt: new Date(),
+            autoRetryUntil: null,
+            autoRetryReason: null,
             evidence: {},
             reasonCodes: [],
             status: "awaiting_user",

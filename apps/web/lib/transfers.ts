@@ -44,6 +44,8 @@ export interface ActiveTransfer {
   txUrl: string | null;
   /** Failure guidance: funds-safe retry vs contact-support. */
   failureTone: "recoverable" | "support" | null;
+  /** User hid this record — kept in history, dropped from active surfaces. */
+  dismissed?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -92,7 +94,7 @@ export const BRIDGE_WITHDRAWAL_STATE_LABEL: Record<string, string> = {
   failed_bridge: "needs support",
 };
 
-export const DEPOSIT_TERMINAL_STATES = new Set(["completed", "failed"]);
+export const DEPOSIT_TERMINAL_STATES = new Set(["completed", "failed", "superseded", "expired"]);
 export const WALLET_WITHDRAWAL_TERMINAL_STATES = new Set(["confirmed", "failed"]);
 export const BRIDGE_WITHDRAWAL_TERMINAL_STATES = new Set([
   "completed",
@@ -118,6 +120,10 @@ const DEPOSIT_STEP_FOR_STATE: Record<BridgeDepositItem["state"], number> = {
   submitted: 2,
   completed: 3,
   failed: 1,
+  // Terminal without success: the record was retired (merged into a sibling
+  // row) or abandoned (no provider progress for the expiry horizon).
+  superseded: 3,
+  expired: 1,
 };
 
 export function depositToTransfer(d: BridgeDepositItem, asset: FundsAsset | null): ActiveTransfer {
@@ -138,7 +144,11 @@ export function depositToTransfer(d: BridgeDepositItem, asset: FundsAsset | null
     }
   }
   const status: TransferStatus =
-    d.state === "completed" ? "success" : d.state === "failed" ? "failed" : "pending";
+    d.state === "completed" || d.state === "superseded"
+      ? "success"
+      : d.state === "failed" || d.state === "expired"
+        ? "failed"
+        : "pending";
   const stageLabel =
     d.state === "detected"
       ? "deposit detected"
@@ -146,9 +156,11 @@ export function depositToTransfer(d: BridgeDepositItem, asset: FundsAsset | null
         ? `confirming on ${from}`
         : d.state === "origin_confirmed" || d.state === "submitted"
           ? "arriving on Polygon"
-          : d.state === "completed"
+          : d.state === "completed" || d.state === "superseded"
             ? "completed"
-            : "failed";
+            : d.state === "expired"
+              ? "expired — never completed"
+              : "failed";
   return {
     id: `d-${d.id}`,
     kind: "deposit",
@@ -162,7 +174,8 @@ export function depositToTransfer(d: BridgeDepositItem, asset: FundsAsset | null
     currentStep: DEPOSIT_STEP_FOR_STATE[d.state] ?? 1,
     stageLabel,
     txUrl: null, // origin-chain hash; explorer varies per chain
-    failureTone: d.state === "failed" ? "support" : null,
+    failureTone: d.state === "failed" ? "support" : d.state === "expired" ? "recoverable" : null,
+    dismissed: d.dismissedAt !== null,
     createdAt: new Date(d.createdAt).getTime(),
     updatedAt: new Date(d.updatedAt).getTime(),
   };

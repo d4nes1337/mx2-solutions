@@ -8,6 +8,7 @@ import {
   inArray,
   isNull,
   lt,
+  ne,
   notInArray,
   or,
   sql,
@@ -34,6 +35,10 @@ const DEPOSIT_STATE_RANK: Record<string, number> = {
   submitted: 3,
   completed: 4,
   failed: 4,
+  /** Retired in favor of another row for the same transfer (migration 0019). */
+  superseded: 4,
+  /** No provider progress for the expiry horizon — record abandoned (0019). */
+  expired: 4,
 };
 
 export type BridgeDepositState = keyof typeof DEPOSIT_STATE_RANK;
@@ -94,7 +99,7 @@ export const BRIDGE_WITHDRAWAL_STATE_RANK: Record<string, number> = {
 };
 
 /** Deposit states considered terminal (mirrors DEPOSIT_STATE_RANK top). */
-const DEPOSIT_TERMINAL = ["completed", "failed"];
+export const DEPOSIT_TERMINAL = ["completed", "failed", "superseded", "expired"];
 
 /**
  * Relayer transaction state → bridge-withdrawal Polygon-leg outcome. Takes a
@@ -144,6 +149,24 @@ export interface BridgeStore {
     transactions: readonly BridgeStatusTransactionInput[],
   ): Promise<UpsertDepositsResult>;
   listDepositsByWallet(walletAddress: string, limit?: number): Promise<BridgeDepositRow[]>;
+  /**
+   * User-initiated hide of a transfer record (kept in history, removed from
+   * active surfaces). Owner-scoped; idempotent — an already-dismissed row
+   * returns null.
+   */
+  dismissDeposit(walletAddress: string, depositId: string): Promise<BridgeDepositRow | null>;
+  /** All non-terminal deposits, oldest first (reconciliation sweep input). */
+  listNonTerminalDeposits(limit: number): Promise<BridgeDepositRow[]>;
+  /**
+   * Non-terminal deposits with no progress since `cutoff` → `expired`.
+   * CAS per row: a concurrent provider poll advancing the state wins.
+   */
+  expireStaleDeposits(cutoff: Date, limit: number): Promise<UpsertDepositsResult["changed"]>;
+  /**
+   * Complete a deposit from on-chain evidence (funds observed in the deposit
+   * wallet) rather than provider status. Refuses terminal rows.
+   */
+  completeDepositFromChain(depositId: string): Promise<BridgeDepositRow | null>;
 
   // ── Withdrawals (two-leg ledger; route wiring in the withdrawals slice) ──
   createWithdrawal(row: NewBridgeWithdrawalRow): Promise<BridgeWithdrawalRow | null>;
@@ -291,37 +314,115 @@ export const createBridgeStore = (db: Database): BridgeStore => {
       const changed: UpsertDepositsResult["changed"] = [];
       for (const tx of transactions) {
         const state = depositStateFromProvider(tx.status);
-        const key = {
-          bridgeAddressId: address.id,
-          fromChainId: tx.fromChainId ?? "",
-          fromTokenAddress: tx.fromTokenAddress ?? "",
-          fromAmountBaseUnit: tx.fromAmountBaseUnit ?? "",
-          providerCreatedTimeMs: tx.createdTimeMs ?? 0,
-        };
-        const [existing] = await db
-          .select()
-          .from(bridgeDeposits)
-          .where(
-            and(
-              eq(bridgeDeposits.bridgeAddressId, key.bridgeAddressId),
-              eq(bridgeDeposits.fromChainId, key.fromChainId),
-              eq(bridgeDeposits.fromTokenAddress, key.fromTokenAddress),
-              eq(bridgeDeposits.fromAmountBaseUnit, key.fromAmountBaseUnit),
-              eq(bridgeDeposits.providerCreatedTimeMs, key.providerCreatedTimeMs),
-            ),
-          )
-          .limit(1);
+        const ts = tx.createdTimeMs ?? 0;
+        const identity = [
+          eq(bridgeDeposits.bridgeAddressId, address.id),
+          eq(bridgeDeposits.fromChainId, tx.fromChainId ?? ""),
+          eq(bridgeDeposits.fromTokenAddress, tx.fromTokenAddress ?? ""),
+          eq(bridgeDeposits.fromAmountBaseUnit, tx.fromAmountBaseUnit ?? ""),
+        ];
+
+        // Matching ladder, strongest identity first. createdTimeMs is optional
+        // upstream and may appear on a later poll than the first insert, so the
+        // timestamp can never be the primary identity — treating it as one is
+        // what orphaned rows at "detected" before migration 0019.
+        let existing: BridgeDepositRow | null = null;
+        if (tx.txHash) {
+          const [byHash] = await db
+            .select()
+            .from(bridgeDeposits)
+            .where(and(...identity, eq(bridgeDeposits.txHash, tx.txHash)))
+            .limit(1);
+          existing = byHash ?? null;
+        }
+        if (!existing) {
+          const [byKey] = await db
+            .select()
+            .from(bridgeDeposits)
+            .where(and(...identity, eq(bridgeDeposits.providerCreatedTimeMs, ts)))
+            .limit(1);
+          existing = byKey ?? null;
+        }
+        if (!existing) {
+          // Zero-timestamp adoption, either direction: a non-terminal sibling
+          // whose key differs only in one side lacking createdTimeMs is the
+          // same transfer. Ambiguity note: same address+chain+token+amount with
+          // no txHash and no timestamp cannot be told apart — adopting is the
+          // safe default (a duplicate stuck row is worse than a merged one).
+          const [adoptable] = await db
+            .select()
+            .from(bridgeDeposits)
+            .where(
+              and(
+                ...identity,
+                ...(ts !== 0 ? [eq(bridgeDeposits.providerCreatedTimeMs, 0)] : []),
+                notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL),
+              ),
+            )
+            .orderBy(desc(bridgeDeposits.providerCreatedTimeMs))
+            .limit(1);
+          existing = adoptable ?? null;
+        }
+
+        // Normalize the adopted row onto the provider's timestamp. If a sibling
+        // already owns that key (both halves of the transfer were inserted),
+        // keep the further-along row and retire the other as superseded.
+        if (existing && ts !== 0 && existing.providerCreatedTimeMs !== ts) {
+          const [sibling] = await db
+            .select()
+            .from(bridgeDeposits)
+            .where(
+              and(
+                ...identity,
+                eq(bridgeDeposits.providerCreatedTimeMs, ts),
+                ne(bridgeDeposits.id, existing.id),
+              ),
+            )
+            .limit(1);
+          if (sibling) {
+            const keep =
+              (DEPOSIT_STATE_RANK[sibling.state] ?? 0) >= (DEPOSIT_STATE_RANK[existing.state] ?? 0)
+                ? sibling
+                : existing;
+            const lose = keep.id === sibling.id ? existing : sibling;
+            if (!DEPOSIT_TERMINAL.includes(lose.state)) {
+              const [retired] = await db
+                .update(bridgeDeposits)
+                .set({
+                  state: "superseded",
+                  supersededByDepositId: keep.id,
+                  updatedAt: sql`now()`,
+                })
+                .where(eq(bridgeDeposits.id, lose.id))
+                .returning();
+              if (retired) changed.push({ row: retired, previousState: lose.state });
+            }
+            existing = keep;
+          } else {
+            const [moved] = await db
+              .update(bridgeDeposits)
+              .set({ providerCreatedTimeMs: ts, updatedAt: sql`now()` })
+              .where(eq(bridgeDeposits.id, existing.id))
+              .returning();
+            if (moved) existing = moved;
+          }
+        }
 
         if (!existing) {
           const [inserted] = await db
             .insert(bridgeDeposits)
             .values({
               walletAddress: address.walletAddress,
-              ...key,
+              bridgeAddressId: address.id,
+              fromChainId: tx.fromChainId ?? "",
+              fromTokenAddress: tx.fromTokenAddress ?? "",
+              fromAmountBaseUnit: tx.fromAmountBaseUnit ?? "",
+              providerCreatedTimeMs: ts,
               state,
               providerStatus: tx.status,
               txHash: tx.txHash ?? null,
               raw: tx.raw ?? null,
+              ...(state === "completed" ? { completionSource: "provider" } : {}),
             })
             .onConflictDoNothing()
             .returning();
@@ -331,12 +432,18 @@ export const createBridgeStore = (db: Database): BridgeStore => {
 
         const forward =
           (DEPOSIT_STATE_RANK[state] ?? 1) > (DEPOSIT_STATE_RANK[existing.state] ?? 0);
-        const terminal = existing.state === "completed" || existing.state === "failed";
+        const terminal = DEPOSIT_TERMINAL.includes(existing.state);
         if (terminal || (!forward && existing.txHash === (tx.txHash ?? existing.txHash))) continue;
         const [updated] = await db
           .update(bridgeDeposits)
           .set({
-            ...(forward ? { state, providerStatus: tx.status } : {}),
+            ...(forward
+              ? {
+                  state,
+                  providerStatus: tx.status,
+                  ...(state === "completed" ? { completionSource: "provider" } : {}),
+                }
+              : {}),
             txHash: tx.txHash ?? existing.txHash,
             raw: tx.raw ?? existing.raw,
             updatedAt: sql`now()`,
@@ -346,6 +453,73 @@ export const createBridgeStore = (db: Database): BridgeStore => {
         if (updated && forward) changed.push({ row: updated, previousState: existing.state });
       }
       return { changed };
+    },
+
+    async dismissDeposit(walletAddress, depositId) {
+      const [row] = await db
+        .update(bridgeDeposits)
+        .set({ dismissedAt: sql`now()`, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(bridgeDeposits.id, depositId),
+            eq(bridgeDeposits.walletAddress, walletAddress),
+            isNull(bridgeDeposits.dismissedAt),
+          ),
+        )
+        .returning();
+      return row ?? null;
+    },
+
+    async listNonTerminalDeposits(limit) {
+      return db
+        .select()
+        .from(bridgeDeposits)
+        .where(notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL))
+        .orderBy(asc(bridgeDeposits.createdAt))
+        .limit(limit);
+    },
+
+    async expireStaleDeposits(cutoff, limit) {
+      const stale = await db
+        .select()
+        .from(bridgeDeposits)
+        .where(
+          and(
+            notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL),
+            lt(bridgeDeposits.updatedAt, cutoff),
+          ),
+        )
+        .orderBy(asc(bridgeDeposits.updatedAt))
+        .limit(limit);
+      const changed: UpsertDepositsResult["changed"] = [];
+      for (const row of stale) {
+        // CAS on the observed state so a concurrent provider poll wins.
+        const [expired] = await db
+          .update(bridgeDeposits)
+          .set({ state: "expired", updatedAt: sql`now()` })
+          .where(and(eq(bridgeDeposits.id, row.id), eq(bridgeDeposits.state, row.state)))
+          .returning();
+        if (expired) changed.push({ row: expired, previousState: row.state });
+      }
+      return changed;
+    },
+
+    async completeDepositFromChain(depositId) {
+      const [row] = await db
+        .update(bridgeDeposits)
+        .set({
+          state: "completed",
+          completionSource: "chain_reconciled",
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(bridgeDeposits.id, depositId),
+            notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL),
+          ),
+        )
+        .returning();
+      return row ?? null;
     },
 
     async listDepositsByWallet(walletAddress, limit = 50) {

@@ -4,9 +4,11 @@ import type { AppConfig } from "@mx2/config";
 import type {
   AuditStore,
   ConditionalRuleRow,
+  DelegationStore,
   MarketSnapshotRow,
   MarketSnapshotStore,
   OrderIntentStore,
+  PrivyWalletStore,
   RuleStore,
   RuntimeFlagStore,
   SessionStore,
@@ -45,6 +47,9 @@ export interface SmartOrdersRoutesDeps {
   marketSnapshots: MarketSnapshotStore;
   gammaClient: GammaClient;
   clobClient: ClobClient;
+  /** Per-user auto-readiness probes (absent → server-level blockers only). */
+  privyWallets?: PrivyWalletStore;
+  delegations?: DelegationStore;
 }
 
 // ── Request validation (Smart Order DSL v2, ADR-0010) ───────────────────────
@@ -196,12 +201,19 @@ const CreateSmartOrderSchema = z.object({
   name: z.string().min(1).max(120),
   templateId: z.string().max(64).nullish(),
   expr: ExprNodeSchema,
-  holdsForMs: z.number().int().min(0).max(86_400_000).default(300_000),
+  // Instant by default (owner decision, 2026-07-19) — hold windows are opt-in.
+  holdsForMs: z.number().int().min(0).max(86_400_000).default(0),
   maxDataAgeMs: z.number().int().positive().max(60_000).default(30_000),
   action: ActionSchema,
   recurrence: RecurrenceSchema.default({ kind: "once" }),
   limits: LimitsSchema.nullish(),
   expiresAt: z.string().datetime().nullish(),
+  /**
+   * Versioned edit: atomically create this strategy AND cancel/link the one it
+   * replaces (spend caps carry over). Fixes the old client-side create-then-
+   * cancel race where a crash left both strategies armed.
+   */
+  supersedes: z.string().uuid().nullish(),
 });
 
 const EvaluateDraftSchema = z.object({
@@ -321,11 +333,24 @@ const marketFreshness = (views: ViewsByToken, tokenIds: readonly string[], nowMs
     };
   });
 
-/** Serialized strategy row: raw row + the definition normalized to v2. */
-const serializeStrategy = (row: ConditionalRuleRow) => ({
-  ...row,
-  definitionV2: normalizeDefinition(row.definition as RuleDefinition | StrategyDefinition),
-});
+/**
+ * Serialized strategy row: raw row + the definition normalized to v2, plus the
+ * server-level auto-degradation marker. `autoDegraded` is true when the rule
+ * asks for unattended execution but the server cannot deliver it — the exact
+ * silent failure that stranded the owner's triggers at "awaiting confirmation".
+ * Per-user blockers (wallet/allowances/delegation) come from /auto-readiness.
+ */
+const serializeStrategy = (row: ConditionalRuleRow, liveExecutionEnabled: boolean) => {
+  const definitionV2 = normalizeDefinition(row.definition as RuleDefinition | StrategyDefinition);
+  const wantsAuto =
+    definitionV2.action.kind === "order" && definitionV2.action.execution === "auto";
+  return {
+    ...row,
+    definitionV2,
+    autoDegraded: wantsAuto && !liveExecutionEnabled,
+    degradedReason: wantsAuto && !liveExecutionEnabled ? "live_execution_disabled" : null,
+  };
+};
 
 export const registerSmartOrdersRoutes = (
   app: FastifyInstance,
@@ -345,6 +370,61 @@ export const registerSmartOrdersRoutes = (
   const guard = { preHandler: [requireAuth, requireEnabled] };
   const publicGuard = (scope: string, limit: number) => ({
     preHandler: [requireEnabled, makeRateLimit({ scope, limit, windowMs: 60_000 })],
+  });
+
+  // ── GET /api/smart-orders/auto-readiness — why auto wouldn't execute ──────
+  // Surfaces every blocker between an armed auto strategy and an unattended
+  // order, so "AUTO" can never silently mean "waiting for you to click".
+  app.get("/api/smart-orders/auto-readiness", guard, async (req) => {
+    const user = req.user!;
+    const blockers: { code: string; detail: string }[] = [];
+    const f = deps.config.features;
+    if (!f.conditionalLiveExecution) {
+      blockers.push({
+        code: "live_execution_disabled",
+        detail: "Unattended execution is disabled on this server — triggers wait for your confirmation.",
+      });
+    }
+    if (!f.liveTrading) {
+      blockers.push({
+        code: "live_trading_disabled",
+        detail: "Live trading is disabled on this server.",
+      });
+    }
+    if (!f.privySigning) {
+      blockers.push({
+        code: "privy_signing_disabled",
+        detail: "Server-side signing is disabled — orders need your wallet signature.",
+      });
+    }
+    if (deps.privyWallets) {
+      const wallet = await deps.privyWallets.find(user.walletAddress);
+      if (!wallet) {
+        blockers.push({
+          code: "wallet_not_provisioned",
+          detail: "No trading wallet yet — activate one in Wallet.",
+        });
+      } else if (!wallet.allowancesBootstrappedAt) {
+        blockers.push({
+          code: "allowances_missing",
+          detail: "Trading not authorized yet — press “Authorize trading” in Wallet.",
+        });
+      }
+    }
+    if (deps.delegations) {
+      const delegation = await deps.delegations.findActive(user.walletAddress);
+      if (!delegation) {
+        blockers.push({
+          code: "delegation_missing",
+          detail: "No active trading session — re-delegate in Wallet.",
+        });
+      }
+    }
+    const killSwitch = await deps.runtimeFlags.get("trading_paused");
+    if (killSwitch?.value === "true") {
+      blockers.push({ code: "kill_switch", detail: "Trading is globally paused." });
+    }
+    return { autoExecutionEnabled: f.conditionalLiveExecution, blockers };
   });
 
   // ── POST /api/smart-orders — create + arm ─────────────────────────────────
@@ -480,11 +560,11 @@ export const registerSmartOrdersRoutes = (
     }
 
     const definitionHash = hashDefinition(definition);
-    const rule = await deps.ruleStore.create({
+    const createOpts = {
       walletAddress: user.walletAddress,
       conditionId: primary.conditionId,
       tokenId: primary.tokenId,
-      side: definition.action.kind === "order" ? definition.action.side : "BUY",
+      side: definition.action.kind === "order" ? definition.action.side : ("BUY" as const),
       definition,
       definitionHash,
       expiresAt: expiresAtMs === null ? null : new Date(expiresAtMs),
@@ -492,7 +572,37 @@ export const registerSmartOrdersRoutes = (
       name: b.name,
       templateId: b.templateId ?? null,
       tokenIds: referencedTokenIds(definition),
-    });
+    };
+
+    let rule;
+    if (b.supersedes) {
+      // Versioned edit (D-020): one transaction creates the replacement,
+      // cancels the old rule, links both directions, and carries lifetime
+      // spend accounting forward — editing can never reset caps.
+      const result = await deps.ruleStore.createSuperseding(createOpts, b.supersedes);
+      if (!result) {
+        reply.code(409);
+        return {
+          error: "SUPERSEDE_CONFLICT",
+          message:
+            "The strategy you're editing is no longer active (it may have triggered, been cancelled, or already been replaced). Review it and create a new strategy instead.",
+        };
+      }
+      rule = result.created;
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "rule.state_changed",
+        subject: `rule:${result.retired.id}`,
+        metadata: {
+          from: result.retired.status,
+          to: "CANCELLED",
+          reason: "SUPERSEDED",
+          supersededBy: rule.id,
+        },
+      });
+    } else {
+      rule = await deps.ruleStore.create(createOpts);
+    }
     await deps.auditStore.emit({
       actor: user.walletAddress,
       action: "rule.created",
@@ -507,10 +617,11 @@ export const registerSmartOrdersRoutes = (
         marketCount: referencedTokenIds(definition).length,
         recurrence: definition.recurrence.kind,
         holdsForMs: definition.holdsForMs,
+        ...(b.supersedes ? { supersedes: b.supersedes } : {}),
       },
     });
     reply.code(201);
-    return serializeStrategy(rule);
+    return serializeStrategy(rule, deps.config.features.conditionalLiveExecution);
   });
 
   // ── GET /api/smart-orders — every strategy incl. v1 rules (normalized) ─────
@@ -519,7 +630,9 @@ export const registerSmartOrdersRoutes = (
     const user = req.user!;
     const includeArchived = (req.query as Record<string, string>)["includeArchived"] === "1";
     const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100, { includeArchived });
-    return { strategies: rows.map(serializeStrategy) };
+    return {
+      strategies: rows.map((r) => serializeStrategy(r, deps.config.features.conditionalLiveExecution)),
+    };
   });
 
   app.get("/api/smart-orders/:id", guard, async (req, reply) => {
@@ -532,7 +645,10 @@ export const registerSmartOrdersRoutes = (
     }
     // Per-strategy auto kill state (W8) so the detail page can show/toggle it.
     const disarmFlag = await deps.runtimeFlags.get(`rule_auto_disabled:${id}`);
-    return { ...serializeStrategy(row), autoDisabled: disarmFlag?.value === "true" };
+    return {
+      ...serializeStrategy(row, deps.config.features.conditionalLiveExecution),
+      autoDisabled: disarmFlag?.value === "true",
+    };
   });
 
   // ── Controls ────────────────────────────────────────────────────────────────
@@ -557,7 +673,7 @@ export const registerSmartOrdersRoutes = (
         subject: `rule:${id}`,
         metadata: { control: action },
       });
-      return serializeStrategy(row);
+      return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
     });
 
   control("pause", (id, w) => deps.ruleStore.pause(id, w));
@@ -591,7 +707,7 @@ export const registerSmartOrdersRoutes = (
       subject: `rule:${id}`,
       metadata: { control: "tags", tags },
     });
-    return serializeStrategy(row);
+    return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
   });
 
   const archiveControl = (label: "archive" | "unarchive") =>
@@ -618,7 +734,7 @@ export const registerSmartOrdersRoutes = (
         subject: `rule:${id}`,
         metadata: { control: label },
       });
-      return serializeStrategy(row);
+      return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
     });
 
   archiveControl("archive");

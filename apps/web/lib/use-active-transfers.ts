@@ -107,9 +107,11 @@ export function useActiveTransfers(opts: {
     const rows: ActiveTransfer[] = [
       ...(withdrawals.data?.withdrawals ?? []).map(walletWithdrawalToTransfer),
       ...(withdrawals.data?.bridgeWithdrawals ?? []).map(bridgeWithdrawalToTransfer),
-      ...(deposits.data?.deposits ?? []).map((d) =>
-        depositToTransfer(d, assetFor(d.fromChainId, d.fromTokenAddress)),
-      ),
+      ...(deposits.data?.deposits ?? [])
+        // Superseded rows are duplicate records of a transfer whose real state
+        // lives on a sibling row — never render them anywhere.
+        .filter((d) => d.state !== "superseded")
+        .map((d) => depositToTransfer(d, assetFor(d.fromChainId, d.fromTokenAddress))),
     ];
     return rows.sort((a, b) => b.createdAt - a.createdAt);
   }, [withdrawals.data, deposits.data, assetRows, demoTransfers]);
@@ -144,7 +146,7 @@ export function useActiveTransfers(opts: {
       ...(conversionTransfer && conversionTransfer.status === "pending"
         ? [conversionTransfer]
         : []),
-      ...transfers.filter((t) => t.status === "pending"),
+      ...transfers.filter((t) => t.status === "pending" && !t.dismissed),
     ];
     const justCompleted = [
       ...(conversionTransfer && conversionTransfer.status === "success"

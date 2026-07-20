@@ -53,11 +53,14 @@ export function Badge({
   tone = "neutral",
   dot,
   className,
+  title,
 }: {
   children: ReactNode;
   tone?: "neutral" | "pos" | "neg" | "warn" | "accent" | "brand";
   dot?: boolean;
   className?: string;
+  /** Hover explanation (native tooltip) for state badges. */
+  title?: string;
 }) {
   const tones: Record<string, string> = {
     neutral: "border-border bg-surface-2 text-muted",
@@ -82,6 +85,7 @@ export function Badge({
         tones[tone],
         className,
       )}
+      {...(title ? { title } : {})}
     >
       {dot ? <span className={cn("h-1.5 w-1.5 rounded-full", dotColor[tone])} /> : null}
       {children}

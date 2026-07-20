@@ -31,6 +31,8 @@ const demoDeposit = (state: BridgeDepositItem["state"]): BridgeDepositItem => ({
   fromChainId: "8453",
   fromTokenAddress: "0xdemo",
   fromAmountBaseUnit: "50000000",
+  dismissedAt: null,
+  completionSource: null,
   state,
   providerStatus: state.toUpperCase(),
   txHash: null,

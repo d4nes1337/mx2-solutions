@@ -33,6 +33,8 @@ import { createMarketFeedManager, orderbookToView, type MarketFeedManager } from
 import { createOrderSyncLoop, type OrderSyncLoop } from "./order-sync.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
+import { createAutoRetrySweeper, type AutoRetrySweeper } from "./auto-retry-sweeper.js";
+import { createExecutingRecovery, type ExecutingRecovery } from "./executing-recovery.js";
 import { createQuoterManager, type QuoterManager } from "./quoter/manager.js";
 import { createLiveCapableProvider } from "./quoter/executor-provider.js";
 import { createRewardsPoller, type RewardsPoller } from "./quoter/rewards-poller.js";
@@ -83,6 +85,8 @@ const main = async (): Promise<void> => {
   // subscribe/unsubscribe thunks read after wiring is complete.
   const feedRef: { current: MarketFeedManager | null } = { current: null };
   let evaluator: RuleEvaluatorManager | null = null;
+  let executingRecovery: ExecutingRecovery | null = null;
+  let autoRetrySweeper: AutoRetrySweeper | null = null;
 
   if (config.features.conditionalRules) {
     const ruleStore = createRuleStore(dbHandle.db);
@@ -146,6 +150,10 @@ const main = async (): Promise<void> => {
     // aging books instead of resetting hold windows as "stale". Gated on the
     // WS transport being connected — a real disconnect still fails closed.
     const publicClobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
+    const fetchOrderbook = async (tokenId: string) => {
+      const ob = await publicClobClient.getOrderbook(tokenId);
+      return ob.ok ? orderbookToView(ob.value, Date.now()) : null;
+    };
     evaluator = createRuleEvaluatorManager({
       logger,
       ruleStore,
@@ -153,14 +161,39 @@ const main = async (): Promise<void> => {
       auditStore,
       subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
       unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
-      fetchOrderbook: async (tokenId) => {
-        const ob = await publicClobClient.getOrderbook(tokenId);
-        return ob.ok ? orderbookToView(ob.value, Date.now()) : null;
-      },
+      fetchOrderbook,
       isFeedConnected: () => feedRef.current?.state() === "connected",
+      refreshIntervalMs: config.worker.restRefreshIntervalMs,
+      refreshMaxPerPass: config.worker.restRefreshMaxPerPass,
       ...(autoExecutor ? { autoExecutor } : {}),
       ...(outbox ? { outbox } : {}),
     });
+
+    // Crash recovery: EXECUTING is not evaluable, so a worker crash mid-
+    // execution would otherwise strand the rule forever (RFC-0002 §6). Runs
+    // regardless of the live-execution flag — stuck rows can predate a flip.
+    executingRecovery = createExecutingRecovery({
+      logger,
+      ruleStore,
+      triggerStore,
+      orderIntents: createOrderIntentStore(dbHandle.db),
+      auditStore,
+    });
+
+    // Bounded funds-arrival retry: triggers skipped for recoverable reasons
+    // (deposit mid-bridge, allowances pending) re-attempt with fresh
+    // re-verification instead of stranding at awaiting_user.
+    if (autoExecutor) {
+      autoRetrySweeper = createAutoRetrySweeper({
+        logger,
+        ruleStore,
+        triggerStore,
+        auditStore,
+        autoExecutor,
+        fetchOrderbook,
+        ...(outbox ? { outbox } : {}),
+      });
+    }
   } else {
     logger.warn("FEATURE_CONDITIONAL_RULES is off — rule evaluator disabled");
   }
@@ -338,6 +371,24 @@ const main = async (): Promise<void> => {
         }),
       };
     }
+    // Chain-reconcile probes (0019): only wired with a Polygon RPC — without
+    // one the poller simply never auto-completes from on-chain evidence.
+    const pollerTradingAccounts = createTradingAccountStore(dbHandle.db);
+    const chainProbeDeps = config.polygonRpcUrl
+      ? (() => {
+          const readBalance = createPusdBalanceReader(config.polygonRpcUrl);
+          return {
+            balanceOfUsdc: async (owner: string) => Number(await readBalance(owner)) / 1e6,
+            getDepositWalletAddress: async (walletAddress: string) => {
+              const accounts = await pollerTradingAccounts.listByOwner(walletAddress);
+              return (
+                accounts.find((a) => a.kind === "internal_privy" && a.depositWalletAddress)
+                  ?.depositWalletAddress ?? null
+              );
+            },
+          };
+        })()
+      : {};
     bridgePoller = createBridgePoller({
       logger,
       bridgeStore: createBridgeStore(dbHandle.db),
@@ -347,6 +398,7 @@ const main = async (): Promise<void> => {
       }),
       auditStore: createAuditStore(dbHandle.db),
       ...withdrawalLegDeps,
+      ...chainProbeDeps,
       ...(outbox ? { outbox } : {}),
     });
   }
@@ -400,6 +452,8 @@ const main = async (): Promise<void> => {
   }
 
   evaluator?.start();
+  executingRecovery?.start();
+  autoRetrySweeper?.start();
   quoter?.start();
   rewardsPoller?.start();
   orderSync?.start();
@@ -415,6 +469,8 @@ const main = async (): Promise<void> => {
     logger.info({ signal }, "Worker shutting down");
     clearInterval(heartbeat);
     evaluator?.stop();
+    executingRecovery?.stop();
+    autoRetrySweeper?.stop();
     quoter?.stop();
     rewardsPoller?.stop();
     orderSync?.stop();

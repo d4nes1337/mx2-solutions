@@ -30,10 +30,10 @@ import { layoutDoc } from "@/lib/smart-orders/layout";
 import { useBuilderStore } from "@/lib/smart-orders/store";
 import { useDraftAutosave } from "@/lib/smart-orders/use-draft-autosave";
 import {
+  useAutoReadiness,
   useCreateStrategy,
   useDraftEvaluation,
   useStrategy,
-  useStrategyControl,
 } from "@/lib/smart-orders/queries";
 import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
 import { usePanelWidth } from "@/lib/use-panel-width";
@@ -132,7 +132,6 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const session = useSession();
   const signIn = useSignIn();
   const create = useCreateStrategy();
-  const control = useStrategyControl();
   const editing = useStrategy(editOf ?? null);
 
   const doc = useBuilderStore((s) => s.doc);
@@ -364,6 +363,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
 
   const signedIn = Boolean(session.data);
   const allowlisted = Boolean(session.data?.allowlisted);
+  const autoReadiness = useAutoReadiness(signedIn);
   const canSave = issues.length === 0 && !create.isPending;
 
   // Headline payoff next to the verdict — the number the owner wants seen
@@ -389,12 +389,15 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   }, [doc, evaluation.data, headlineEconomics.data]);
 
   // Definitions are immutable once armed (evidence stays tied to the exact
-  // version), so "editing" = create the new version, then cancel the old one.
+  // version), so "editing" = create the new version superseding the old one —
+  // the SERVER does both in one transaction (create + cancel + link + carry
+  // spend caps), closing the old client-side create-then-cancel race where a
+  // crash between the two calls left both strategies armed.
   // The consumed draft is tombstoned (linked to the created strategy) and the
   // canvas moves to a fresh blank draft, so returning to the builder doesn't
   // resurrect already-armed work.
   const save = () => {
-    create.mutate(compileDoc(doc), {
+    create.mutate({ ...compileDoc(doc), ...(editOf ? { supersedes: editOf } : {}) }, {
       onSuccess: (created) => {
         // Remember the armed caps so the next auto strategy starts prefilled.
         if (doc.action.kind === "order" && doc.action.execution === "auto") {
@@ -406,7 +409,6 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           markDraftConsumedLocal(consumedId, created.id);
           void markDraftConsumedOnServer(consumedId, created.id);
         }
-        if (editOf) control.mutate({ id: editOf, action: "cancel" });
         router.push("/smart-orders");
       },
     });
@@ -522,14 +524,28 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
                       {create.isPending ? "Saving…" : "Save & start watching"}
                     </Button>
                     {doc.action.kind === "order" && doc.action.execution === "auto" ? (
-                      <p className="text-[11px] leading-snug text-muted">
-                        Auto mode places orders from your{" "}
-                        <Link href="/wallet" className="text-accent hover:underline">
-                          Arima trading wallet
-                        </Link>{" "}
-                        within the limits above. If the wallet isn&apos;t ready, triggers wait for
-                        your signature instead.
-                      </p>
+                      (autoReadiness.data?.blockers.length ?? 0) > 0 ? (
+                        <div className="rounded-md border border-warn/30 bg-warn/10 p-2 text-[11px] leading-snug text-warn">
+                          <p className="font-medium">
+                            Auto mode can&apos;t execute unattended yet — triggers will wait for
+                            your confirmation:
+                          </p>
+                          <ul className="mt-1 list-disc pl-4">
+                            {autoReadiness.data!.blockers.slice(0, 3).map((b) => (
+                              <li key={b.code}>{b.detail}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] leading-snug text-muted">
+                          Auto mode places orders from your{" "}
+                          <Link href="/wallet" className="text-accent hover:underline">
+                            Arima trading wallet
+                          </Link>{" "}
+                          within the limits above. If the wallet isn&apos;t ready, triggers wait
+                          for your signature instead.
+                        </p>
+                      )
                     ) : null}
                     {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
                   </>

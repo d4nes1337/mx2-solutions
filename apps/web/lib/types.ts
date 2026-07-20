@@ -318,6 +318,9 @@ export interface TradingAccount {
   credentialsReady: boolean;
   isPrimary: boolean;
   depositWalletAddress: string | null;
+  /** On-chain exchange-allowance check: false = "Authorize trading" needed;
+   * null = unprobeable (no RPC on the server). */
+  allowancesClean: boolean | null;
   nextAction: string | null;
   createdAt: string;
   updatedAt: string;
@@ -464,9 +467,21 @@ export interface BridgeDepositItem {
   fromChainId: string;
   fromTokenAddress: string;
   fromAmountBaseUnit: string;
-  state: "detected" | "processing" | "origin_confirmed" | "submitted" | "completed" | "failed";
+  state:
+    | "detected"
+    | "processing"
+    | "origin_confirmed"
+    | "submitted"
+    | "completed"
+    | "failed"
+    | "superseded"
+    | "expired";
   providerStatus: string;
   txHash: string | null;
+  /** User pressed Dismiss — hidden from active surfaces, kept in history. */
+  dismissedAt: string | null;
+  /** "provider" (normal) or "chain_reconciled" (funds observed on-chain). */
+  completionSource: string | null;
   createdAt: string;
   updatedAt: string;
 }

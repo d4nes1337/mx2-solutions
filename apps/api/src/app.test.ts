@@ -193,6 +193,9 @@ const mockRuleStore: RuleStore = {
   archive: async () => null,
   unarchive: async () => null,
   addExecutedNotional: async () => {},
+  listStuckExecuting: async () => [],
+  revertExecuting: async () => null,
+  createSuperseding: async () => null,
 };
 
 const mockTriggerStore: TriggerStore = {
@@ -206,6 +209,10 @@ const mockTriggerStore: TriggerStore = {
   hasForRule: async () => false,
   listByRule: async () => [],
   updateStatus: async () => {},
+  scheduleAutoRetry: async () => {},
+  clearAutoRetry: async () => {},
+  listAutoRetryable: async () => [],
+  listAutoRetryLapsed: async () => [],
 };
 
 const mockTradingClobClient: AuthenticatedClobClient = {

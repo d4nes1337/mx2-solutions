@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type {
   ReasonCode,
   RuleDefinition,
@@ -72,6 +72,12 @@ export interface RuleEvaluationUpdate {
    * untouched; the worker only writes when a watermark actually moved.
    */
   watermarks?: Record<string, unknown> | null;
+  /**
+   * Stale-pause marker (migration 0019): ms timestamp when the hold window
+   * paused on stale data; null = not paused. Omitted = leave untouched
+   * (legacy v1 evaluator path).
+   */
+  staleSinceMs?: number | null;
 }
 
 export interface RuleStore {
@@ -117,6 +123,25 @@ export interface RuleStore {
   markExecutionFailed(id: string, errorMessage: string): Promise<ConditionalRuleRow | null>;
   /** Accumulate lifetime auto-executed notional (checked against maxTotalNotional). */
   addExecutedNotional(id: string, amountUsd: number): Promise<void>;
+  /** Rules stuck in EXECUTING since before `cutoff` — crash-recovery sweep input. */
+  listStuckExecuting(cutoff: Date): Promise<ConditionalRuleRow[]>;
+  /**
+   * Crash recovery: CAS a rule back from EXECUTING to TRIGGERED_AWAITING_USER,
+   * only when the crash provably happened before any order intent was created
+   * (the sweep checks the intent ledger first).
+   */
+  revertExecuting(id: string): Promise<ConditionalRuleRow | null>;
+  /**
+   * Versioned edit (D-020 — definitions stay immutable): atomically create the
+   * replacement rule, cancel the old one, link both directions, and carry the
+   * lifetime spend accounting forward so editing can never reset caps. Returns
+   * null (nothing written) when the old rule isn't the wallet's, isn't in an
+   * editable status (ACTIVE_* or PAUSED), or was already superseded.
+   */
+  createSuperseding(
+    opts: CreateRuleOpts,
+    oldId: string,
+  ): Promise<{ created: ConditionalRuleRow; retired: ConditionalRuleRow } | null>;
 }
 
 const tsOrNull = (ms: number | null): Date | null => (ms === null ? null : new Date(ms));
@@ -230,6 +255,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
           ? { cooldownUntil: tsOrNull(update.cooldownUntilMs) }
           : {}),
         ...(update.watermarks !== undefined ? { runtimeWatermarks: update.watermarks } : {}),
+        ...(update.staleSinceMs !== undefined ? { staleSince: tsOrNull(update.staleSinceMs) } : {}),
         updatedAt: sql`now()`,
       })
       .where(
@@ -245,7 +271,13 @@ export const createRuleStore = (db: Database): RuleStore => ({
   async pause(id, walletAddress) {
     const [row] = await db
       .update(conditionalRules)
-      .set({ status: "PAUSED", pausedAt: sql`now()`, trueSince: null, updatedAt: sql`now()` })
+      .set({
+        status: "PAUSED",
+        pausedAt: sql`now()`,
+        trueSince: null,
+        staleSince: null,
+        updatedAt: sql`now()`,
+      })
       .where(
         and(
           eq(conditionalRules.id, id),
@@ -260,7 +292,13 @@ export const createRuleStore = (db: Database): RuleStore => ({
   async resume(id, walletAddress) {
     const [row] = await db
       .update(conditionalRules)
-      .set({ status: "ACTIVE_WAITING", pausedAt: null, trueSince: null, updatedAt: sql`now()` })
+      .set({
+        status: "ACTIVE_WAITING",
+        pausedAt: null,
+        trueSince: null,
+        staleSince: null,
+        updatedAt: sql`now()`,
+      })
       .where(
         and(
           eq(conditionalRules.id, id),
@@ -340,6 +378,77 @@ export const createRuleStore = (db: Database): RuleStore => ({
       })
       .where(eq(conditionalRules.id, id));
   },
+
+  async listStuckExecuting(cutoff) {
+    return db
+      .select()
+      .from(conditionalRules)
+      .where(
+        and(eq(conditionalRules.status, "EXECUTING"), lt(conditionalRules.updatedAt, cutoff)),
+      );
+  },
+
+  async revertExecuting(id) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ status: "TRIGGERED_AWAITING_USER", updatedAt: sql`now()` })
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.status, "EXECUTING")))
+      .returning();
+    return row ?? null;
+  },
+
+  async createSuperseding(opts, oldId) {
+    return db.transaction(async (tx) => {
+      const [old] = await tx
+        .select()
+        .from(conditionalRules)
+        .where(
+          and(
+            eq(conditionalRules.id, oldId),
+            eq(conditionalRules.walletAddress, opts.walletAddress),
+            inArray(conditionalRules.status, [...EVALUABLE, "PAUSED"] as RuleStatus[]),
+            isNull(conditionalRules.supersededBy),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!old) return null;
+      const [created] = await tx
+        .insert(conditionalRules)
+        .values({
+          walletAddress: opts.walletAddress,
+          conditionId: opts.conditionId,
+          tokenId: opts.tokenId,
+          side: opts.side,
+          definition: opts.definition,
+          definitionHash: opts.definitionHash,
+          status: "ACTIVE_WAITING",
+          expiresAt: opts.expiresAt,
+          version: opts.version ?? 1,
+          name: opts.name ?? null,
+          templateId: opts.templateId ?? null,
+          tokenIds: [...(opts.tokenIds ?? [opts.tokenId])],
+          supersedes: oldId,
+          totalNotionalExecuted: old.totalNotionalExecuted,
+          tags: old.tags,
+        })
+        .returning();
+      if (!created) throw new Error("Failed to create superseding rule");
+      const [retired] = await tx
+        .update(conditionalRules)
+        .set({
+          status: "CANCELLED",
+          supersededBy: created.id,
+          trueSince: null,
+          staleSince: null,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(conditionalRules.id, oldId))
+        .returning();
+      if (!retired) throw new Error("Failed to retire superseded rule");
+      return { created, retired };
+    });
+  },
 });
 
 // ── Rule trigger store ────────────────────────────────────────────────────────
@@ -364,6 +473,18 @@ export interface TriggerStore {
   /** Defensive idempotency: at most one trigger per rule for recurrence "once". */
   hasForRule(ruleId: string): Promise<boolean>;
   updateStatus(id: string, status: TriggerStatus, opts?: { orderIntentId?: string }): Promise<void>;
+  /**
+   * Schedule a bounded auto-retry (migration 0019): the auto-executor skipped
+   * this trigger for a recoverable reason (funds in transit, allowances
+   * pending); the sweeper may re-attempt until `until`.
+   */
+  scheduleAutoRetry(id: string, until: Date, reason: string): Promise<void>;
+  /** Clear a scheduled retry (executed, abandoned, or the user acted first). */
+  clearAutoRetry(id: string): Promise<void>;
+  /** Triggers still awaiting the user whose retry deadline is in the future. */
+  listAutoRetryable(now: Date, limit?: number): Promise<RuleTriggerRow[]>;
+  /** Triggers whose retry deadline lapsed without executing (cleanup + notify). */
+  listAutoRetryLapsed(now: Date, limit?: number): Promise<RuleTriggerRow[]>;
 }
 
 export const createTriggerStore = (db: Database): TriggerStore => ({
@@ -442,7 +563,51 @@ export const createTriggerStore = (db: Database): TriggerStore => ({
       .set({
         status,
         ...(opts?.orderIntentId !== undefined ? { orderIntentId: opts.orderIntentId } : {}),
+        // Any status movement invalidates a scheduled retry — the user acted,
+        // or the trigger resolved some other way.
+        ...(status !== "awaiting_user" ? { autoRetryUntil: null } : {}),
       })
       .where(eq(ruleTriggers.id, id));
+  },
+
+  async scheduleAutoRetry(id, until, reason) {
+    // First schedule wins: later skips must not keep extending the window.
+    await db
+      .update(ruleTriggers)
+      .set({ autoRetryUntil: until, autoRetryReason: reason })
+      .where(
+        and(
+          eq(ruleTriggers.id, id),
+          eq(ruleTriggers.status, "awaiting_user"),
+          isNull(ruleTriggers.autoRetryUntil),
+        ),
+      );
+  },
+
+  async clearAutoRetry(id) {
+    await db.update(ruleTriggers).set({ autoRetryUntil: null }).where(eq(ruleTriggers.id, id));
+  },
+
+  async listAutoRetryable(now, limit = 100) {
+    return db
+      .select()
+      .from(ruleTriggers)
+      .where(and(eq(ruleTriggers.status, "awaiting_user"), gt(ruleTriggers.autoRetryUntil, now)))
+      .orderBy(desc(ruleTriggers.triggeredAt))
+      .limit(limit);
+  },
+
+  async listAutoRetryLapsed(now, limit = 100) {
+    return db
+      .select()
+      .from(ruleTriggers)
+      .where(
+        and(
+          eq(ruleTriggers.status, "awaiting_user"),
+          lt(ruleTriggers.autoRetryUntil, now),
+        ),
+      )
+      .orderBy(desc(ruleTriggers.triggeredAt))
+      .limit(limit);
   },
 });

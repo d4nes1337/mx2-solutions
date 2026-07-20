@@ -10,7 +10,7 @@ import { TriggerAlert } from "@/components/TriggerAlert";
 import { DraftsSection } from "@/components/smart-orders/DraftsSection";
 import { EMPTY_FILTERS, FilterBar } from "@/components/smart-orders/FilterBar";
 import { StrategyCard } from "@/components/smart-orders/StrategyCard";
-import { useStrategies } from "@/lib/smart-orders/queries";
+import { useAutoReadiness, useStrategies } from "@/lib/smart-orders/queries";
 import { userStatus, GROUP_TITLES, STATUS_GROUP_ORDER } from "@/lib/smart-orders/status";
 import type { StrategyRow } from "@/lib/smart-orders/queries";
 
@@ -36,6 +36,7 @@ export default function SmartOrdersPage() {
   const signedIn = Boolean(session.data);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const strategies = useStrategies(signedIn, filters.showArchived);
+  const autoReadiness = useAutoReadiness(signedIn);
 
   const allRows = useMemo(() => strategies.data?.strategies ?? [], [strategies.data]);
   const liveRows = allRows.filter((r) => !r.archivedAt);
@@ -87,6 +88,28 @@ export default function SmartOrdersPage() {
 
       {/* Local in-progress canvases — visible signed-out too (drafts are per-device). */}
       <DraftsSection />
+
+      {/* Auto strategies exist but the server/account can't execute unattended:
+          say it ONCE, loudly, at the top — never let AUTO silently mean
+          "waiting for you to click". */}
+      {signedIn &&
+      (autoReadiness.data?.blockers.length ?? 0) > 0 &&
+      liveRows.some(
+        (r) =>
+          r.definitionV2.action.kind === "order" && r.definitionV2.action.execution === "auto",
+      ) ? (
+        <div className="rounded-lg border border-warn/30 bg-warn/10 p-3 text-[12px] leading-snug text-warn">
+          <p className="font-semibold">
+            Auto-execution isn&apos;t active — your AUTO strategies will wait for manual
+            confirmation.
+          </p>
+          <ul className="mt-1 list-disc pl-4">
+            {autoReadiness.data!.blockers.slice(0, 3).map((b) => (
+              <li key={b.code}>{b.detail}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {flags.data && !flags.data.conditionalRules ? (
         <Empty>Smart Orders are disabled on this server.</Empty>

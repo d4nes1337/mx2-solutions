@@ -11,6 +11,7 @@ import {
   isTerminal,
   normalizeDefinition,
   referencedTokenIds,
+  staleGraceMsOf,
   transitionV2,
   type EvalEventV2,
   type MarketDataView,
@@ -159,7 +160,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const reloadIntervalMs = opts.reloadIntervalMs ?? 5_000;
   const tickIntervalMs = opts.tickIntervalMs ?? 1_000;
   const refreshIntervalMs = opts.refreshIntervalMs ?? 10_000;
-  const refreshMaxPerPass = opts.refreshMaxPerPass ?? 8;
+  const refreshMaxPerPass = opts.refreshMaxPerPass ?? 32;
   const churnAuditMinIntervalMs = opts.churnAuditMinIntervalMs ?? 60_000;
 
   const rules = new Map<string, ActiveRule>();
@@ -172,7 +173,10 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   let tickTimer: ReturnType<typeof setInterval> | undefined;
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let refreshCursor = 0;
-  let refreshInFlight = false;
+  /** Per-token single-flight: a hung fetch must not block later passes. */
+  const refreshInFlightTokens = new Set<string>();
+  /** Per-token error backoff: skip a failing token until this timestamp. */
+  const refreshBackoffUntil = new Map<string, number>();
 
   const addRule = (row: ConditionalRuleRow): void => {
     let def: StrategyDefinition;
@@ -192,19 +196,20 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
         .map((l) => (l.condition.kind === "price_move" ? l.condition.market.tokenId : ""))
         .filter((t) => t !== ""),
     );
-    // Restart policy: resume a mid-accumulation hold window ONLY when the row
-    // was still fresh at shutdown (last evaluation within maxDataAgeMs) — a
-    // longer gap means we cannot vouch the condition held while we were down,
-    // so we conservatively restart the window (and audit the reset so the
-    // timeline shows why). Repeat bookkeeping (triggerCount, cooldownUntil)
-    // and trailing watermarks are ALWAYS preserved (D-025: a trailing stop
-    // keeps protecting through a restart; resetting the peak on every restart
+    // Restart policy: resume a mid-accumulation hold window ONLY when the
+    // downtime still fits the rule's stale budget (maxDataAgeMs + stale
+    // grace) — the same tolerance a live pause gets. A longer gap means we
+    // cannot vouch the condition held while we were down, so we
+    // conservatively restart the window (and audit the reset so the timeline
+    // shows why). Repeat bookkeeping (triggerCount, cooldownUntil) and
+    // trailing watermarks are ALWAYS preserved (D-025: a trailing stop keeps
+    // protecting through a restart; resetting the peak on every restart
     // would walk the stop level down a decline).
     const canResume =
       row.status === "ACTIVE_ACCUMULATING" &&
       row.trueSince !== null &&
       row.lastEvaluatedAt !== null &&
-      Date.now() - row.lastEvaluatedAt.getTime() <= def.maxDataAgeMs;
+      Date.now() - row.lastEvaluatedAt.getTime() <= def.maxDataAgeMs + staleGraceMsOf(def);
     const runtime: StrategyRuntime = {
       status: canResume ? "ACTIVE_ACCUMULATING" : "ACTIVE_WAITING",
       trueSinceMs: canResume ? row.trueSince!.getTime() : null,
@@ -212,6 +217,9 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       triggerCount: row.triggerCount ?? 0,
       cooldownUntilMs: row.cooldownUntil ? row.cooldownUntil.getTime() : null,
       watermarks: (row.runtimeWatermarks as WatermarksByNode | null) ?? {},
+      // A persisted pause resumes as a pause: the grace keeps counting from
+      // the ORIGINAL onset, so a restart can't extend the stale budget.
+      staleSinceMs: canResume && row.staleSince ? row.staleSince.getTime() : null,
     };
     if (!canResume && row.status === "ACTIVE_ACCUMULATING") {
       auditStore
@@ -317,6 +325,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       triggerCount: result.runtime.triggerCount,
       cooldownUntilMs: result.runtime.cooldownUntilMs,
       watermarks: result.runtime.watermarks ?? {},
+      staleSinceMs: result.runtime.staleSinceMs ?? null,
     });
     if (!updated) {
       // The rule was concurrently controlled (paused/cancelled) — user wins.
@@ -514,47 +523,57 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
    */
   const refreshQuietTokens = async (): Promise<void> => {
     const { fetchOrderbook, isFeedConnected } = opts;
-    if (!fetchOrderbook || isFeedConnected?.() !== true || refreshInFlight) return;
+    if (!fetchOrderbook || isFeedConnected?.() !== true) return;
     const now = Date.now();
-    const candidates: string[] = [];
+    // Two-tier priority: a token whose rule is mid-dwell (ACTIVE_ACCUMULATING)
+    // must never lose its hold window to the per-pass fetch bound — those
+    // fetch first, every pass. Idle tokens take the remaining budget on a
+    // round-robin cursor.
+    const urgent: string[] = [];
+    const idle: string[] = [];
     for (const [token, ruleIds] of tokenSubs) {
+      if (refreshInFlightTokens.has(token)) continue;
+      if ((refreshBackoffUntil.get(token) ?? 0) > now) continue;
       let minAge = Infinity;
+      let accumulating = false;
       for (const id of ruleIds) {
         const ar = rules.get(id);
-        if (ar) minAge = Math.min(minAge, ar.def.maxDataAgeMs);
+        if (!ar) continue;
+        minAge = Math.min(minAge, ar.def.maxDataAgeMs);
+        if (ar.runtime.status === "ACTIVE_ACCUMULATING") accumulating = true;
       }
       const threshold = Number.isFinite(minAge) ? minAge / 2 : 15_000;
       const view = latestView.get(token);
       const age = view ? now - view.sourceTimeMs : Infinity;
-      if (age > threshold) candidates.push(token);
+      if (age <= threshold) continue;
+      (accumulating ? urgent : idle).push(token);
     }
-    if (candidates.length === 0) return;
-    const start = refreshCursor % candidates.length;
-    const batch = [...candidates.slice(start), ...candidates.slice(0, start)].slice(
-      0,
-      refreshMaxPerPass,
+    if (urgent.length === 0 && idle.length === 0) return;
+    const idleBudget = Math.max(0, refreshMaxPerPass - urgent.length);
+    const start = idle.length > 0 ? refreshCursor % idle.length : 0;
+    const idleBatch = [...idle.slice(start), ...idle.slice(0, start)].slice(0, idleBudget);
+    refreshCursor += idleBatch.length;
+    const batch = [...urgent, ...idleBatch];
+    for (const token of batch) refreshInFlightTokens.add(token);
+    await Promise.all(
+      batch.map(async (token) => {
+        try {
+          const view = await fetchOrderbook(token);
+          refreshBackoffUntil.delete(token);
+          if (!view || !tokenSubs.has(token)) return;
+          const current = latestView.get(token);
+          // Never regress: WS may have delivered newer data mid-fetch.
+          if (current && current.sourceTimeMs >= view.sourceTimeMs) return;
+          latestView.set(token, view);
+          reevaluateToken(token);
+        } catch (e) {
+          refreshBackoffUntil.set(token, Date.now() + 15_000);
+          logger.warn({ err: e, tokenId: token }, "REST freshness re-fetch failed");
+        } finally {
+          refreshInFlightTokens.delete(token);
+        }
+      }),
     );
-    refreshCursor += batch.length;
-    refreshInFlight = true;
-    try {
-      await Promise.all(
-        batch.map(async (token) => {
-          try {
-            const view = await fetchOrderbook(token);
-            if (!view || !tokenSubs.has(token)) return;
-            const current = latestView.get(token);
-            // Never regress: WS may have delivered newer data mid-fetch.
-            if (current && current.sourceTimeMs >= view.sourceTimeMs) return;
-            latestView.set(token, view);
-            reevaluateToken(token);
-          } catch (e) {
-            logger.warn({ err: e, tokenId: token }, "REST freshness re-fetch failed");
-          }
-        }),
-      );
-    } finally {
-      refreshInFlight = false;
-    }
   };
 
   const applyEvent = (ar: ActiveRule, event: EvalEventV2): void => {
@@ -562,6 +581,9 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     const runtimeChanged =
       result.runtime.triggerCount !== ar.runtime.triggerCount ||
       result.runtime.cooldownUntilMs !== ar.runtime.cooldownUntilMs ||
+      // Pause onset/clear must persist even without a status change, so a
+      // worker restart mid-pause keeps the original stale-grace accounting.
+      (result.runtime.staleSinceMs ?? null) !== (ar.runtime.staleSinceMs ?? null) ||
       // Content compare, not identity — the evaluator returns a fresh map per
       // pass. Write volume is bounded by actual watermark movement.
       !watermarksEqual(result.runtime.watermarks, ar.runtime.watermarks);

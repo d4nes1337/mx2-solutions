@@ -14,7 +14,7 @@
  * strip, tabs). The active tab is global state (funds-ui store) so the pill
  * and deep links can land on a specific tab.
  */
-import { useBalance } from "wagmi";
+import { useAccount, useBalance } from "wagmi";
 import { formatUnits } from "viem";
 import { RefreshCcw, X } from "lucide-react";
 import { Segmented } from "@/components/ui";
@@ -65,11 +65,32 @@ export function FundsSheet({
     chainId: POLYGON_CHAIN_ID,
     query: { enabled: open && !!signerAddress },
   });
+  // The LOGIN wallet — where withdrawals land. Without this cell, money that
+  // left the trading account looked like it vanished (owner beta finding).
+  const { address: loginAddress } = useAccount();
+  const loginPusd = useBalance({
+    address: loginAddress,
+    token: PUSD_ADDRESS,
+    chainId: POLYGON_CHAIN_ID,
+    query: { enabled: open && !!loginAddress, refetchInterval: open ? 5_000 : 15_000 },
+  });
+  const loginUsdc = useBalance({
+    address: loginAddress,
+    token: USDC_E_ADDRESS,
+    chainId: POLYGON_CHAIN_ID,
+    query: { enabled: open && !!loginAddress, refetchInterval: open ? 5_000 : 15_000 },
+  });
 
   const depositUsd = depositBalance.data ? Number(formatUnits(depositBalance.data.value, 6)) : null;
   const unconvertedUsd = unconvertedBalance.data
     ? Number(formatUnits(unconvertedBalance.data.value, 6))
     : 0;
+  const loginUsd =
+    loginPusd.data || loginUsdc.data
+      ? Number(formatUnits(loginPusd.data?.value ?? 0n, 6)) +
+        Number(formatUnits(loginUsdc.data?.value ?? 0n, 6))
+      : null;
+  const signerUsd = signerBalance.data ? Number(formatUnits(signerBalance.data.value, 6)) : 0;
 
   return (
     <SheetShell
@@ -92,16 +113,25 @@ export function FundsSheet({
         Top up with crypto from any major chain, withdraw to your login wallet, track transfers.
       </p>
 
-      {/* Balances strip */}
+      {/* Balances strip: where the money is — trading account vs your wallet. */}
       <div className="mb-3 grid grid-cols-2 gap-2">
         <div className="rounded-lg border border-border bg-surface-2 px-3 py-2">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wide text-muted">Deposit wallet</span>
+            <span
+              className="text-[10px] uppercase tracking-wide text-muted"
+              title="Your Arima trading account (deposit wallet) — the balance strategies and orders spend from."
+            >
+              In trading account
+            </span>
             <button
               type="button"
-              onClick={() => void depositBalance.refetch()}
+              onClick={() => {
+                void depositBalance.refetch();
+                void loginPusd.refetch();
+                void loginUsdc.refetch();
+              }}
               className="text-muted hover:text-fg"
-              aria-label="Refresh deposit balance"
+              aria-label="Refresh balances"
             >
               <RefreshCcw size={11} />
             </button>
@@ -127,15 +157,27 @@ export function FundsSheet({
         <div className="rounded-lg border border-border bg-surface-2 px-3 py-2">
           <span
             className="text-[10px] uppercase tracking-wide text-muted"
-            title="The signing wallet only pays for signatures — funds live in the deposit wallet. Sweeping this balance is a planned follow-up."
+            title="Your connected login wallet on Polygon (pUSD + USDC.e) — withdrawals land here."
           >
-            Signer (gas/dust)
+            In your wallet
           </span>
-          <div className="tabular mt-0.5 text-[15px] font-semibold text-muted">
-            {signerBalance.data
-              ? `$${Number(formatUnits(signerBalance.data.value, 6)).toFixed(2)}`
-              : "—"}
+          <div className="tabular mt-0.5 text-[15px] font-semibold text-fg">
+            {loginUsd !== null ? (
+              <FlashOnChange value={loginUsd}>
+                <AnimatedNumber value={loginUsd} format={(n) => `$${n.toFixed(2)}`} />
+              </FlashOnChange>
+            ) : (
+              "—"
+            )}
           </div>
+          {signerUsd > 0.009 ? (
+            <div
+              className="mt-0.5 text-[10px] text-muted"
+              title="The signing wallet only pays for signatures — funds live in the trading account. Sweeping this balance is a planned follow-up."
+            >
+              +${signerUsd.toFixed(2)} signer dust
+            </div>
+          ) : null}
         </div>
       </div>
 

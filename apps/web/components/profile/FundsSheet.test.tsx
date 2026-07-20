@@ -113,6 +113,9 @@ vi.mock("@/lib/queries", () => ({
   useWithdrawals: () => ({ data: undefined, isLoading: false }),
   useBridgeDeposits: () => ({ data: undefined, isLoading: false }),
   useTradingWalletBalance: () => ({ data: undefined, isLoading: false }),
+  useDismissDeposit: () => inertMutation(),
+  useBootstrapAllowances: () => inertMutation(),
+  useTradingAccounts: () => ({ data: undefined, isLoading: false }),
 }));
 
 import { FundsSheet } from "./FundsSheet";

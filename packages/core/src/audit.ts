@@ -30,6 +30,11 @@ export const AUDIT_ACTIONS = [
   "rule.executed_auto",
   "rule.execution.failed",
   "rule.execution.skipped",
+  // Crash-recovery + bounded funds-arrival retry (migration 0019):
+  "rule.execution.recovered",
+  "rule.execution.retry_scheduled",
+  "rule.execution.retried",
+  "rule.execution.retry_abandoned",
   "ai.strategy_generated",
   "quoter.session_started",
   "quoter.halted",
@@ -55,6 +60,8 @@ export const AUDIT_ACTIONS = [
   "wallet.bridge.withdraw_state_changed",
   "wallet.bridge.withdraw_failed",
   "wallet.bridge.reconciliation_flagged",
+  /** User hid a stuck transfer record from active surfaces (0019). */
+  "wallet.bridge.deposit_dismissed",
   "trading_wallet.provisioned",
   "trading_wallet.ghost_detected",
   "trading_wallet.reissued",

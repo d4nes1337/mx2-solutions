@@ -145,6 +145,17 @@ export const formatNotification = (
       buttons.push([{ text: "Open wallet", url: `${base}/wallet` }]);
       break;
     }
+    case "auto_retry_abandoned": {
+      lines.push(
+        "⚠️ <b>Auto-execution needs you</b>",
+        nameLine(payload),
+        "The automatic retry gave up — confirm or dismiss the trigger manually.",
+      );
+      if (payload.ruleId) {
+        buttons.push([{ text: "Open strategy", url: `${base}/smart-orders/${payload.ruleId}` }]);
+      }
+      break;
+    }
   }
 
   return {

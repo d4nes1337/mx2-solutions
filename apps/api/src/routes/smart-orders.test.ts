@@ -56,6 +56,9 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         conditionId: o.conditionId,
         tokenId: o.tokenId,
         side: o.side,
+        staleSince: null,
+        supersedes: null,
+        supersededBy: null,
         definition: o.definition,
         definitionHash: o.definitionHash,
         status: "ACTIVE_WAITING",
@@ -125,6 +128,9 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       return r;
     },
     addExecutedNotional: async () => {},
+    listStuckExecuting: async () => [],
+    revertExecuting: async () => null,
+    createSuperseding: async () => null,
   };
 };
 
@@ -342,6 +348,10 @@ const buildSmartOrdersApp = (opts: {
       hasForRule: async () => false,
       listByRule: async (ruleId) => (opts.triggers ?? []).filter((t) => t.ruleId === ruleId),
       updateStatus: async () => {},
+      scheduleAutoRetry: async () => {},
+      clearAutoRetry: async () => {},
+      listAutoRetryable: async () => [],
+      listAutoRetryLapsed: async () => [],
     } satisfies TriggerStore,
     privyWallets: {
       upsert: async () => {
@@ -863,6 +873,8 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     ruleId,
     walletAddress: WALLET,
     triggeredAt: new Date("2026-01-01T00:15:00Z"),
+    autoRetryUntil: null,
+    autoRetryReason: null,
     evidence: {},
     reasonCodes: ["PRICE_OK"],
     status: "confirmed",

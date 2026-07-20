@@ -15,7 +15,8 @@ const account = (status: string): TradingAccount =>
     credentialsReady: false,
     isPrimary: true,
     depositWalletAddress: "0x3333333333333333333333333333333333333333",
-    nextAction: null,
+    allowancesClean: true,
+  nextAction: null,
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   }) satisfies TradingAccount;

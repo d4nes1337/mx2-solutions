@@ -24,6 +24,7 @@ import { layoutDoc } from "@/lib/smart-orders/layout";
 import { strategySentence, humanDuration } from "@/lib/smart-orders/sentence";
 import { userStatus } from "@/lib/smart-orders/status";
 import { useBuilderStore } from "@/lib/smart-orders/store";
+import { QuickEditSheet } from "./QuickEditSheet";
 import {
   useCreateStrategy,
   useSetStrategyTags,
@@ -122,6 +123,7 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
   const create = useCreateStrategy();
   const setTags = useSetStrategyTags();
   const spawnDraft = useBuilderStore((s) => s.spawnDraft);
+  const [quickEdit, setQuickEdit] = useState(false);
   const def = row.definitionV2;
   const doc = docFromDefinition(def);
   const status = userStatus(row.status, {
@@ -180,7 +182,16 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
               <Badge tone={status.tone}>{status.label}</Badge>
             )}
             {def.action.kind === "order" && def.action.execution === "auto" ? (
-              <Badge tone="brand">AUTO</Badge>
+              row.autoDegraded ? (
+                <Badge
+                  tone="warn"
+                  title="This strategy asks for automatic execution, but the server can't deliver it — triggers will wait for your confirmation."
+                >
+                  AUTO UNAVAILABLE
+                </Badge>
+              ) : (
+                <Badge tone="brand">AUTO</Badge>
+              )
             ) : null}
           </div>
           <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{strategySentence(doc)}</p>
@@ -234,12 +245,14 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
             </Button>
           ) : null}
           {(active || row.status === "PAUSED") && row.version === 2 ? (
-            <Link
-              href={`/smart-orders/${row.id}/edit`}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:border-border-strong"
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Edit parameters here — applies as a new version (canvas still available inside)"
+              onClick={() => setQuickEdit(true)}
             >
               <Pencil size={11} aria-hidden /> Edit
-            </Link>
+            </Button>
           ) : null}
           {active || row.status === "PAUSED" ? (
             <Button
@@ -303,6 +316,7 @@ export function StrategyCard({ row }: { row: StrategyRow }) {
           </Link>
         </div>
       </div>
+      <QuickEditSheet row={row} open={quickEdit} onClose={() => setQuickEdit(false)} />
     </div>
   );
 }

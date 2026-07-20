@@ -30,6 +30,8 @@ const deposit = (state: BridgeDepositItem["state"]): BridgeDepositItem => ({
   fromChainId: "8453",
   fromTokenAddress: "0xusdc",
   fromAmountBaseUnit: "5000000",
+  dismissedAt: null,
+  completionSource: null,
   state,
   providerStatus: "X",
   txHash: null,
@@ -173,7 +175,12 @@ describe("conversionToTransfer", () => {
 
 describe("terminal state tables", () => {
   it("cover the full unions", () => {
-    expect([...DEPOSIT_TERMINAL_STATES].sort()).toEqual(["completed", "failed"]);
+    expect([...DEPOSIT_TERMINAL_STATES].sort()).toEqual([
+      "completed",
+      "expired",
+      "failed",
+      "superseded",
+    ]);
     expect([...WALLET_WITHDRAWAL_TERMINAL_STATES].sort()).toEqual(["confirmed", "failed"]);
     expect([...BRIDGE_WITHDRAWAL_TERMINAL_STATES].sort()).toEqual([
       "completed",

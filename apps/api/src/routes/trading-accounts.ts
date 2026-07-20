@@ -1,5 +1,6 @@
 import { getAddress } from "viem";
 import type { FastifyInstance } from "fastify";
+import type { AppConfig } from "@mx2/config";
 import type {
   AuditStore,
   SessionStore,
@@ -9,9 +10,11 @@ import type {
 import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import type { AllowanceReader } from "../trade/allowance-bootstrap.js";
+import { depositWalletSpenders, findMissingGrants } from "../trade/deposit-wallet-allowances.js";
 import { reconcileAndPersist } from "../trade/reconcile-status.js";
 
 export interface TradingAccountsRoutesDeps {
+  config: AppConfig;
   sessions: SessionStore;
   auditStore: AuditStore;
   tradingAccounts: TradingAccountStore;
@@ -27,7 +30,8 @@ const deriveFunder = (address: string, override?: unknown): string => {
   return deriveDepositWallet(address).toLowerCase();
 };
 
-const nextAction = (
+/** Exported for the ladder unit test only. */
+export const nextAction = (
   account: {
     status: string;
     signingMode: string;
@@ -35,11 +39,18 @@ const nextAction = (
     funderAddress: string | null;
   },
   credentialsReady: boolean,
+  /** null = unprobeable (no RPC) — the rung is skipped, never invented. */
+  allowancesClean: boolean | null,
 ): string | null => {
-  if (account.status === "ready" && credentialsReady) return null;
   if (account.kind === "internal_privy" && !account.funderAddress) return "activate_deposit_wallet";
   if (account.status === "needs_deposit_wallet") return "activate_deposit_wallet";
   if (account.status === "needs_funding") return "top_up";
+  // The authorize rung (owner beta finding): a funded account whose deposit
+  // wallet lacks the exchange allowances can't trade — and previously NOTHING
+  // in the UI said so. Sits before ready/delegate so it can never be skipped.
+  if (account.kind === "internal_privy" && allowancesClean === false)
+    return "bootstrap_allowances";
+  if (account.status === "ready" && credentialsReady) return null;
   if (account.status === "needs_delegation") return "delegate";
   if (!credentialsReady) return "setup_credentials";
   return account.status;
@@ -50,6 +61,29 @@ export const registerTradingAccountsRoutes = (
   deps: TradingAccountsRoutesDeps,
 ): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
+
+  // On-chain allowance probe, cached briefly so GET /api/trading-accounts
+  // stays cheap. The chain is the truth (no stale DB flag); the cache is
+  // invalidated by the bootstrap route's success via a fresh read after TTL.
+  const ALLOWANCES_CACHE_TTL_MS = 60_000;
+  const allowancesCache = new Map<string, { at: number; clean: boolean }>();
+  const allowancesClean = async (depositWalletAddress: string): Promise<boolean | null> => {
+    if (!deps.allowanceReader) return null;
+    const cached = allowancesCache.get(depositWalletAddress);
+    if (cached && Date.now() - cached.at < ALLOWANCES_CACHE_TTL_MS) return cached.clean;
+    try {
+      const missing = await findMissingGrants(
+        deps.allowanceReader,
+        depositWalletAddress,
+        depositWalletSpenders(deps.config),
+      );
+      const clean = missing.length === 0;
+      allowancesCache.set(depositWalletAddress, { at: Date.now(), clean });
+      return clean;
+    } catch {
+      return null; // probe failure never invents (or hides) a setup step
+    }
+  };
 
   const serializeAccount = async (
     account: Awaited<ReturnType<TradingAccountStore["listByOwner"]>>[number],
@@ -65,6 +99,10 @@ export const registerTradingAccountsRoutes = (
       deps.tradingAccounts,
     );
     const effective = { ...account, status: reconciledStatus };
+    const clean =
+      account.kind === "internal_privy" && account.depositWalletAddress
+        ? await allowancesClean(account.depositWalletAddress)
+        : null;
     return {
       id: account.id,
       kind: account.kind,
@@ -78,7 +116,8 @@ export const registerTradingAccountsRoutes = (
       credentialsReady,
       isPrimary: account.isPrimary,
       depositWalletAddress: account.depositWalletAddress,
-      nextAction: nextAction(effective, credentialsReady),
+      allowancesClean: clean,
+      nextAction: nextAction(effective, credentialsReady, clean),
       createdAt: account.createdAt.toISOString(),
       updatedAt: account.updatedAt.toISOString(),
     };

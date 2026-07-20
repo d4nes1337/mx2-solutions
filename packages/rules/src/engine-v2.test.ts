@@ -240,19 +240,83 @@ describe("transitionV2 — cross-market window", () => {
     expect(t.bestAsk).toBe(0.48);
   });
 
-  it("one market going stale mid-window resets accumulation", () => {
+  it("one market going stale mid-window pauses, then restarts past the grace", () => {
     const r = runReplayV2(def, [
       bookV2(freshBoth(0), 0),
-      // TB's view stops updating: at t=300s it is 300s old.
+      // TB's view stops updating: at t=300s it is 300s old → stale PAUSE.
       bookV2({ TA: viewFor(marketA, 300_000), TB: viewFor(marketB, 0) }, 300_000),
+      // Fresh again at t=HOLD, but the 300s dark gap exceeded the 4s grace —
+      // continuity can't be attested, so the window restarts from here.
       bookV2(freshBoth(HOLD), HOLD),
     ]);
     expect(r.triggers).toHaveLength(0);
     expect(r.finalState.status).toBe("ACTIVE_ACCUMULATING");
+    expect(r.finalState.trueSinceMs).toBe(HOLD);
     expect(r.transitions.map((x) => `${x.from}->${x.to}:${x.reason}`)).toEqual([
       "ACTIVE_WAITING->ACTIVE_ACCUMULATING:WINDOW_STARTED",
-      "ACTIVE_ACCUMULATING->ACTIVE_WAITING:DATA_STALE",
+      "ACTIVE_ACCUMULATING->ACTIVE_ACCUMULATING:STALE_PAUSED",
+      "ACTIVE_ACCUMULATING->ACTIVE_ACCUMULATING:DATA_STALE",
+    ]);
+  });
+
+  it("resumes within the grace, excising the stale gap from the hold window", () => {
+    // maxDataAgeMs 2s → default grace 4s. Pause at 300s, fresh again at 303s
+    // (gap 3s ≤ grace): trueSince shifts 0 → 3s, so the trigger lands at 603s.
+    const single = strat(priceLeaf("a", marketA));
+    const va = (t: number): ViewsByToken => ({ TA: viewFor(marketA, t) });
+    const r = runReplayV2(single, [
+      bookV2(va(0), 0),
+      bookV2({ TA: viewFor(marketA, 297_000) }, 300_000),
+      bookV2(va(303_000), 303_000),
+      bookV2(va(603_000), 603_000),
+    ]);
+    expect(r.transitions.map((x) => `${x.from}->${x.to}:${x.reason}`)).toEqual([
       "ACTIVE_WAITING->ACTIVE_ACCUMULATING:WINDOW_STARTED",
+      "ACTIVE_ACCUMULATING->ACTIVE_ACCUMULATING:STALE_PAUSED",
+      "ACTIVE_ACCUMULATING->ACTIVE_ACCUMULATING:STALE_RESUMED",
+      "ACTIVE_ACCUMULATING->TRIGGERED_AWAITING_USER:WINDOW_COMPLETE",
+    ]);
+    expect(r.triggers).toHaveLength(1);
+    expect(r.triggers[0]!.windowStartMs).toBe(3_000);
+    expect(r.triggers[0]!.triggeredAtMs).toBe(603_000);
+  });
+
+  it("fresh-but-unsatisfied data during a pause resets immediately", () => {
+    const single = strat(priceLeaf("a", marketA));
+    const va = (t: number): ViewsByToken => ({ TA: viewFor(marketA, t) });
+    const r = runReplayV2(single, [
+      bookV2(va(0), 0),
+      bookV2({ TA: viewFor(marketA, 297_000) }, 300_000), // stale → paused
+      bookV2({ TA: viewFor(marketA, 302_000, { asks: [{ price: 0.9, size: 100 }] }) }, 302_000),
+    ]);
+    expect(r.finalState.status).toBe("ACTIVE_WAITING");
+    expect(r.transitions.at(-1)?.reason).toBe("PRICE_FAIL");
+    expect(r.finalState.staleSinceMs).toBeNull();
+  });
+
+  it("staleGraceMs 0 keeps the strict legacy reset", () => {
+    const strict = strat(priceLeaf("a", marketA), { staleGraceMs: 0 });
+    const va = (t: number): ViewsByToken => ({ TA: viewFor(marketA, t) });
+    const r = runReplayV2(strict, [
+      bookV2(va(0), 0),
+      bookV2({ TA: viewFor(marketA, 297_000) }, 300_000),
+    ]);
+    expect(r.finalState.status).toBe("ACTIVE_WAITING");
+    expect(r.transitions.at(-1)?.reason).toBe("DATA_STALE");
+  });
+
+  it("reconnect pauses the window; a dark grace expiry then resets", () => {
+    const single = strat(priceLeaf("a", marketA));
+    const va = (t: number): ViewsByToken => ({ TA: viewFor(marketA, t) });
+    const r = runReplayV2(single, [
+      bookV2(va(0), 0),
+      { type: "reconnect", nowMs: 100_000 },
+      { type: "tick", views: null, nowMs: 105_000 },
+    ]);
+    expect(r.transitions.map((x) => `${x.from}->${x.to}:${x.reason}`)).toEqual([
+      "ACTIVE_WAITING->ACTIVE_ACCUMULATING:WINDOW_STARTED",
+      "ACTIVE_ACCUMULATING->ACTIVE_ACCUMULATING:STALE_PAUSED",
+      "ACTIVE_ACCUMULATING->ACTIVE_WAITING:DATA_STALE",
     ]);
   });
 

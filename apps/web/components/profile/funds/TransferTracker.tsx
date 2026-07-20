@@ -19,10 +19,17 @@ import type { ActiveTransfer } from "@/lib/transfers";
 export function TransferTracker({
   transfer,
   compact = false,
+  onDismiss,
 }: {
   transfer: ActiveTransfer;
   /** Hide per-step labels (history row expansion, pill flyouts). */
   compact?: boolean;
+  /**
+   * Present → a "Dismiss" action renders for this record (parents decide
+   * eligibility: stuck pending deposits older than an hour, expired records).
+   * The record stays in history; only active surfaces drop it.
+   */
+  onDismiss?: () => void;
 }) {
   const reduced = useReducedMotion();
   const { steps, status } = transfer;
@@ -159,10 +166,24 @@ export function TransferTracker({
 
       {failed ? (
         <p className="mt-2 text-[11px] leading-snug text-neg">
-          {transfer.failureTone === "support"
-            ? "Something went wrong mid-transfer. The transfer is recorded — contact support and it can be recovered."
-            : "Failed before funds moved — your balance is safe. You can simply try again."}
+          {transfer.state === "expired"
+            ? "The bridge never completed this transfer. If funds left your wallet, check the origin transaction — your balance here was never touched."
+            : transfer.failureTone === "support"
+              ? "Something went wrong mid-transfer. The transfer is recorded — contact support and it can be recovered."
+              : "Failed before funds moved — your balance is safe. You can simply try again."}
         </p>
+      ) : null}
+
+      {onDismiss ? (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-[11px] font-medium text-muted transition-colors hover:text-fg"
+          >
+            Dismiss — hide this record
+          </button>
+        </div>
       ) : null}
     </div>
   );

@@ -97,6 +97,12 @@ const EnvSchema = z.object({
   SESSION_SIGNER_TTL_SECONDS: z.coerce.number().int().positive().max(2_592_000).default(1_209_600),
   ORDER_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(10),
 
+  // Worker REST freshness-verify pass (quiet-market anti-stale mitigation):
+  // how often aging books are re-fetched and how many per pass. Tokens of
+  // mid-dwell rules are always prioritized regardless of the bound.
+  WORKER_REST_REFRESH_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
+  WORKER_REST_REFRESH_MAX: z.coerce.number().int().positive().default(32),
+
   // ── AI strategy generation (Anthropic) ─────────────────────────────────────
   // Secret API key for the NL→Smart Order endpoint. Required when
   // FEATURE_AI_CHAT=true (validated below). Never exposed to the browser.
@@ -221,6 +227,10 @@ export type AppConfig = {
   limits: {
     sessionSignerTtlSeconds: number;
     orderRateLimitPerMin: number;
+  };
+  worker: {
+    restRefreshIntervalMs: number;
+    restRefreshMaxPerPass: number;
   };
   ctf: {
     adapterAddress: string | undefined;
@@ -428,6 +438,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     limits: {
       sessionSignerTtlSeconds: e.SESSION_SIGNER_TTL_SECONDS,
       orderRateLimitPerMin: e.ORDER_RATE_LIMIT_PER_MIN,
+    },
+    worker: {
+      restRefreshIntervalMs: e.WORKER_REST_REFRESH_INTERVAL_MS,
+      restRefreshMaxPerPass: e.WORKER_REST_REFRESH_MAX,
     },
     ctf: {
       adapterAddress: e.CTF_ADAPTER_ADDRESS,

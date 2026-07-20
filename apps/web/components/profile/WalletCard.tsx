@@ -15,6 +15,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useActivateDepositWallet,
   useArchiveTradingAccount,
+  useBootstrapAllowances,
+  useFeatureFlags,
   useSetPrimaryTradingAccount,
   useTradingWallet,
 } from "@/lib/queries";
@@ -74,7 +76,14 @@ function StatusBadge({ account }: { account: TradingAccount }) {
         Needs funding
       </Badge>
     );
-  // Funded: deposit/withdraw work; no-popup trading authorize is optional.
+  // Funded but never authorized: deposits/withdrawals work, orders can't go
+  // out — say so instead of a reassuring "Funded" (owner beta finding).
+  if (account.nextAction === "bootstrap_allowances")
+    return (
+      <Badge tone="warn" dot title="Press “Authorize trading” to grant the one-time exchange approvals">
+        Needs authorization
+      </Badge>
+    );
   if (s === "needs_delegation" || s === "needs_credentials")
     return (
       <Badge tone="pos" dot>
@@ -113,6 +122,8 @@ export function WalletCard({
   const setPrimary = useSetPrimaryTradingAccount();
   const activateDeposit = useActivateDepositWallet();
   const archive = useArchiveTradingAccount();
+  const bootstrap = useBootstrapAllowances();
+  const flags = useFeatureFlags();
   const walletStatus = useTradingWallet(true);
   const qc = useQueryClient();
 
@@ -254,6 +265,26 @@ export function WalletCard({
             </Button>
           )}
 
+          {/* Privy: authorize trading — the one-time exchange allowances the
+              deposit wallet needs before ANY order can go out. This action had
+              no button at all before (owner beta finding). */}
+          {isPrivy && account.nextAction === "bootstrap_allowances" && depositWalletAddress && (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={bootstrap.isPending}
+              title="Grants the one-time Polymarket exchange approvals from your trading wallet (gasless)."
+              onClick={() => bootstrap.mutate()}
+            >
+              {bootstrap.isPending ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Zap size={12} />
+              )}
+              {bootstrap.isPending ? "Authorizing…" : "Authorize trading"}
+            </Button>
+          )}
+
           {/* Privy: add funds — always reachable once a deposit wallet exists;
               promoted to the primary action when funding is the next step. */}
           {isPrivy && depositWalletAddress && (
@@ -263,6 +294,14 @@ export function WalletCard({
               onClick={() => openSheet("topup")}
             >
               Add funds
+            </Button>
+          )}
+
+          {/* Privy: withdraw — the wallet page previously had NO withdraw path
+              at all; the sheet's withdraw tab was only reachable by hand. */}
+          {isPrivy && depositWalletAddress && flags.data?.walletWithdraw && (
+            <Button size="sm" variant="ghost" onClick={() => openSheet("withdraw")}>
+              Withdraw
             </Button>
           )}
 
@@ -317,6 +356,16 @@ export function WalletCard({
 
         {/* Errors */}
         {activateError && <p className="mt-2 text-[12px] text-neg">{activateError}</p>}
+        {bootstrap.isError && (
+          <p className="mt-2 text-[12px] text-neg">
+            {(bootstrap.error as Error)?.message ?? "Authorization failed"} — you can retry.
+          </p>
+        )}
+        {bootstrap.isSuccess && account.nextAction === "bootstrap_allowances" && (
+          <p className="mt-2 text-[12px] text-muted">
+            Authorization submitted — confirming on-chain, this refreshes shortly.
+          </p>
+        )}
       </div>
     </>
   );

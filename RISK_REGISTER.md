@@ -48,3 +48,34 @@ _Last updated: 2026-07-18. Ordered with the top blocker first._
 | R-042 | A forwarded/leaked Telegram or Discord message exposes a sign link; the scoped session it mints could reveal the prepared order's details.                                                                                                                                                                            |      Medium |        Low | Links are single-use with a 30-min TTL, hashed at rest, and mint a session scoped to exactly one trigger (rejected by every other route); execution still requires the main-wallet EIP-712 signature, so a leak can never place, cancel, or move anything. Audited (`auth.scoped_session_created`).                                                                                                                                                                                                                        | Technical lead           | Mitigated                                                                                                                                                                                                                                                                                             |
 | R-043 | WalletConnect deep-link round-trips out of the Telegram webview and back are flaky on some devices, blocking in-Telegram signing.                                                                                                                                                                                     |      Medium |     Medium | Every sign message keeps an "Open in browser" tokenized fallback; the bot's `/orders` command re-mints fresh links; the mobile page works in any browser. Verify per-device during the staging pass; requires a real `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`.                                                                                                                                                                                                                                                               | Technical lead           | Open (needs on-device staging verification)                                                                                                                                                                                                                                                           |
 | R-044 | Bot token / Discord OAuth secret compromise would let an attacker send messages as the bot or forge Mini App logins.                                                                                                                                                                                                  |         Low |       High | Tokens live only in the secret manager (docs/05), never logged (token-free error paths in both REST clients); initData replay window is 5 min; Mini App logins resolve only wallets that completed the code handshake; rotation levers documented in docs/TELEGRAM_BOT_RUNBOOK.md (BotFather /revoke, Discord regenerate).                                                                                                                                                                                                 | Technical lead           | Mitigated                                                                                                                                                                                                                                                                                             |
+
+---
+
+## Addendum — 2026-07-19 full-cycle reliability slate
+
+- **R-003 / R-011 (stale-data suppression, restart resets) — MITIGATED.**
+  Stale-pause semantics (ADR-0021, D-038) + prioritized REST verify (bound 32,
+  mid-dwell tokens first, per-token single-flight/backoff) + persisted pause
+  across restarts. Residual: a gap longer than the grace still conservatively
+  resets (by design).
+- **R-017 (silent auto-mode degradation) — SURFACED.** Not enablement (still
+  gated), but every degraded/blocked path is now labeled end-to-end (D-043) and
+  recoverable skips self-retry (D-041). Residual: enablement itself still walks
+  the RFC-0003 ladder.
+- **R-037 (bridge deposit drift) — LARGELY MITIGATED** by D-042 (identity
+  ladder, expiry, dismiss, chain reconcile, migration-0019 backfill).
+- **R-045 (NEW): chain-reconciled completion mislabel.** If the single pending
+  deposit actually failed upstream while an unrelated ≥95% balance increase
+  landed in the same window, the record is marked completed with
+  `completion_source='chain_reconciled'`. No funds move on this path and the
+  provenance is explicit; likelihood low (baseline-delta + 10-min age + single-
+  pending guards). Mitigation if observed: tighten to provider-echo required.
+- **R-046 (NEW): quick-edit supersede discards pending triggers.** Editing an
+  ACTIVE strategy cancels the old rule; a trigger that fires concurrently loses
+  the CAS race by design (store refuses non-ACTIVE/PAUSED supersede with 409).
+  Users see the 409 message and can re-review. Accepted.
+- **Deferred:** the mock-Polymarket E2E harness + full-cycle scenario
+  (deposit→authorize→arm→trigger→auto-execute→fill→withdraw) is specified in
+  the 2026-07-19 plan but not yet built (session budget); unit/route/engine
+  coverage (61 files, 690 tests) + live interactive verification stand in until
+  it lands. Owner manual pass still required before any flag flip.

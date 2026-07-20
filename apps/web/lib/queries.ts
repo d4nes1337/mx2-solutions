@@ -418,6 +418,22 @@ export function useWithdraw() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["trading-wallet-balance"] });
       void qc.invalidateQueries({ queryKey: ["withdrawals"] });
+      // The money lands in the LOGIN wallet — refresh the wagmi on-chain
+      // balance queries too (their keys are ["balance", …]), or the funds
+      // look like they vanished after a withdrawal.
+      void qc.invalidateQueries({ queryKey: ["balance"] });
+    },
+  });
+}
+
+/** Hide a stuck transfer record from active surfaces (kept in history). */
+export function useDismissDeposit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (depositId: string) =>
+      api.post<{ ok: boolean }>(`/api/funds/deposits/${depositId}/dismiss`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["bridge-deposits"] });
     },
   });
 }

@@ -94,6 +94,22 @@ export interface AutoExecutor {
 
 const DELEGATION_EXPIRY_WARNING_MS = 48 * 3_600_000;
 
+/**
+ * Skip reasons that clear on their own once funds/permissions land (a deposit
+ * completes, allowances bootstrap, credentials arrive). These schedule a
+ * bounded auto-retry (sweeper re-verifies conditions fresh before executing);
+ * everything else stays a plain degrade-to-manual.
+ */
+const RECOVERABLE_SKIP_REASONS = new Set([
+  "insufficient_balance",
+  "allowances_missing",
+  "deposit_wallet_required",
+  "clob_credentials_missing",
+]);
+
+/** How long a recoverable skip may wait for funds before abandoning to manual. */
+export const AUTO_RETRY_WINDOW_MS = 30 * 60_000;
+
 const utcMidnight = (nowMs: number): Date => {
   const d = new Date(nowMs);
   d.setUTCHours(0, 0, 0, 0);
@@ -107,6 +123,8 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
   };
 
   // Degrade-to-manual: leave the trigger awaiting_user, audit why, stop.
+  // Recoverable reasons additionally schedule a bounded auto-retry — the
+  // sweeper re-attempts (conditions re-verified fresh) when funds arrive.
   const skip = async (
     rule: AutoExecRule,
     triggerId: string,
@@ -119,6 +137,22 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       subject: `rule:${rule.id}`,
       metadata: { triggerId, reason, ...metadata },
     });
+    if (RECOVERABLE_SKIP_REASONS.has(reason)) {
+      const untilMs = Math.min(
+        Date.now() + AUTO_RETRY_WINDOW_MS,
+        rule.def.expiresAtMs ?? Number.POSITIVE_INFINITY,
+      );
+      if (untilMs > Date.now()) {
+        const until = new Date(untilMs);
+        await deps.triggerStore.scheduleAutoRetry(triggerId, until, reason);
+        await deps.auditStore.emit({
+          actor: rule.walletAddress,
+          action: "rule.execution.retry_scheduled",
+          subject: `rule:${rule.id}`,
+          metadata: { triggerId, reason, until: until.toISOString() },
+        });
+      }
+    }
     deps.logger.warn(
       { ruleId: rule.id, triggerId, reason },
       "Auto-execution skipped (fail-closed) — left awaiting manual confirmation",

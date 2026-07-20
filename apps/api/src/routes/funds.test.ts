@@ -174,6 +174,10 @@ const makeBridgeStore = (): BridgeStore & { addresses: BridgeAddressRow[] } => {
     updateWithdrawalsFromStatus: async () => ({ changed: [] }),
     advanceWithdrawalState: async () => null,
     listWithdrawalsByStates: async () => [],
+    dismissDeposit: async () => null,
+    listNonTerminalDeposits: async () => [],
+    expireStaleDeposits: async () => [],
+    completeDepositFromChain: async () => null,
   };
 };
 

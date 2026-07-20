@@ -293,6 +293,9 @@ const buildAiApp = (opts: {
     archive: async () => null,
     unarchive: async () => null,
     addExecutedNotional: async () => {},
+    listStuckExecuting: async () => [],
+    revertExecuting: async () => null,
+    createSuperseding: async () => null,
   };
   const triggers: TriggerStore = {
     create: async () => {
@@ -305,6 +308,10 @@ const buildAiApp = (opts: {
     hasForRule: async () => false,
     listByRule: async () => [],
     updateStatus: async () => {},
+    scheduleAutoRetry: async () => {},
+    clearAutoRetry: async () => {},
+    listAutoRetryable: async () => [],
+    listAutoRetryLapsed: async () => [],
   };
   const privyWallets: PrivyWalletStore = {
     upsert: async () => {

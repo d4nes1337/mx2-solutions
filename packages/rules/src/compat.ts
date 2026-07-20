@@ -74,6 +74,9 @@ export const normalizeDefinition = (
     expr,
     holdsForMs: def.continuousWindowMs,
     maxDataAgeMs: def.maxDataAgeMs,
+    // v1 semantics are strict reset-on-stale; the parity suite proves exact
+    // transition equality, so v1-normalized rules never get a stale grace.
+    staleGraceMs: 0,
     action: {
       kind: "order",
       market,

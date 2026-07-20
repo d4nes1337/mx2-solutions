@@ -151,6 +151,8 @@ const makeTrigger = (over: Partial<RuleTriggerRow> = {}): RuleTriggerRow => ({
   ruleId: "rule-1",
   walletAddress: WALLET,
   triggeredAt: new Date(),
+  autoRetryUntil: null,
+  autoRetryReason: null,
   evidence: { bestBid: 0.44, bestAsk: 0.46 },
   reasonCodes: [],
   status: "awaiting_user",
@@ -181,6 +183,10 @@ const makeTriggerStore = (
       const t = triggers.find((x) => x.id === id);
       if (t) t.status = status;
     },
+    scheduleAutoRetry: async () => {},
+    clearAutoRetry: async () => {},
+    listAutoRetryable: async () => [],
+    listAutoRetryLapsed: async () => [],
   };
 };
 

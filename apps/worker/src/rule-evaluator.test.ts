@@ -64,6 +64,9 @@ const makeRow = (
   status: "ACTIVE_WAITING",
   version: 2,
   trueSince: null,
+  staleSince: null,
+  supersedes: null,
+  supersededBy: null,
   expiresAt: null,
   pausedAt: null,
   lastEvaluatedAt: null,
@@ -233,7 +236,7 @@ describe("rule evaluator freshness & dwell", () => {
     h.evaluator.stop();
   });
 
-  it("fails closed when the feed is disconnected: no REST refresh, window resets stale", async () => {
+  it("fails closed when the feed is disconnected: pause, then reset past the grace", async () => {
     const h = makeHarness([makeRow(defV2({ holdsForMs: 60_000 }))], {
       fetchOrderbook: async () => {
         h.fetches++;
@@ -244,15 +247,21 @@ describe("rule evaluator freshness & dwell", () => {
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
     h.evaluator.onBook(view(0.59, Date.now()));
+    // Inside maxDataAge + grace the window only PAUSES (no trigger either way).
     await vi.advanceTimersByTimeAsync(70_000);
     expect(h.fetches).toBe(0);
+    expect(h.triggers).toHaveLength(0);
+    expect(h.rows[0]!.status).toBe("ACTIVE_ACCUMULATING");
+    expect(churnReasons(h.audits, "STALE_PAUSED").length).toBeGreaterThan(0);
+    // Past maxDataAge (30s default) + grace (60s default) the reset lands.
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(h.triggers).toHaveLength(0);
     expect(h.rows[0]!.status).toBe("ACTIVE_WAITING");
     expect(churnReasons(h.audits, "DATA_STALE").length).toBeGreaterThan(0);
     h.evaluator.stop();
   });
 
-  it("reconnect still resets an accumulating window (audited)", async () => {
+  it("reconnect pauses an accumulating window; a dark grace expiry resets (audited)", async () => {
     const h = makeHarness([makeRow(defV2({ holdsForMs: 60_000 }))]);
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
@@ -261,8 +270,13 @@ describe("rule evaluator freshness & dwell", () => {
     expect(h.rows[0]!.status).toBe("ACTIVE_ACCUMULATING");
     h.evaluator.onReconnect();
     await vi.advanceTimersByTimeAsync(1);
+    // No proof the market moved — the window pauses instead of resetting.
+    expect(h.rows[0]!.status).toBe("ACTIVE_ACCUMULATING");
+    expect(churnReasons(h.audits, "STALE_PAUSED").length).toBeGreaterThan(0);
+    // Feed stays dark past the 60s grace → conservative reset.
+    await vi.advanceTimersByTimeAsync(90_000);
     expect(h.rows[0]!.status).toBe("ACTIVE_WAITING");
-    expect(churnReasons(h.audits, "RECONNECT_RESET").length).toBeGreaterThan(0);
+    expect(churnReasons(h.audits, "DATA_STALE").length).toBeGreaterThan(0);
     expect(h.triggers).toHaveLength(0);
     h.evaluator.stop();
   });
@@ -308,13 +322,16 @@ describe("rule evaluator freshness & dwell", () => {
     const h = makeHarness([makeRow(defV2({ holdsForMs: 600_000, maxDataAgeMs: 5_000 }))]);
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
-    // Four start→stale-reset cycles inside one minute.
+    // Four stale-pause→resume cycles inside one minute (7 s gaps sit inside
+    // the 10 s grace, so the window survives each one — by design).
     for (let i = 0; i < 4; i++) {
       h.evaluator.onBook(view(0.59, Date.now()));
-      await vi.advanceTimersByTimeAsync(7_000); // > maxDataAgeMs → stale reset
+      await vi.advanceTimersByTimeAsync(7_000); // > maxDataAgeMs → stale pause
     }
     expect(churnReasons(h.audits, "WINDOW_STARTED")).toHaveLength(1);
-    expect(churnReasons(h.audits, "DATA_STALE")).toHaveLength(1);
+    expect(churnReasons(h.audits, "STALE_PAUSED")).toHaveLength(1);
+    expect(churnReasons(h.audits, "STALE_RESUMED")).toHaveLength(1);
+    expect(churnReasons(h.audits, "DATA_STALE")).toHaveLength(0);
     h.evaluator.stop();
   });
 

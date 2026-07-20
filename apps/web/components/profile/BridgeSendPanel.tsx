@@ -33,6 +33,7 @@ import {
   isStableSymbol,
 } from "@/lib/funds-assets";
 import type { FundsAsset, FundsQuoteResponse } from "@/lib/types";
+import { AmountPresets } from "./funds/AmountPresets";
 
 const EXPLORERS: Record<string, string> = {
   "137": "https://polygonscan.com",
@@ -223,31 +224,21 @@ export function BridgeSendPanel({
 
   return (
     <div className="space-y-2">
-      <div className="flex gap-2">
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder={
-            useDirect
-              ? "Amount (USDC.e)"
-              : `Amount (${asset.token.symbol}, min $${asset.minCheckoutUsd.toFixed(0)})`
-          }
-          min="0"
-          step="any"
-          className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
-        />
-        {sendable && balanceFormatted !== null ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            type="button"
-            onClick={() => setAmount(balanceFormatted)}
-          >
-            Max
-          </Button>
-        ) : null}
-      </div>
+      <AmountPresets
+        value={amount}
+        onChange={setAmount}
+        max={
+          sendable && balance.data
+            ? Number(formatUnits(balance.data.value, balance.data.decimals))
+            : null
+        }
+        decimals={balance.data && balance.data.decimals > 8 ? 4 : 2}
+        placeholder={
+          useDirect
+            ? "Amount (USDC.e)"
+            : `Amount (${asset.token.symbol}, min $${asset.minCheckoutUsd.toFixed(0)})`
+        }
+      />
 
       {useDirect ? (
         <p className="text-[11px] text-muted">

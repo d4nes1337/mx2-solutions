@@ -69,7 +69,7 @@ describe("ActivityTimeline", () => {
     const labelOrder = [
       "Buy 10 @ 41¢ placed",
       "Triggered",
-      "Market data went quiet — hold window reset",
+      "Data stayed quiet past the grace — hold window reset",
       "Conditions met — hold window started",
       "Strategy armed",
     ];

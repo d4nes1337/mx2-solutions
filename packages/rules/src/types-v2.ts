@@ -257,6 +257,14 @@ export interface StrategyDefinition {
   /** Root-level continuous window: the whole expression must hold this long. */
   readonly holdsForMs: number;
   readonly maxDataAgeMs: number;
+  /**
+   * How long the hold window may PAUSE on stale data before resetting
+   * (0 = strict legacy reset-on-stale; v1-normalized rules pin this to 0).
+   * Absent on older stored definitions — defaulted at evaluation time by
+   * `staleGraceMsOf` to min(2 × maxDataAgeMs, 60s), so stored JSON is never
+   * rewritten (D-020).
+   */
+  readonly staleGraceMs?: number;
   readonly action: ActionV2;
   readonly recurrence: RecurrenceV2;
   readonly limits: StrategyLimits | null;
@@ -290,6 +298,12 @@ export interface StrategyRuntime {
   readonly cooldownUntilMs: number | null;
   /** Trailing-condition watermarks. Absent/empty when the expr has none. */
   readonly watermarks?: WatermarksByNode;
+  /**
+   * Non-null while the hold window is PAUSED on stale data (migration 0019):
+   * the instant staleness was first observed. The stale interval never counts
+   * toward holdsForMs. Absent on v1 runtimes (treated as null).
+   */
+  readonly staleSinceMs?: number | null;
 }
 
 /** Views keyed by tokenId. Plain object (not Map) so fixtures stay serializable. */

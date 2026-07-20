@@ -46,6 +46,9 @@ describe("nextRetryDelayMs", () => {
 describe("notification kinds", () => {
   it("covers the owner-approved event set", () => {
     expect([...NOTIFICATION_KINDS].sort()).toEqual([
+      // auto_retry_abandoned added with the funds-arrival retry (2026-07 fix
+      // plan): the user must hear when an auto-execution gives up waiting.
+      "auto_retry_abandoned",
       "deposit_completed",
       "order_auto_executed",
       "order_awaiting_signature",

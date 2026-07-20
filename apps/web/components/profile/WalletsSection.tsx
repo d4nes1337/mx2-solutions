@@ -4,7 +4,6 @@ import { useState } from "react";
 import { AlertTriangle, Loader2, Plus, RefreshCcw } from "lucide-react";
 import { useAccount } from "wagmi";
 import {
-  useBootstrapAllowances,
   useProvisionTradingWallet,
   useReissueTradingWallet,
   useSetupCredentials,
@@ -31,7 +30,6 @@ export function WalletsSection({
   const walletStatus = useTradingWallet(signedIn);
   const provisionWallet = useProvisionTradingWallet();
   const setupCreds = useSetupCredentials();
-  const bootstrap = useBootstrapAllowances();
   const reissue = useReissueTradingWallet();
 
   const [credsError, setCredsError] = useState<string | null>(null);

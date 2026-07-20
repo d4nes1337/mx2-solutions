@@ -72,7 +72,9 @@ export const emptyDoc = (): StrategyDoc => ({
   name: "",
   templateId: null,
   expr: { type: "group", id: "root", op: "and", children: [] },
-  holdsForMs: 300_000,
+  // Instant by default (owner decision, 2026-07-19): a strategy triggers the
+  // moment all conditions are satisfied; hold windows are opt-in.
+  holdsForMs: 0,
   maxDataAgeMs: 30_000,
   action: { kind: "alert" },
   recurrence: { kind: "once" },

@@ -215,17 +215,29 @@ describe("transitionV2: trailing watermark lifecycle", () => {
     expect(res.trigger!.watermarks?.["c1"]?.value).toBe(0.6);
   });
 
-  it("keeps the watermark through a DATA_STALE hold-window reset", () => {
+  it("keeps the watermark through a stale pause and the eventual reset", () => {
     const def = strat(wrap(stopLeaf(0.05)), { holdsForMs: 600_000 });
     let rt = initialRuntimeV2();
     rt = step(def, rt, book(1_000, 0.6)).runtime; // arm
     rt = step(def, rt, book(2_000, 0.55)).runtime; // satisfied → accumulating
     expect(rt.status).toBe("ACTIVE_ACCUMULATING");
 
-    // Stale tick breaks the window but not the watermark.
-    const res = step(def, rt, { type: "tick", views: views(2_000, 0.55), nowMs: 60_000 });
+    // Stale tick PAUSES the window (grace = 2×maxDataAge = 4s), watermark kept.
+    const paused = step(def, rt, { type: "tick", views: views(2_000, 0.55), nowMs: 60_000 });
+    expect(paused.runtime.status).toBe("ACTIVE_ACCUMULATING");
+    expect(paused.transition?.reason).toBe("STALE_PAUSED");
+    expect(paused.runtime.staleSinceMs).toBe(60_000);
+    expect(paused.runtime.watermarks?.["c1"]?.value).toBe(0.6);
+
+    // Grace exhausted → the reset lands; the watermark still survives.
+    const res = step(def, paused.runtime, {
+      type: "tick",
+      views: views(2_000, 0.55),
+      nowMs: 66_000,
+    });
     expect(res.runtime.status).toBe("ACTIVE_WAITING");
     expect(res.transition?.reason).toBe("DATA_STALE");
+    expect(res.runtime.staleSinceMs).toBeNull();
     expect(res.runtime.watermarks?.["c1"]?.value).toBe(0.6);
   });
 
