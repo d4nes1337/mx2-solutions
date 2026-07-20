@@ -1,17 +1,20 @@
 "use client";
 
 /**
- * Filter bar for the Smart Orders monitor: text search, status-group chips,
- * tag chips (union of tags across loaded strategies), and an Archived toggle.
- * Pure controlled component — filtering happens in the page.
+ * Filter bar for the Smart Orders dashboard: text search, section chips,
+ * a Starred pin filter, tag chips (union of tags across loaded strategies),
+ * and an Archived toggle. Pure controlled component — filtering happens in
+ * the page.
  */
-import { Archive, Search, X } from "lucide-react";
+import { Archive, Search, Star, X } from "lucide-react";
 import { cn } from "@/components/ui";
-import { GROUP_TITLES, type UserStatus } from "@/lib/smart-orders/status";
+import { SECTION_TITLES, type SectionId } from "@/lib/smart-orders/sections";
 
 export interface StrategyFilters {
   query: string;
-  group: UserStatus["group"] | null;
+  group: SectionId | null;
+  /** Show only starred (pinned) strategies. */
+  starred: boolean;
   /** OR-matched: a strategy shows when it carries ANY active tag. */
   tags: string[];
   showArchived: boolean;
@@ -20,6 +23,7 @@ export interface StrategyFilters {
 export const EMPTY_FILTERS: StrategyFilters = {
   query: "",
   group: null,
+  starred: false,
   tags: [],
   showArchived: false,
 };
@@ -38,16 +42,19 @@ export function FilterBar({
   groups,
   tags,
   archivedCount,
+  starredCount,
 }: {
   filters: StrategyFilters;
   onChange: (next: StrategyFilters) => void;
-  /** Status groups present in the data, with counts (render order = given order). */
-  groups: { group: UserStatus["group"]; count: number }[];
+  /** Sections present in the data, with counts (render order = given order). */
+  groups: { group: SectionId; count: number }[];
   /** Tag vocabulary (union across strategies). */
   tags: string[];
   archivedCount: number;
+  starredCount: number;
 }) {
-  const hasFilters = filters.query !== "" || filters.group !== null || filters.tags.length > 0;
+  const hasFilters =
+    filters.query !== "" || filters.group !== null || filters.starred || filters.tags.length > 0;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -68,9 +75,20 @@ export function FilterBar({
             onClick={() => onChange({ ...filters, group: filters.group === group ? null : group })}
             className={chipClass(filters.group === group)}
           >
-            {GROUP_TITLES[group]} · {count}
+            {SECTION_TITLES[group]} · {count}
           </button>
         ))}
+        {starredCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => onChange({ ...filters, starred: !filters.starred })}
+            className={chipClass(filters.starred)}
+            title="Show only starred strategies"
+          >
+            <Star size={11} aria-hidden className="mr-1 inline-block align-[-1px]" />
+            Starred · {starredCount}
+          </button>
+        ) : null}
         <span className="ml-auto" />
         <button
           type="button"

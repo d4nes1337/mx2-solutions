@@ -33,6 +33,8 @@ export interface StrategyRow {
   tags: string[];
   /** Set when soft-hidden; only terminal strategies can be archived. */
   archivedAt: string | null;
+  /** User pin: starred strategies float to the top of their section. */
+  starredAt: string | null;
   /** Versioned-edit linkage: the strategy this one replaced / was replaced by. */
   supersedes: string | null;
   supersededBy: string | null;
@@ -52,6 +54,53 @@ export interface StrategyRow {
 export interface AutoReadiness {
   autoExecutionEnabled: boolean;
   blockers: { code: string; detail: string }[];
+}
+
+// ── Dashboard overview (GET /api/smart-orders/overview) ─────────────────────
+
+export interface OverviewLeaf {
+  nodeId: string;
+  kind: string;
+  tokenId: string | null;
+  satisfied: boolean;
+  stale: boolean;
+  rawDistance: number | null;
+  normDistance: number;
+  blockedBy: string | null;
+}
+
+export interface StrategyOverviewItem {
+  id: string;
+  /** Ascending = closer to firing; meaningful only when proximity is non-null. */
+  rank: number;
+  proximity: {
+    /** Prob units to the binding threshold; null when gate-blocked or stale. */
+    bindingDistance: number | null;
+    bindingTokenId: string | null;
+    drift: "approaching" | "retreating" | "flat" | null;
+    dwellFraction: number | null;
+    blockedBy: string[];
+    leaves: OverviewLeaf[];
+  } | null;
+  /** Only for triggered order strategies awaiting a signature. */
+  actionability: {
+    kind: "ready" | "missed";
+    stillHolds: boolean;
+    triggerId: string | null;
+    triggeredAt: string | null;
+    priceAtTrigger: number | null;
+    priceNow: number | null;
+    edge: number | null;
+    edgeUsd: number | null;
+  } | null;
+}
+
+export interface OverviewResponse {
+  generatedAt: string;
+  strategies: StrategyOverviewItem[];
+  /** Per-token compact price series (unix seconds, 0–1 price), shared. */
+  sparklines: Record<string, { t: number; p: number }[]>;
+  books: Record<string, { bestBid: number | null; bestAsk: number | null; stale: boolean }>;
 }
 
 export interface MarketFreshness {
@@ -176,6 +225,49 @@ export function useStrategy(id: string | null) {
     queryKey: ["smart-orders", id],
     queryFn: () => api.get<StrategyRow>(`/api/smart-orders/${id}`),
     enabled: Boolean(id),
+  });
+}
+
+/** Batch dashboard state: proximity ranks, ready/missed, sparklines, books. */
+export function useStrategiesOverview(signedIn: boolean) {
+  return useQuery({
+    queryKey: ["smart-orders", "overview"],
+    queryFn: () => api.get<OverviewResponse>("/api/smart-orders/overview"),
+    enabled: signedIn,
+    refetchInterval: POLL.overview,
+    placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * Pin/unpin on the dashboard — optimistic so the card jumps immediately; the
+ * list cache is patched in place and rolled back if the server disagrees.
+ */
+export function useStarStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, starred }: { id: string; starred: boolean }) =>
+      api.patch<StrategyRow>(`/api/smart-orders/${id}/star`, { starred }),
+    onMutate: async ({ id, starred }) => {
+      await qc.cancelQueries({ queryKey: ["smart-orders"] });
+      const patched = qc.getQueriesData<{ strategies: StrategyRow[] }>({
+        queryKey: ["smart-orders"],
+      });
+      for (const [key, data] of patched) {
+        if (!data || !Array.isArray(data.strategies)) continue;
+        qc.setQueryData(key, {
+          ...data,
+          strategies: data.strategies.map((r) =>
+            r.id === id ? { ...r, starredAt: starred ? new Date().toISOString() : null } : r,
+          ),
+        });
+      }
+      return { patched };
+    },
+    onError: (_err, _vars, ctx) => {
+      for (const [key, data] of ctx?.patched ?? []) qc.setQueryData(key, data);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
   });
 }
 

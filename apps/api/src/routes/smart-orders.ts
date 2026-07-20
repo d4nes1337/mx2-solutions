@@ -22,13 +22,19 @@ import {
   evaluateExpression,
   hashDefinition,
   normalizeDefinition,
+  recentDrift,
   referencedTokenIds,
+  strategyProximity,
+  typicalMovement,
   validateStrategyDefinition,
   type BookLevel,
   type ExprNode,
   type MarketDataView,
+  type PriceSample,
   type RuleDefinition,
   type StrategyDefinition,
+  type StrategyProximity,
+  type TriggerEvidenceV2,
   type ViewsByToken,
   type WatermarksByNode,
 } from "@mx2/rules";
@@ -352,6 +358,146 @@ const serializeStrategy = (row: ConditionalRuleRow, liveExecutionEnabled: boolea
   };
 };
 
+// ── Dashboard overview (batch proximity + actionability + sparklines) ────────
+
+/** Wire sparkline point: unix SECONDS + 3dp price (payload every 5s poll). */
+interface SparkPoint {
+  t: number;
+  p: number;
+}
+
+interface SparkCacheEntry {
+  at: number;
+  series: SparkPoint[];
+  /** Fine ms-series attached to views for price_move evaluation only. */
+  fine?: PriceSample[];
+}
+
+export interface StrategyOverviewItem {
+  id: string;
+  /** strategyProximity().rank; meaningful only when proximity is non-null. */
+  rank: number;
+  proximity: {
+    bindingDistance: number | null;
+    bindingTokenId: string | null;
+    drift: StrategyProximity["drift"];
+    dwellFraction: number | null;
+    blockedBy: string[];
+    leaves: StrategyProximity["leaves"];
+  } | null;
+  /** Only for TRIGGERED_AWAITING_USER order strategies with a pending signature. */
+  actionability: {
+    kind: "ready" | "missed";
+    stillHolds: boolean;
+    triggerId: string | null;
+    triggeredAt: string | null;
+    priceAtTrigger: number | null;
+    priceNow: number | null;
+    /** Prob units; > 0 = current price beats the asked threshold. */
+    edge: number | null;
+    edgeUsd: number | null;
+  } | null;
+}
+
+export interface OverviewResponse {
+  generatedAt: string;
+  strategies: StrategyOverviewItem[];
+  sparklines: Record<string, SparkPoint[]>;
+  books: Record<string, { bestBid: number | null; bestAsk: number | null; stale: boolean }>;
+}
+
+const SPARKLINE_TTL_MS = 60_000;
+const SPARKLINE_MAX_POINTS = 60;
+/** Max tokens whose expired cache entries refill per request (soft TTL). */
+const SPARKLINE_REFILL_BUDGET = 8;
+/** Max distinct tokens the overview serves (triggered rows claim slots first). */
+const OVERVIEW_TOKEN_CAP = 40;
+/** Drift lookback for the approaching/retreating arrow. */
+const DRIFT_LOOKBACK_MS = 30 * 60_000;
+/** A book older than this reads as stale regardless of the stored flag. */
+const BOOK_FRESH_MS = 60_000;
+/**
+ * Ranking freshness, deliberately looser than execution freshness: the worker
+ * skips rewriting an unchanged book, so a quiet market's snapshot can sit for
+ * minutes while its data is genuinely current. "How far is the trigger?" stays
+ * answerable from such a book; money claims (edge) keep BOOK_FRESH_MS and
+ * execution keeps the strategy's own maxDataAgeMs + TriggerConfirm's live
+ * fetch. Books older than this rank as stale (fail-closed tail).
+ */
+const RANKING_FRESH_MS = 5 * 60_000;
+
+const sparklineCache = new Map<string, SparkCacheEntry>();
+/** Test hook — module-level cache would otherwise leak between route tests. */
+export const clearOverviewCacheForTests = (): void => sparklineCache.clear();
+
+const toSparkSeconds = (t: number): number => (t < 1e12 ? Math.round(t) : Math.round(t / 1000));
+const toMs = (t: number): number => (t < 1e12 ? t * 1000 : t);
+
+/**
+ * Refill expired sparkline entries within the per-request budget; entries past
+ * TTL but over budget serve stale (better a 2-min-old sparkline than an
+ * upstream stampede). A failed fetch caches an empty series for one TTL so a
+ * dead token cannot retry-storm. `fineTokens` additionally get a 1-min series
+ * for price_move evaluation.
+ */
+const ensureSparklines = async (
+  deps: SmartOrdersRoutesDeps,
+  tokenIds: readonly string[],
+  fineTokens: ReadonlySet<string>,
+  nowMs: number,
+): Promise<void> => {
+  const expired = tokenIds.filter((tokenId) => {
+    const entry = sparklineCache.get(tokenId);
+    if (!entry || nowMs - entry.at > SPARKLINE_TTL_MS) return true;
+    // A token newly referenced by price_move needs its fine series backfilled.
+    return fineTokens.has(tokenId) && entry.fine === undefined;
+  });
+  await Promise.all(
+    expired.slice(0, SPARKLINE_REFILL_BUDGET).map(async (tokenId) => {
+      const [spark, fine] = await Promise.all([
+        deps.clobClient.getPricesHistory({ tokenId, interval: "1d", fidelity: 15 }),
+        fineTokens.has(tokenId)
+          ? deps.clobClient.getPricesHistory({ tokenId, interval: "6h", fidelity: 1 })
+          : Promise.resolve(null),
+      ]);
+      const series = spark.ok
+        ? spark.value
+            .map((s) => ({ t: toSparkSeconds(s.t), p: Math.round(s.p * 1000) / 1000 }))
+            .sort((a, b) => a.t - b.t)
+            .slice(-SPARKLINE_MAX_POINTS)
+        : [];
+      const entry: SparkCacheEntry = { at: nowMs, series };
+      if (fine !== null && fine.ok) {
+        entry.fine = fine.value.map((s) => ({ t: toMs(s.t), p: s.p })).sort((a, b) => a.t - b.t);
+      }
+      sparklineCache.set(tokenId, entry);
+    }),
+  );
+};
+
+/**
+ * The price leaf that expresses the order's entry condition (BUY: ask ≤ X,
+ * SELL: bid ≥ X) on the action's token — the threshold behind "better/worse
+ * than you asked". Null for strategies without such a leaf (edge is then
+ * unknowable and actionability falls back to stillHolds alone).
+ */
+const actionPriceLeaf = (def: StrategyDefinition): { threshold: number } | null => {
+  if (def.action.kind !== "order") return null;
+  const action = def.action;
+  for (const { condition } of conditionLeaves(def.expr)) {
+    if (
+      condition.kind === "price" &&
+      condition.market.tokenId === action.market.tokenId &&
+      (action.side === "BUY"
+        ? condition.source === "ask" && condition.comparator === "lte"
+        : condition.source === "bid" && condition.comparator === "gte")
+    ) {
+      return { threshold: condition.threshold };
+    }
+  }
+  return null;
+};
+
 export const registerSmartOrdersRoutes = (
   app: FastifyInstance,
   deps: SmartOrdersRoutesDeps,
@@ -426,6 +572,169 @@ export const registerSmartOrdersRoutes = (
       blockers.push({ code: "kill_switch", detail: "Trading is globally paused." });
     }
     return { autoExecutionEnabled: f.conditionalLiveExecution, blockers };
+  });
+
+  // ── GET /api/smart-orders/overview — batch dashboard state ────────────────
+  // One call per poll for the whole Smart Orders page: proximity ranking for
+  // waiting strategies, ready/missed classification for triggered ones, and a
+  // shared per-token sparkline + book map. Reads worker snapshots + a 60s-TTL
+  // history cache only — never fans out to upstream per strategy (fail-closed:
+  // a token without a fresh snapshot ranks/classifies as stale).
+  app.get("/api/smart-orders/overview", guard, async (req) => {
+    const user = req.user!;
+    const nowMs = Date.now();
+    const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100);
+
+    const defs = new Map<string, StrategyDefinition>();
+    for (const row of rows) {
+      defs.set(row.id, normalizeDefinition(row.definition as RuleDefinition | StrategyDefinition));
+    }
+
+    // Token slots: triggered rows first (their cards carry the money actions).
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    const claim = (row: ConditionalRuleRow): void => {
+      for (const tokenId of referencedTokenIds(defs.get(row.id)!)) {
+        if (tokenId !== "" && !seen.has(tokenId)) {
+          seen.add(tokenId);
+          ordered.push(tokenId);
+        }
+      }
+    };
+    for (const row of rows) if (row.status === "TRIGGERED_AWAITING_USER") claim(row);
+    for (const row of rows) claim(row);
+    const tokens = ordered.slice(0, OVERVIEW_TOKEN_CAP);
+    const tokenSet = new Set(tokens);
+
+    const fineTokens = new Set<string>();
+    for (const row of rows) {
+      for (const t of priceMoveTokens(defs.get(row.id)!)) {
+        if (tokenSet.has(t)) fineTokens.add(t);
+      }
+    }
+    await ensureSparklines(deps, tokens, fineTokens, nowMs);
+
+    // Snapshot-only views (no CLOB fallback) + history-derived rank inputs.
+    const views: Record<string, MarketDataView> = {};
+    const books: OverviewResponse["books"] = {};
+    const sparklines: OverviewResponse["sparklines"] = {};
+    const typicalMoveByToken: Record<string, number> = {};
+    const driftByToken: Record<string, number> = {};
+    await Promise.all(
+      tokens.map(async (tokenId) => {
+        const snapshot = await deps.marketSnapshots.findByTokenId(tokenId);
+        if (snapshot !== null) {
+          const view = snapshotToView(snapshot);
+          const fine = sparklineCache.get(tokenId)?.fine;
+          views[tokenId] =
+            fine !== undefined && fine.length > 0 ? { ...view, priceHistory: fine } : view;
+          books[tokenId] = {
+            bestBid: view.bids[0]?.price ?? null,
+            bestAsk: view.asks[0]?.price ?? null,
+            // The stored flag only moves while the worker runs — age-bound it
+            // so a snapshot from before a downtime can't pose as live.
+            stale: snapshot.isStale || nowMs - view.receivedAtMs > BOOK_FRESH_MS,
+          };
+        } else {
+          books[tokenId] = { bestBid: null, bestAsk: null, stale: true };
+        }
+        const series = sparklineCache.get(tokenId)?.series ?? [];
+        sparklines[tokenId] = series;
+        const msSeries = series.map((s) => ({ t: s.t * 1000, p: s.p }));
+        const typical = typicalMovement(msSeries);
+        if (typical !== null) typicalMoveByToken[tokenId] = typical;
+        const drift = recentDrift(msSeries, DRIFT_LOOKBACK_MS);
+        if (drift !== null) driftByToken[tokenId] = drift;
+      }),
+    );
+
+    const awaiting = await deps.triggerStore.listAwaiting(user.walletAddress);
+    const awaitingByRule = new Map(awaiting.map((t) => [t.ruleId, t]));
+
+    const strategies: StrategyOverviewItem[] = rows.map((row) => {
+      const def = defs.get(row.id)!;
+      const item: StrategyOverviewItem = {
+        id: row.id,
+        rank: 0,
+        proximity: null,
+        actionability: null,
+      };
+
+      if (row.status === "ACTIVE_WAITING" || row.status === "ACTIVE_ACCUMULATING") {
+        const rankingDef =
+          def.maxDataAgeMs >= RANKING_FRESH_MS ? def : { ...def, maxDataAgeMs: RANKING_FRESH_MS };
+        const p = strategyProximity(rankingDef, views, nowMs, {
+          watermarks: (row.runtimeWatermarks ?? {}) as WatermarksByNode,
+          trueSinceMs:
+            row.status === "ACTIVE_ACCUMULATING" && row.trueSince !== null
+              ? new Date(row.trueSince).getTime()
+              : null,
+          typicalMoveByToken,
+          driftByToken,
+        });
+        item.rank = p.rank;
+        item.proximity = {
+          bindingDistance: p.bindingDistance,
+          bindingTokenId: p.bindingTokenId,
+          drift: p.drift,
+          dwellFraction: p.dwellFraction,
+          blockedBy: [...p.blockedBy],
+          leaves: p.leaves,
+        };
+      }
+
+      if (row.status === "TRIGGERED_AWAITING_USER" && def.action.kind === "order") {
+        const action = def.action;
+        const trigger = awaitingByRule.get(row.id) ?? null;
+        const evidence = (trigger?.evidence ?? null) as TriggerEvidenceV2 | null;
+        const stillHolds = evaluateExpression(
+          def,
+          views,
+          nowMs,
+          (row.runtimeWatermarks ?? {}) as WatermarksByNode,
+        ).satisfied;
+        const book = books[action.market.tokenId];
+        // A stale book must never back a confident edge or "missed" claim —
+        // without fresh data the honest state is "awaiting your signature"
+        // (the TriggerConfirm preview refetches live before any money moves).
+        const fresh = book !== undefined && !book.stale;
+        const priceNow = fresh
+          ? ((action.side === "BUY" ? book.bestAsk : book.bestBid) ?? null)
+          : null;
+        const leaf = actionPriceLeaf(def);
+        const edge =
+          leaf !== null && priceNow !== null
+            ? action.side === "BUY"
+              ? leaf.threshold - priceNow
+              : priceNow - leaf.threshold
+            : null;
+        item.actionability = {
+          kind: !fresh || stillHolds || (edge !== null && edge >= -1e-9) ? "ready" : "missed",
+          stillHolds,
+          triggerId: trigger?.id ?? null,
+          triggeredAt: trigger !== null ? trigger.triggeredAt.toISOString() : null,
+          priceAtTrigger:
+            evidence !== null
+              ? action.side === "BUY"
+                ? evidence.bestAsk
+                : evidence.bestBid
+              : null,
+          priceNow,
+          edge,
+          edgeUsd: edge !== null ? Math.round(edge * action.size * 100) / 100 : null,
+        };
+      }
+
+      return item;
+    });
+
+    const response: OverviewResponse = {
+      generatedAt: new Date(nowMs).toISOString(),
+      strategies,
+      sparklines,
+      books,
+    };
+    return response;
   });
 
   // ── POST /api/smart-orders — create + arm ─────────────────────────────────
@@ -709,6 +1018,32 @@ export const registerSmartOrdersRoutes = (
       action: "rule.state_changed",
       subject: `rule:${id}`,
       metadata: { control: "tags", tags },
+    });
+    return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
+  });
+
+  // Starred strategies float to the top of their dashboard section.
+  app.patch("/api/smart-orders/:id/star", guard, async (req, reply) => {
+    const user = req.user!;
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ starred: z.boolean() }).strict().safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "INVALID_REQUEST",
+        message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      };
+    }
+    const row = await deps.ruleStore.setStarred(id, user.walletAddress, parsed.data.starred);
+    if (!row) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Smart Order not found" };
+    }
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "rule.state_changed",
+      subject: `rule:${id}`,
+      metadata: { control: "star", starred: parsed.data.starred },
     });
     return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
   });

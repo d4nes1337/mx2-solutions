@@ -245,6 +245,7 @@ const mockRuleStore: RuleStore = {
   markAutoExecuted: async () => null,
   markExecutionFailed: async () => null,
   setTags: async () => null,
+  setStarred: async () => null,
   archive: async () => null,
   unarchive: async () => null,
   addExecutedNotional: async () => {},

@@ -25,6 +25,8 @@ export function AreaChart({
   fill = true,
   label,
   baseline,
+  baselines,
+  includeInDomain,
   markers,
   className,
 }: {
@@ -41,6 +43,13 @@ export function AreaChart({
   label?: string;
   /** Optional horizontal reference line, e.g. 0.5 for a probability chart. */
   baseline?: number;
+  /** Labeled reference lines (condition thresholds); merged with `baseline`. */
+  baselines?: { value: number; label?: string }[];
+  /**
+   * Values the y-domain must cover even when outside the data range — pass a
+   * trigger threshold so its line stays on-chart instead of silently hiding.
+   */
+  includeInDomain?: number[];
   /** Optional point markers (e.g. backtest triggers), snapped to the nearest sample. */
   markers?: { t: number; label?: string }[];
   className?: string;
@@ -73,6 +82,12 @@ export function AreaChart({
     const values = data.map((d) => d.v);
     let min = Math.min(...values);
     let max = Math.max(...values);
+    for (const v of includeInDomain ?? []) {
+      if (Number.isFinite(v)) {
+        min = Math.min(min, v);
+        max = Math.max(max, v);
+      }
+    }
     if (min === max) {
       min -= 0.5;
       max += 0.5;
@@ -94,7 +109,7 @@ export function AreaChart({
     const area = `${line} L${x(data.length - 1).toFixed(2)},${(H - padB).toFixed(2)} L${padL.toFixed(2)},${(H - padB).toFixed(2)} Z`;
 
     return { min, max, span, x, y, pts, line, area };
-  }, [data, w, H, padB, padR]);
+  }, [data, w, H, padB, padR, includeInDomain]);
 
   // Snap each marker to the nearest sample by timestamp (s/ms tolerated on
   // both sides). Capped so a dense backtest can't clutter the chart.
@@ -180,18 +195,36 @@ export function AreaChart({
             </g>
           ))}
 
-        {baseline != null && baseline > geom.min && baseline < geom.max ? (
-          <line
-            x1={padL}
-            x2={w - padR}
-            y1={geom.y(baseline)}
-            y2={geom.y(baseline)}
-            stroke="var(--border-strong)"
-            strokeWidth={1}
-            strokeDasharray="3 4"
-            opacity={0.85}
-          />
-        ) : null}
+        {[...(baseline != null ? [{ value: baseline }] : []), ...(baselines ?? [])].map(
+          (b: { value: number; label?: string }, i) =>
+            b.value > geom.min && b.value < geom.max ? (
+              <g key={`bl-${i}`}>
+                <line
+                  x1={padL}
+                  x2={w - padR}
+                  y1={geom.y(b.value)}
+                  y2={geom.y(b.value)}
+                  stroke="var(--border-strong)"
+                  strokeWidth={1}
+                  strokeDasharray="3 4"
+                  opacity={0.85}
+                />
+                {b.label ? (
+                  <text
+                    x={showAxis ? w - padR + 6 : w - padR - 2}
+                    y={geom.y(b.value) + (showAxis ? 3 : -4)}
+                    textAnchor={showAxis ? "start" : "end"}
+                    fill="var(--fg)"
+                    fontSize={10}
+                    fontWeight={600}
+                    fontFamily="var(--font-mono)"
+                  >
+                    {b.label}
+                  </text>
+                ) : null}
+              </g>
+            ) : null,
+        )}
 
         {fill ? <path d={geom.area} fill={`url(#grad-${uid})`} /> : null}
         <path

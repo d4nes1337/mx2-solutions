@@ -1,9 +1,42 @@
 # Project Status
 
-_Last updated: 2026-07-19_
+_Last updated: 2026-07-20_
 
 ## Recent
 
+- **Smart Orders → action dashboard (built; D-044).** The tab now answers "where is my money
+  about to move and what do I do right now": a pulse strip ("1 ready to sign · 3 approaching —
+  closest 2.0¢ away") over actionability sections — Needs attention (red, only when present),
+  **Ready to sign** (trigger fired, condition still holds or price beats the asked threshold;
+  edge shown in ¢ and $ from a ≤60s book), **Missed — for now** (hit X · now Y regret line,
+  Sign anyway / Re-arm, notifications upsell when no Telegram/Discord linked), **Approaching**
+  (hybrid rank: dwell-progress first with a live 1s hold bar, then volatility-normalized price
+  distance with an approaching/retreating drift arrow; compound trees rank by their binding
+  constraint — AND=worst, OR=best; liquidity/time gates show "blocked by …" instead of fake
+  cents), **Watching** (far tail + paused), and a collapsed **Done**. Cards are chart-first
+  (mini AreaChart with the trigger line drawn and held in-domain via new labeled `baselines` +
+  `includeInDomain` props). **Starring** (`starred_at`, migration 0020) pins within a section,
+  survives versioned edits like tags, and gets a filter chip + dock glyph. Clicking a card
+  opens a **side panel** (`?focus=` deep link; sticky column on desktop, SheetShell sheet on
+  mobile): per-condition annotated charts (extracted shared `ConditionCharts`), live actuals
+  (trigger 8¢ · now 12¢ · not yet), and **inline quick edits** of condition thresholds, limit
+  price and size — staged locally (charts preview the staged line), applied through the
+  existing supersede flow with the "re-arms — hold window restarts" warning; the panel follows
+  the new id (and auto-follows `supersededBy` after a 409 race). Data path: ONE batch
+  `GET /api/smart-orders/overview` per 5s poll — proximity from the pure, unit-tested
+  `@mx2/rules` `strategyProximity`, worker `market_snapshots` only (no upstream fan-out),
+  sparklines from a 60s-TTL cache (≤8 refills/req, cap 40 tokens, failures cached); the
+  worker's REST freshness pass now PERSISTS refreshed books so quiet markets stop reading as
+  stale dashboard-wide. Honesty ladder: edge/money claims need a ≤60s book, ranking tolerates
+  ≤5min quiet books, execution truth stays with TriggerConfirm's live fetch + wallet signature
+  (docs/04 §6 unchanged; "Review & sign" on cards just opens it). Tests: 736 root + 273 web
+  green (new: proximity 28, overview/star routes 13, sections 8, card 8, panel 4,
+  edit-definition 4, pulse strip 2); prod build clean, shared first-load JS unchanged (106 kB);
+  browser-verified end-to-end on a live market (ranking, dwell bar advancing, star pinning,
+  inline edit → supersede → id-follow with star carried, deep-link reload, mobile sheet,
+  dark/paper themes, zero console errors). Follow-ups flagged: card "Cancel" has no confirm
+  step (pre-existing; a stray click cancels an armed strategy), drag-the-trigger-line editing
+  deferred (v2), `WATCHING_CUTOFF=30` hysteresis only if flapping is observed.
 - **Telegram/Discord notifications + mobile remote signing (built; D-037, ADR-0020).** The P1
   "Telegram/mobile" expansion: users link a Telegram chat (single-use `t.me` code handshake
   from the Wallet page, QR for desktop) or a Discord account (OAuth2 identify; the state IS the

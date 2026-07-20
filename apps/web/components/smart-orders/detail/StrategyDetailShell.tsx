@@ -41,15 +41,8 @@ import { ActivityTimeline } from "./ActivityTimeline";
 import { LinkedOrders } from "./LinkedOrders";
 import { QuickEditSheet } from "../QuickEditSheet";
 
-/** 1-second local tick so the dwell bar advances smoothly between polls. */
-const useNow = (): number => {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(t);
-  }, []);
-  return now;
-};
+import { useNow } from "@/lib/smart-orders/use-now";
+import { ConditionCharts } from "./ConditionCharts";
 
 function DwellProgress({ evaluation, now }: { evaluation: StrategyEvaluation; now: number }) {
   const holding = evaluation.trueSince !== null && evaluation.holdsForMs > 0;
@@ -156,121 +149,6 @@ function ConditionsPanel({
         {leaves.length === 0 ? (
           <div className="px-4 py-3 text-[12px] text-muted">No conditions.</div>
         ) : null}
-      </div>
-    </Card>
-  );
-}
-
-/** Engine events → chart markers so the price line explains itself. */
-const timelineMarkers = (timeline: StrategyTimeline | undefined): { t: number; label?: string }[] =>
-  (timeline?.events ?? [])
-    .map((e) => {
-      const t = new Date(e.at).getTime();
-      if (e.action === "rule.triggered") return { t, label: "T" };
-      if (e.action === "rule.executed_auto") return { t, label: "$" };
-      if (e.action === "rule.execution.skipped") return { t, label: "!" };
-      if (
-        e.action === "rule.state_changed" &&
-        (e.metadata["reason"] === "STALE_PAUSED" || e.metadata["reason"] === "DATA_STALE")
-      )
-        return { t, label: "…" };
-      return null;
-    })
-    .filter((m): m is { t: number; label: string } => m !== null);
-
-const CHART_RANGES = [
-  { value: "1d", label: "1D" },
-  { value: "1w", label: "1W" },
-  { value: "1m", label: "1M" },
-];
-
-/** One price chart per condition, threshold line + engine-event markers. */
-function ConditionCharts({
-  row,
-  timeline,
-}: {
-  row: StrategyRow;
-  timeline: StrategyTimeline | undefined;
-}) {
-  const [range, setRange] = useState("1d");
-  const doc = docFromDefinition(row.definitionV2);
-  const leaves = conditionLeavesOf(doc.expr).filter(
-    ({ condition: c }) =>
-      (c.kind === "price" || c.kind === "trailing" || c.kind === "price_move") &&
-      "market" in c &&
-      c.market.tokenId !== "",
-  );
-  // One chart per distinct token — two conditions on the same book share a chart.
-  const seen = new Set<string>();
-  const charts = leaves.filter(({ condition: c }) => {
-    const tokenId = "market" in c ? c.market.tokenId : "";
-    if (seen.has(tokenId)) return false;
-    seen.add(tokenId);
-    return true;
-  });
-  const markers = timelineMarkers(timeline);
-  if (charts.length === 0) return null;
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-end">
-        <Segmented options={CHART_RANGES} value={range} onChange={setRange} size="sm" />
-      </div>
-      {charts.map(({ id, condition: c }) => (
-        <ConditionChart key={id} doc={doc} condition={c} range={range} markers={markers} />
-      ))}
-    </div>
-  );
-}
-
-function ConditionChart({
-  doc,
-  condition,
-  range,
-  markers,
-}: {
-  doc: ReturnType<typeof docFromDefinition>;
-  condition: ReturnType<typeof conditionLeavesOf>[number]["condition"];
-  range: string;
-  markers: { t: number; label?: string }[];
-}) {
-  const c = condition;
-  const tokenId = "market" in c ? c.market.tokenId : null;
-  const threshold = c.kind === "price" ? c.threshold : null;
-  const label = "market" in c ? marketLabel(doc, c.market) : "";
-  const history = useTokenPricesHistory(tokenId, range);
-  if (tokenId === null) return null;
-  const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
-  if (history.isLoading) return <Skeleton className="h-[180px] w-full rounded-xl" />;
-  if (series.length < 2) return null;
-  const firstT = series[0]!.t;
-  const visibleMarkers = markers.filter((m) => m.t >= firstT);
-  return (
-    <Card>
-      <CardHeader
-        right={
-          threshold !== null ? (
-            <span className="tabular text-[11px] text-muted">trigger {cents(threshold)}</span>
-          ) : c.kind === "trailing" ? (
-            <span className="tabular text-[11px] text-muted">
-              trailing {c.mode} · {cents(c.offset)} offset
-            </span>
-          ) : c.kind === "price_move" ? (
-            <span className="tabular text-[11px] text-muted">
-              {c.direction} {cents(c.deltaThreshold)} in {humanDuration(c.windowMs)}
-            </span>
-          ) : undefined
-        }
-      >
-        {label}
-      </CardHeader>
-      <div className="p-2">
-        <AreaChart
-          data={series}
-          height={180}
-          valueFormat={(v) => cents(v)}
-          {...(threshold !== null ? { baseline: threshold } : {})}
-          {...(visibleMarkers.length > 0 ? { markers: visibleMarkers } : {})}
-        />
       </div>
     </Card>
   );

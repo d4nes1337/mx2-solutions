@@ -36,6 +36,7 @@ import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer
 import { buildApp, type DbProbe } from "../app.js";
 import { resetRateLimits } from "../middleware/rate-limit.js";
 import { resetSmartSearchCache } from "../lib/market-search.js";
+import { clearOverviewCacheForTests, type OverviewResponse } from "./smart-orders.js";
 
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const COOKIE = "mx2_session=tok";
@@ -47,7 +48,7 @@ const upstreamErr: PolymarketError = { code: "UPSTREAM_ERROR", message: "x", sta
 const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
   const rows: ConditionalRuleRow[] = [];
   const find = (id: string) => rows.find((r) => r.id === id) ?? null;
-  return {
+  const store: RuleStore & { rows: ConditionalRuleRow[] } = {
     rows,
     create: async (o) => {
       const row: ConditionalRuleRow = {
@@ -76,6 +77,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         runtimeWatermarks: null,
         tags: [],
         archivedAt: null,
+        starredAt: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -105,6 +107,12 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       r.tags = [...tags];
       return r;
     },
+    setStarred: async (id, w, starred) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.starredAt = starred ? new Date() : null;
+      return r;
+    },
     archive: async (id, w) => {
       const r = find(id);
       const terminal = [
@@ -130,8 +138,27 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
     addExecutedNotional: async () => {},
     listStuckExecuting: async () => [],
     revertExecuting: async () => null,
-    createSuperseding: async () => null,
+    // Mirrors the real transactional carry: tags, starredAt and lifetime spend
+    // move to the replacement; the old row is cancelled and linked.
+    createSuperseding: async (o, oldId) => {
+      const old = find(oldId);
+      const editable =
+        old !== null &&
+        old.walletAddress === o.walletAddress &&
+        ["ACTIVE_WAITING", "ACTIVE_ACCUMULATING", "PAUSED"].includes(old.status) &&
+        old.supersededBy === null;
+      if (!old || !editable) return null;
+      const created = await store.create(o);
+      created.supersedes = oldId;
+      created.tags = old.tags;
+      created.starredAt = old.starredAt;
+      created.totalNotionalExecuted = old.totalNotionalExecuted;
+      old.status = "CANCELLED";
+      old.supersededBy = created.id;
+      return { created, retired: old };
+    },
   };
+  return store;
 };
 
 const snapshotFor = (
@@ -191,6 +218,7 @@ const buildSmartOrdersApp = (opts: {
   searchMarkets?: GammaClient["searchMarkets"];
   triggers?: RuleTriggerRow[];
   orders?: OrderIntentRow[];
+  pricesHistory?: ClobClient["getPricesHistory"];
 }) => {
   const ruleStore = opts.ruleStore ?? makeRuleStore();
   const audits: { action: string; subject: string | null }[] = [];
@@ -257,7 +285,7 @@ const buildSmartOrdersApp = (opts: {
     getTrades: async () => err(upstreamErr),
     getPrices: async () => err(upstreamErr),
     getLastTradePrice: async () => err(upstreamErr),
-    getPricesHistory: async () => err(upstreamErr),
+    getPricesHistory: opts.pricesHistory ?? (async () => err(upstreamErr)),
     getClobMarket: async () => err(upstreamErr),
     getFeeRate: async () => err(upstreamErr),
     getRewardsMarket: async () => err(upstreamErr),
@@ -344,7 +372,8 @@ const buildSmartOrdersApp = (opts: {
       findById: async () => null,
       findByIdForWallet: async () => null,
       listByWallet: async () => [],
-      listAwaiting: async () => [],
+      listAwaiting: async (w) =>
+        (opts.triggers ?? []).filter((t) => t.walletAddress === w && t.status === "awaiting_user"),
       hasForRule: async () => false,
       listByRule: async (ruleId) => (opts.triggers ?? []).filter((t) => t.ruleId === ruleId),
       updateStatus: async () => {},
@@ -445,6 +474,7 @@ const validBody = {
 beforeEach(() => {
   resetRateLimits();
   resetSmartSearchCache();
+  clearOverviewCacheForTests();
 });
 
 describe("POST /api/smart-orders", () => {
@@ -1107,6 +1137,360 @@ describe("GET /api/smart-orders/:id/evaluate-now", () => {
       "tok-1",
       "tok-2",
     ]);
+    await app.close();
+  });
+});
+
+// ── Dashboard: star pin + batch overview ─────────────────────────────────────
+
+describe("PATCH /api/smart-orders/:id/star", () => {
+  const createStrategy = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: validBody,
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id as string;
+  };
+
+  it("sets and clears the pin, with an audit trail", async () => {
+    const { app, audits } = buildSmartOrdersApp({});
+    const id = await createStrategy(app);
+
+    const star = await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/star`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { starred: true },
+    });
+    expect(star.statusCode).toBe(200);
+    expect(star.json().starredAt).not.toBeNull();
+    expect(
+      audits.some((a) => a.action === "rule.state_changed" && a.subject === `rule:${id}`),
+    ).toBe(true);
+
+    const unstar = await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/star`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { starred: false },
+    });
+    expect(unstar.statusCode).toBe(200);
+    expect(unstar.json().starredAt).toBeNull();
+    await app.close();
+  });
+
+  it("404s on a foreign/unknown strategy and 400s on a smuggled field", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const missing = await app.inject({
+      method: "PATCH",
+      url: "/api/smart-orders/nope/star",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { starred: true },
+    });
+    expect(missing.statusCode).toBe(404);
+    const smuggled = await app.inject({
+      method: "PATCH",
+      url: "/api/smart-orders/nope/star",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { starred: true, walletAddress: "0xevil" },
+    });
+    expect(smuggled.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("carries the pin through a versioned edit (supersede)", async () => {
+    const { app, ruleStore } = buildSmartOrdersApp({});
+    await createStrategy(app);
+    // The supersedes field is uuid-validated; the mock mints "rule-N" ids.
+    const id = "7d9a1c2e-4b5f-4a6d-9e8f-0123456789ab";
+    ruleStore.rows[0]!.id = id;
+    await app.inject({
+      method: "PATCH",
+      url: `/api/smart-orders/${id}/star`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { starred: true },
+    });
+
+    const edited = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { ...validBody, supersedes: id },
+    });
+    expect(edited.statusCode).toBe(201);
+    expect(edited.json().starredAt).not.toBeNull();
+    expect(edited.json().supersedes).toBe(id);
+    const old = ruleStore.rows.find((r) => r.id === id)!;
+    expect(old.status).toBe("CANCELLED");
+    expect(old.supersededBy).toBe(edited.json().id);
+    await app.close();
+  });
+});
+
+describe("GET /api/smart-orders/overview", () => {
+  const createStrategy = async (
+    app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"],
+    body: Record<string, unknown> = validBody,
+  ) => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id as string;
+  };
+
+  const getOverview = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/smart-orders/overview",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json() as OverviewResponse;
+  };
+
+  const farBody = {
+    ...validBody,
+    expr: { type: "group", id: "root", op: "and", children: [priceLeaf("p1", "tok-1", 0.4)] },
+  };
+
+  it("ranks a waiting strategy by its price distance from the snapshot book", async () => {
+    // Snapshot best ask 0.48 vs threshold 0.40 → 8¢ away, fresh book map.
+    const { app } = buildSmartOrdersApp({ snapshots: { "tok-1": snapshotFor("tok-1") } });
+    const id = await createStrategy(app, farBody);
+    const body = await getOverview(app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(item.proximity).not.toBeNull();
+    expect(item.proximity!.bindingDistance).toBeCloseTo(0.08, 9);
+    expect(item.proximity!.bindingTokenId).toBe("tok-1");
+    expect(item.rank).toBeGreaterThan(0);
+    expect(item.rank).toBeLessThan(1e6);
+    expect(body.books["tok-1"]).toEqual({ bestBid: 0.47, bestAsk: 0.48, stale: false });
+    await app.close();
+  });
+
+  it("fails closed without a snapshot: stale rank, no fake cents", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const id = await createStrategy(app, farBody);
+    const body = await getOverview(app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(item.proximity!.bindingDistance).toBeNull();
+    expect(item.rank).toBeGreaterThanOrEqual(2e6);
+    expect(body.books["tok-1"]).toEqual({ bestBid: null, bestAsk: null, stale: true });
+    await app.close();
+  });
+
+  it("ranks from a quiet-market book minutes old, while books flag it stale for money claims", async () => {
+    // Worker skips unchanged-book rewrites: 3-min-old snapshot, data fine.
+    const { app } = buildSmartOrdersApp({
+      snapshots: {
+        "tok-1": snapshotFor("tok-1", { receivedAt: new Date(Date.now() - 3 * 60_000) }),
+      },
+    });
+    const id = await createStrategy(app, farBody);
+    const body = await getOverview(app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(item.proximity!.bindingDistance).toBeCloseTo(0.08, 9); // still ranked
+    expect(item.rank).toBeLessThan(1e6);
+    expect(body.books["tok-1"]!.stale).toBe(true); // but no edge math from it
+    await app.close();
+  });
+
+  it("serves sparklines from a TTL cache — one upstream call across two polls", async () => {
+    let calls = 0;
+    const { app } = buildSmartOrdersApp({
+      snapshots: { "tok-1": snapshotFor("tok-1") },
+      pricesHistory: async () => {
+        calls++;
+        return ok(
+          Array.from({ length: 80 }, (_, i) => ({
+            t: 1_700_000_000 + i * 900,
+            p: 0.4 + i * 0.001,
+          })),
+        );
+      },
+    });
+    await createStrategy(app, farBody);
+    const first = await getOverview(app);
+    await getOverview(app);
+    expect(calls).toBe(1);
+    const series = first.sparklines["tok-1"]!;
+    expect(series.length).toBeLessThanOrEqual(60);
+    expect(series[0]!.t).toBeLessThan(1e12); // unix seconds on the wire
+    await app.close();
+  });
+
+  it("caches an upstream failure as an empty series (no retry storm)", async () => {
+    let calls = 0;
+    const { app } = buildSmartOrdersApp({
+      snapshots: { "tok-1": snapshotFor("tok-1") },
+      pricesHistory: async () => {
+        calls++;
+        return err(upstreamErr);
+      },
+    });
+    await createStrategy(app, farBody);
+    await getOverview(app);
+    const second = await getOverview(app);
+    expect(calls).toBe(1);
+    expect(second.sparklines["tok-1"]).toEqual([]);
+    await app.close();
+  });
+
+  const triggeredSetup = (ask: string, over: Partial<RuleTriggerRow> = {}) => {
+    const ruleStore = makeRuleStore();
+    const trigger: RuleTriggerRow = {
+      id: "trig-9",
+      ruleId: "rule-1",
+      walletAddress: WALLET,
+      triggeredAt: new Date("2026-07-19T10:00:00Z"),
+      autoRetryUntil: null,
+      autoRetryReason: null,
+      evidence: { bestAsk: 0.45, bestBid: 0.44 },
+      reasonCodes: ["PRICE_OK"],
+      status: "awaiting_user",
+      orderIntentId: null,
+      createdAt: new Date("2026-07-19T10:00:00Z"),
+      ...over,
+    };
+    const app = buildSmartOrdersApp({
+      ruleStore,
+      snapshots: { "tok-1": snapshotFor("tok-1", { asks: [{ price: ask, size: "1000" }] }) },
+      triggers: [trigger],
+    });
+    return { ...app, trigger };
+  };
+
+  it("classifies a BUY trigger as ready when the ask beats the threshold", async () => {
+    // validBody: BUY, price leaf ask ≤ 0.50. Ask now 0.48 → edge +0.02 → ready.
+    const setup = triggeredSetup("0.48");
+    const id = await createStrategy(setup.app);
+    // Move the row into the awaiting state the worker would have set.
+    setup.ruleStore.rows.find((r) => r.id === id)!.status = "TRIGGERED_AWAITING_USER";
+    const body = await getOverview(setup.app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(item.actionability).not.toBeNull();
+    expect(item.actionability!.kind).toBe("ready");
+    expect(item.actionability!.stillHolds).toBe(true);
+    expect(item.actionability!.edge).toBeCloseTo(0.02, 9);
+    expect(item.actionability!.edgeUsd).toBeCloseTo(2, 9); // 0.02 × 100 shares
+    expect(item.actionability!.triggerId).toBe(setup.trigger.id);
+    expect(item.actionability!.priceAtTrigger).toBeCloseTo(0.45, 9);
+    expect(item.actionability!.priceNow).toBeCloseTo(0.48, 9);
+    await setup.app.close();
+  });
+
+  it("never fakes an edge from a stale book — neutral ready instead", async () => {
+    const ruleStore = makeRuleStore();
+    const { app } = buildSmartOrdersApp({
+      ruleStore,
+      // Fresh flag lies (worker was down): the age bound must catch it.
+      snapshots: {
+        "tok-1": snapshotFor("tok-1", {
+          isStale: false,
+          receivedAt: new Date(Date.now() - 17 * 3600_000),
+        }),
+      },
+      triggers: [
+        {
+          id: "trig-stale",
+          ruleId: "rule-1",
+          walletAddress: WALLET,
+          triggeredAt: new Date(),
+          autoRetryUntil: null,
+          autoRetryReason: null,
+          evidence: { bestAsk: 0.45, bestBid: 0.44 },
+          reasonCodes: ["PRICE_OK"],
+          status: "awaiting_user",
+          orderIntentId: null,
+          createdAt: new Date(),
+        },
+      ],
+    });
+    const id = await createStrategy(app);
+    ruleStore.rows.find((r) => r.id === id)!.status = "TRIGGERED_AWAITING_USER";
+    const body = await getOverview(app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(body.books["tok-1"]!.stale).toBe(true);
+    expect(item.actionability!.kind).toBe("ready"); // never hide a signature request
+    expect(item.actionability!.edge).toBeNull();
+    expect(item.actionability!.priceNow).toBeNull();
+    await app.close();
+  });
+
+  it("classifies a faded BUY trigger as missed with the regret math", async () => {
+    const setup = triggeredSetup("0.56");
+    const id = await createStrategy(setup.app);
+    setup.ruleStore.rows.find((r) => r.id === id)!.status = "TRIGGERED_AWAITING_USER";
+    const body = await getOverview(setup.app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    expect(item.actionability!.kind).toBe("missed");
+    expect(item.actionability!.stillHolds).toBe(false);
+    expect(item.actionability!.edge).toBeCloseTo(-0.06, 9);
+    expect(item.actionability!.priceAtTrigger).toBeCloseTo(0.45, 9);
+    expect(item.actionability!.priceNow).toBeCloseTo(0.56, 9);
+    await setup.app.close();
+  });
+
+  it("classifies SELL triggers against the bid side", async () => {
+    const sellBody = {
+      ...validBody,
+      expr: {
+        type: "group",
+        id: "root",
+        op: "and",
+        children: [
+          {
+            type: "condition",
+            id: "p1",
+            condition: {
+              kind: "price",
+              market: marketRef("tok-1"),
+              source: "bid",
+              comparator: "gte",
+              threshold: 0.6,
+            },
+          },
+        ],
+      },
+      action: { ...validBody.action, side: "SELL", price: 0.61 },
+    };
+    const ruleStore = makeRuleStore();
+    const { app } = buildSmartOrdersApp({
+      ruleStore,
+      snapshots: {
+        "tok-1": snapshotFor("tok-1", { bids: [{ price: "0.63", size: "500" }] }),
+      },
+      triggers: [
+        {
+          id: "trig-s",
+          ruleId: "rule-1",
+          walletAddress: WALLET,
+          triggeredAt: new Date(),
+          autoRetryUntil: null,
+          autoRetryReason: null,
+          evidence: { bestAsk: 0.62, bestBid: 0.61 },
+          reasonCodes: ["PRICE_OK"],
+          status: "awaiting_user",
+          orderIntentId: null,
+          createdAt: new Date(),
+        },
+      ],
+    });
+    const id = await createStrategy(app, sellBody);
+    ruleStore.rows.find((r) => r.id === id)!.status = "TRIGGERED_AWAITING_USER";
+    const body = await getOverview(app);
+    const item = body.strategies.find((s) => s.id === id)!;
+    // Bid 0.63 vs asked ≥ 0.60 → +3¢ better than asked → ready.
+    expect(item.actionability!.kind).toBe("ready");
+    expect(item.actionability!.edge).toBeCloseTo(0.03, 9);
+    expect(item.actionability!.priceAtTrigger).toBeCloseTo(0.61, 9);
     await app.close();
   });
 });

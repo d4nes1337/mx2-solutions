@@ -344,6 +344,11 @@ export const conditionalRules = pgTable(
      */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     /**
+     * User pin (migration 0020): starred strategies float to the top of their
+     * dashboard section. Carried over on supersede, like tags.
+     */
+    starredAt: timestamp("starred_at", { withTimezone: true }),
+    /**
      * Stale-pause marker (migration 0019): set while the hold window is paused
      * because market data went stale; cleared on resume or reset. Persisted so
      * a worker restart mid-pause keeps honest accounting.

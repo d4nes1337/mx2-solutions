@@ -49,7 +49,7 @@ export interface MarketFeedManager {
   close(): void;
 }
 
-const computeMidPrice = (
+export const computeMidPrice = (
   bids: readonly { price: string }[],
   asks: readonly { price: string }[],
 ): string | null => {

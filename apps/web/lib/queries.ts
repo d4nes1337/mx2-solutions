@@ -79,6 +79,8 @@ export const POLL = {
   rules: 4_000,
   ruleEval: 3_000,
   ruleTimeline: 5_000,
+  /** Smart Orders dashboard batch (proximity + sparklines + books). */
+  overview: 5_000,
   triggers: 4_000,
   triggerDetail: 3_000,
   marketTrades: 10_000,

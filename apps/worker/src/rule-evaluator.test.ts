@@ -80,6 +80,7 @@ const makeRow = (
   totalNotionalExecuted: "0",
   tags: [],
   archivedAt: null,
+  starredAt: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
   ...over,

@@ -5,7 +5,7 @@
  * progress, one-line sentence — each row links to the full detail page.
  */
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Star } from "lucide-react";
 import { Badge, Empty, LiveDot } from "@/components/ui";
 import { docFromDefinition } from "@/lib/smart-orders/doc";
 import { strategySentence } from "@/lib/smart-orders/sentence";
@@ -59,8 +59,16 @@ export function DockStrategiesList({ rows }: { rows: StrategyRow[] }) {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-medium text-fg">
-                  {row.name || def.name || "Smart Order"}
+                <div className="flex items-center gap-1 truncate text-[13px] font-medium text-fg">
+                  {row.starredAt ? (
+                    <Star
+                      size={10}
+                      aria-label="Starred"
+                      className="shrink-0 text-warn"
+                      fill="currentColor"
+                    />
+                  ) : null}
+                  <span className="truncate">{row.name || def.name || "Smart Order"}</span>
                 </div>
                 <div className="truncate text-[11px] text-faint">
                   {strategySentence(docFromDefinition(def))}

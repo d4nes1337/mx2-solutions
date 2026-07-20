@@ -92,6 +92,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         runtimeWatermarks: null,
         tags: [],
         archivedAt: null,
+        starredAt: null,
         totalNotionalExecuted: "0",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -169,6 +170,12 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       const r = find(id);
       if (!r || r.walletAddress !== w) return null;
       r.tags = [...tags];
+      return r;
+    },
+    setStarred: async (id, w, starred) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.starredAt = starred ? new Date() : null;
       return r;
     },
     archive: async (id, w) => {

@@ -29,7 +29,12 @@ import {
 } from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createBridgePoller, type BridgePoller } from "./bridge-poller.js";
-import { createMarketFeedManager, orderbookToView, type MarketFeedManager } from "./market-feed.js";
+import {
+  computeMidPrice,
+  createMarketFeedManager,
+  orderbookToView,
+  type MarketFeedManager,
+} from "./market-feed.js";
 import { createOrderSyncLoop, type OrderSyncLoop } from "./order-sync.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
@@ -152,7 +157,29 @@ const main = async (): Promise<void> => {
     const publicClobClient = createClobClient({ baseUrl: config.polymarket.clobBaseUrl });
     const fetchOrderbook = async (tokenId: string) => {
       const ob = await publicClobClient.getOrderbook(tokenId);
-      return ob.ok ? orderbookToView(ob.value, Date.now()) : null;
+      if (!ob.ok) return null;
+      const view = orderbookToView(ob.value, Date.now());
+      // Persist the refreshed book: the WS path writes snapshots only when a
+      // book CHANGES, so on a quiet market this pass is the only thing keeping
+      // snapshot readers (dashboard overview, public orderbook endpoint) from
+      // seeing a perfectly-live book as stale. Fire-and-forget — freshness
+      // verification must not stall on a DB hiccup.
+      void marketSnapshots
+        .upsert({
+          tokenId: view.tokenId,
+          conditionId: view.conditionId,
+          bids: ob.value.bids,
+          asks: ob.value.asks,
+          lastTradePrice: null,
+          midPrice: computeMidPrice(ob.value.bids, ob.value.asks),
+          source: "rest",
+          isStale: false,
+          receivedAt: new Date(view.receivedAtMs),
+        })
+        .catch((e: unknown) =>
+          logger.warn({ err: e, tokenId }, "Failed to persist refreshed orderbook"),
+        );
+      return view;
     };
     evaluator = createRuleEvaluatorManager({
       logger,

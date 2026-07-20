@@ -95,6 +95,12 @@ export interface RuleStore {
     walletAddress: string,
     tags: readonly string[],
   ): Promise<ConditionalRuleRow | null>;
+  /** Pin/unpin the strategy on the dashboard (starred floats first in-section). */
+  setStarred(
+    id: string,
+    walletAddress: string,
+    starred: boolean,
+  ): Promise<ConditionalRuleRow | null>;
   /** Soft-hide a TERMINAL strategy (null when not terminal / already archived). */
   archive(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
   unarchive(id: string, walletAddress: string): Promise<ConditionalRuleRow | null>;
@@ -205,6 +211,15 @@ export const createRuleStore = (db: Database): RuleStore => ({
     const [row] = await db
       .update(conditionalRules)
       .set({ tags: [...tags], updatedAt: sql`now()` })
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
+      .returning();
+    return row ?? null;
+  },
+
+  async setStarred(id, walletAddress, starred) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ starredAt: starred ? sql`now()` : null, updatedAt: sql`now()` })
       .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
       .returning();
     return row ?? null;
@@ -429,6 +444,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
           supersedes: oldId,
           totalNotionalExecuted: old.totalNotionalExecuted,
           tags: old.tags,
+          starredAt: old.starredAt,
         })
         .returning();
       if (!created) throw new Error("Failed to create superseding rule");
