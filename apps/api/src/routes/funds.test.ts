@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import { ok, err } from "@mx2/core";
@@ -551,6 +551,54 @@ describe("deposit addresses + tracked deposits", () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("GEO_BLOCKED");
+    await app.close();
+  });
+});
+
+// Placed last so the first test here sees a cold module-level price cache; the
+// prices route touches no auth/store, only the stubbed global fetch.
+describe("GET /api/funds/prices", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("maps CoinGecko ids to symbol prices (POL prefers the new id)", async () => {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        ethereum: { usd: 3500.5 },
+        "polygon-ecosystem-token": { usd: 0.42 },
+        "matic-network": { usd: 0.99 },
+        binancecoin: { usd: 600 },
+        bitcoin: { usd: 95_000 },
+        "wrapped-bitcoin": { usd: 94_900 },
+        solana: { usd: 150 },
+      }),
+    })) as unknown as typeof fetch;
+    const { app } = await buildFundsApp({});
+    const res = await app.inject({ method: "GET", url: "/api/funds/prices" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.prices.ETH).toBe(3500.5);
+    expect(body.prices.POL).toBe(0.42); // new id wins over legacy matic-network
+    expect(body.prices.BNB).toBe(600);
+    expect(body.prices.WBTC).toBe(94_900);
+    expect(body.prices.BTC).toBe(95_000);
+    await app.close();
+  });
+
+  it("serves cache within TTL and never surfaces upstream errors (HTTP 200)", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const { app } = await buildFundsApp({});
+    const res = await app.inject({ method: "GET", url: "/api/funds/prices" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().prices.ETH).toBe(3500.5); // last-known cache, fetch skipped
+    expect(calls).toBe(0);
     await app.close();
   });
 });

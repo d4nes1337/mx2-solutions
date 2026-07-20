@@ -432,6 +432,13 @@ export interface FundsAssetsResponse {
   note?: string | null;
 }
 
+/** GET /api/funds/prices — keyless USD spot prices keyed by token symbol. */
+export interface FundsPricesResponse {
+  /** e.g. { ETH: 3500.12, POL: 0.42 }. Stablecoins are valued 1:1 client-side. */
+  prices: Record<string, number>;
+  asOf: string;
+}
+
 export interface FundsDepositAddressesResponse {
   ok: boolean;
   depositWalletAddress: string;

@@ -17,6 +17,7 @@ import type {
   FeatureFlags,
   BridgeDepositItem,
   FundsAssetsResponse,
+  FundsPricesResponse,
   FundsDepositAddressesResponse,
   FundsSavedAddressesResponse,
   FundsQuoteResponse,
@@ -472,6 +473,17 @@ export function useFundsAssets(enabled = true) {
     queryFn: () => api.get<FundsAssetsResponse>("/api/funds/assets"),
     enabled,
     staleTime: 5 * 60_000,
+  });
+}
+
+/** Keyless USD spot prices for valuing connected-wallet holdings (60s fresh). */
+export function usePrices(enabled = true) {
+  return useQuery({
+    queryKey: ["funds-prices"],
+    queryFn: () => api.get<FundsPricesResponse>("/api/funds/prices"),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 }
 

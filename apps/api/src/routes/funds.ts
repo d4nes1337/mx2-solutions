@@ -42,6 +42,39 @@ const REFRESH_ADDRESS_LIMIT = 5;
  */
 const REFRESH_MIN_INTERVAL_MS = 5_000;
 
+// ── USD spot prices (holdings valuation) ─────────────────────────────────────
+// Keyless, public, no user input: the browser values the connected wallet's
+// on-chain balances client-side, so ONLY these static CoinGecko ids ever leave
+// the server — never a wallet address. 60s in-memory cache; fail-soft (last
+// known / empty, always HTTP 200) so the deposit UI never blocks on a third
+// party. Stablecoins are valued 1:1 client-side and need no price here.
+const PRICE_TTL_MS = 60_000;
+const PRICE_TIMEOUT_MS = 5_000;
+/**
+ * Symbol → ordered CoinGecko id candidates (first that returns a price wins).
+ * POL carries both the new "polygon-ecosystem-token" and legacy "matic-network"
+ * ids because the MATIC→POL rename left the correct id ambiguous across sources.
+ */
+const PRICE_ID_CANDIDATES: Record<string, string[]> = {
+  ETH: ["ethereum"],
+  WETH: ["ethereum"],
+  POL: ["polygon-ecosystem-token", "matic-network"],
+  MATIC: ["matic-network"],
+  WMATIC: ["matic-network"],
+  BNB: ["binancecoin"],
+  WBNB: ["binancecoin"],
+  BTC: ["bitcoin"],
+  WBTC: ["wrapped-bitcoin", "bitcoin"],
+  SOL: ["solana"],
+};
+const PRICE_IDS = [...new Set(Object.values(PRICE_ID_CANDIDATES).flat())];
+const priceCache: { at: number; value: Record<string, number> } = { at: 0, value: {} };
+
+const priceEnvelope = () => ({
+  prices: priceCache.value,
+  asOf: new Date(priceCache.at || Date.now()).toISOString(),
+});
+
 const addressTypeForChain = (chainName: string): "evm" | "svm" | "btc" | "tvm" => {
   const normalized = chainName.toLowerCase();
   if (normalized === "solana") return "svm";
@@ -124,6 +157,44 @@ export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps)
       chains: Array.from(chainMap.values()).sort((a, b) => a.chainName.localeCompare(b.chainName)),
       note: result.value.note ?? null,
     };
+  });
+
+  // ── GET /api/funds/prices — keyless USD spot prices for holdings valuation ─
+  // Public (no auth, no geoblock, no wallet address); mirrors /api/funds/assets.
+  app.get("/api/funds/prices", async () => {
+    if (Date.now() - priceCache.at < PRICE_TTL_MS) return priceEnvelope();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PRICE_TIMEOUT_MS);
+    try {
+      const res = await fetch(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${PRICE_IDS.join(",")}&vs_currencies=usd`,
+        { headers: { Accept: "application/json" }, signal: controller.signal },
+      );
+      if (!res.ok) return priceEnvelope(); // fail-soft: keep last-known cache
+      const json = (await res.json()) as Record<string, { usd?: number } | undefined>;
+      const prices: Record<string, number> = {};
+      for (const [symbol, ids] of Object.entries(PRICE_ID_CANDIDATES)) {
+        for (const id of ids) {
+          const usd = json[id]?.usd;
+          if (typeof usd === "number" && usd > 0) {
+            prices[symbol] = usd;
+            break;
+          }
+        }
+      }
+      // Only replace the cache when the fetch actually yielded prices, so a
+      // malformed/empty upstream response can't wipe good last-known values.
+      if (Object.keys(prices).length > 0) {
+        priceCache.at = Date.now();
+        priceCache.value = prices;
+      }
+      return priceEnvelope();
+    } catch {
+      return priceEnvelope(); // timeout/network — never block the deposit UI
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   /** Pure lookup of the caller's current internal deposit wallet. */

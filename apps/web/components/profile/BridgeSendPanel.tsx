@@ -33,7 +33,7 @@ import {
   isStableSymbol,
 } from "@/lib/funds-assets";
 import type { FundsAsset, FundsQuoteResponse } from "@/lib/types";
-import { AmountPresets } from "./funds/AmountPresets";
+import { AmountSlider } from "./funds/AmountSlider";
 
 const EXPLORERS: Record<string, string> = {
   "137": "https://polygonscan.com",
@@ -90,6 +90,7 @@ export function BridgeSendPanel({
   asset,
   bridgeAddress,
   directDepositWallet,
+  usdPerUnit,
 }: {
   asset: FundsAsset;
   bridgeAddress: string;
@@ -98,6 +99,8 @@ export function BridgeSendPanel({
    * If the connected wallet holds USDC.e there, the send skips the bridge.
    */
   directDepositWallet?: string;
+  /** USD per token of the selected holding, for the amount slider's readout. */
+  usdPerUnit?: number | null;
 }) {
   const { address, chainId } = useAccount();
   const { switchChain, isPending: isSwitching } = useSwitchChain();
@@ -224,15 +227,18 @@ export function BridgeSendPanel({
 
   return (
     <div className="space-y-2">
-      <AmountPresets
+      <AmountSlider
         value={amount}
         onChange={setAmount}
-        max={
+        maxAmount={
           sendable && balance.data
             ? Number(formatUnits(balance.data.value, balance.data.decimals))
             : null
         }
         decimals={balance.data && balance.data.decimals > 8 ? 4 : 2}
+        unitLabel={sendSymbol}
+        usdPerUnit={usdPerUnit ?? null}
+        minUsd={useDirect ? null : asset.minCheckoutUsd}
         placeholder={
           useDirect
             ? "Amount (USDC.e)"

@@ -9,13 +9,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useBalance, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { parseUnits, formatUnits, erc20Abi } from "viem";
-import { Check, ExternalLink, X } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, ErrorNote, Spinner, cn } from "@/components/ui";
 import {
   useBridgeDepositAddresses,
   useDismissDeposit,
   useFundsAssets,
+  usePrices,
   useSavedDepositAddresses,
 } from "@/lib/queries";
 import { AmountPresets } from "./AmountPresets";
@@ -29,12 +30,13 @@ import {
   searchAssets,
   symbolGroup,
 } from "@/lib/funds-assets";
-import { useChainTokenBalances } from "@/lib/use-chain-balances";
+import { useWalletHoldings, type WalletHoldingsResult } from "@/lib/use-wallet-holdings";
+import type { WalletHolding } from "@/lib/funds-holdings";
 import { useActiveTransfers } from "@/lib/use-active-transfers";
 import { useFundsUi } from "@/lib/funds-ui";
 import { ChainIcon } from "@/components/wallet/ChainIcon";
 import { AnimatePresence } from "motion/react";
-import { FadeRise } from "@/components/motion/primitives";
+import { AnimatedHeight, FadeRise } from "@/components/motion/primitives";
 import { BridgeSendPanel } from "../BridgeSendPanel";
 import { CopyButton, QrBadge, errorText } from "./shared";
 import { TransferTracker } from "./TransferTracker";
@@ -59,6 +61,10 @@ export function TopUpPanel({
   const [customAssetId, setCustomAssetId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // Nothing is "chosen" until the user taps a holding or a manual asset — the
+  // send section stays hidden until then, so the panel opens holdings-first.
+  const [picked, setPicked] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
 
   const assetRows = useMemo(() => assets.data?.assets ?? [], [assets.data]);
 
@@ -78,18 +84,13 @@ export function TopUpPanel({
     : null;
   const activeGroup = customAsset ? symbolGroup(customAsset.token.symbol) : group;
   const chains = useMemo(() => chainsForGroup(assetRows, activeGroup), [assetRows, activeGroup]);
-  // Connected-wallet balances of this token per EVM chain — drives the
-  // "you have funds here" ordering + highlight, Polymarket-style.
-  const chainBalances = useChainTokenBalances(assetRows, activeGroup);
-  const orderedChains = useMemo(
-    () =>
-      [...chains].sort(
-        (a, b) =>
-          Number(Boolean(chainBalances[b.chainId]?.hasBalance)) -
-          Number(Boolean(chainBalances[a.chainId]?.hasBalance)),
-      ),
-    [chains, chainBalances],
-  );
+
+  // Connected-wallet holdings across the readable EVM chains — the primary,
+  // Polymarket-style "pick what you already have" list. Prices value volatile
+  // assets in USD (stablecoins are valued 1:1 inside the hook).
+  const prices = usePrices(bridgeEnabled);
+  const wallet = useWalletHoldings(assetRows, prices.data?.prices ?? {});
+
   const selectedChain =
     (chainChoice ? chains.find((chain) => chain.chainId === chainChoice) : null) ??
     defaultChainFor(chains, connectedChainId);
@@ -99,6 +100,17 @@ export function TopUpPanel({
       : selectedChain
         ? assetForSelection(assetRows, activeGroup, selectedChain.chainId)
         : null;
+
+  // Match the current selection back to a scanned holding so the send slider
+  // can show a live USD value for volatile assets.
+  const selectedHolding =
+    selectedAsset != null
+      ? (wallet.holdings.find((h) => h.asset.id === selectedAsset.id) ?? null)
+      : null;
+  const usdPerUnit =
+    selectedHolding && selectedHolding.usd != null && selectedHolding.amount > 0
+      ? selectedHolding.usd / selectedHolding.amount
+      : null;
 
   const familyAddresses = saved.data?.addresses ?? {};
   const bridgeAddress = selectedAsset ? (familyAddresses[selectedAsset.addressType] ?? null) : null;
@@ -143,160 +155,54 @@ export function TopUpPanel({
     setGroup(g);
     setChainChoice(asset.chainId);
     setCustomAssetId(resolved?.id === asset.id ? null : asset.id);
+    setPicked(true);
     setPickerOpen(false);
     setSearch("");
   };
 
+  const openManual = () => {
+    setManualOpen(true);
+    setPickerOpen(true);
+  };
+
   return (
     <div className="space-y-3">
-      {/* Token-first picker: the big five, then the whole catalog. */}
-      <div className="flex flex-wrap gap-1.5">
-        {popular.map((g) => (
-          <button
-            key={g}
-            type="button"
-            onClick={() => {
-              setGroup(g);
-              setCustomAssetId(null);
-              setChainChoice(null);
-              setPickerOpen(false);
-            }}
-            className={cn(
-              "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
-              !customAsset && activeGroup === g
-                ? "border-accent/60 bg-accent/10 text-fg"
-                : "border-border bg-surface-2 text-muted hover:text-fg",
-            )}
-          >
-            {g}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => setPickerOpen((v) => !v)}
-          className={cn(
-            "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
-            customAsset || pickerOpen
-              ? "border-accent/60 bg-accent/10 text-fg"
-              : "border-border bg-surface-2 text-muted hover:text-fg",
-          )}
-        >
-          {customAsset ? `${customAsset.token.symbol} ▾` : "More ▾"}
-        </button>
-      </div>
+      {/* Primary: what the connected wallet already holds, ready to deposit. */}
+      <HoldingsList
+        wallet={wallet}
+        selectedAssetId={picked ? (selectedAsset?.id ?? null) : null}
+        onPick={(h) => pickAsset(h.asset)}
+        onManual={openManual}
+      />
 
-      {pickerOpen ? (
-        <div className="rounded-md border border-border bg-surface-2 p-2">
-          <input
-            autoFocus
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={`Search ${assetRows.length} assets or chains…`}
-            className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
-          />
-          <ul className="mt-1.5 max-h-44 space-y-0.5 overflow-y-auto">
-            {searchResults.map((asset) => (
-              <li key={asset.id}>
-                <button
-                  type="button"
-                  onClick={() => pickAsset(asset)}
-                  className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-surface"
-                >
-                  <span className="min-w-0 truncate text-[13px] font-medium text-fg">
-                    {asset.token.symbol}
-                    <span className="ml-1.5 text-[11px] font-normal text-muted">
-                      {asset.token.name}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted">{asset.chainName}</span>
-                </button>
-              </li>
-            ))}
-            {searchResults.length === 0 ? (
-              <li className="px-2 py-1.5 text-[12px] text-muted">Nothing matches.</li>
-            ) : null}
-          </ul>
-        </div>
-      ) : null}
-
-      {orderedChains.length > 1 ? (
-        <div>
-          <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Network</div>
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-            {orderedChains.map((chain) => {
-              const bal = chainBalances[chain.chainId];
-              const active = selectedChain?.chainId === chain.chainId;
-              return (
-                <button
-                  key={chain.chainId}
-                  type="button"
-                  onClick={() => {
-                    setChainChoice(chain.chainId);
-                    setCustomAssetId(null);
-                  }}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
-                    active
-                      ? "border-accent/60 bg-accent/10"
-                      : "border-border bg-surface-2 hover:border-border-strong",
-                  )}
-                >
-                  <ChainIcon
-                    chainId={chain.chainId}
-                    name={chain.chainName}
-                    size={20}
-                    className="shrink-0"
-                  />
-                  <span className="min-w-0 flex-1 leading-tight">
-                    <span className="block truncate text-[12px] font-medium text-fg">
-                      {chain.chainName}
-                    </span>
-                    {bal?.hasBalance ? (
-                      <span className="tabular block text-[10px] text-pos">
-                        {bal.label} {activeGroup}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {selectedAsset && bridgeAddress ? (
-        <div className="rounded-md border border-border bg-surface-2 p-3">
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] uppercase tracking-wide text-muted">
-                  Deposit {selectedAsset.token.symbol} on {selectedAsset.chainName}
-                </span>
+      {/* Selected asset → in-app send with the amount slider. */}
+      {picked && selectedAsset ? (
+        bridgeAddress ? (
+          <div className="space-y-2 rounded-md border border-border bg-surface-2 p-3">
+            <div className="flex items-center gap-2">
+              <ChainIcon chainId={selectedAsset.chainId} name={selectedAsset.chainName} size={18} />
+              <span className="text-[12px] font-medium text-fg">
+                {symbolGroup(selectedAsset.token.symbol)} · {selectedAsset.chainName}
+              </span>
+              <span className="ml-auto">
                 <Badge tone="neutral">min ${selectedAsset.minCheckoutUsd.toFixed(0)}</Badge>
-              </div>
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <span className="flex-1 break-all font-mono text-[12px] leading-relaxed text-fg">
-                  {bridgeAddress}
-                </span>
-                <CopyButton text={bridgeAddress} />
-              </div>
-              <p className="mt-1.5 text-[11px] leading-snug text-muted">
-                Send from any wallet or exchange — it converts automatically and lands in your
-                balance in a few minutes. This address is yours and won&apos;t change.
-              </p>
+              </span>
             </div>
-            <QrBadge value={bridgeAddress} />
+            <BridgeSendPanel
+              key={selectedAsset.id}
+              asset={selectedAsset}
+              bridgeAddress={bridgeAddress}
+              directDepositWallet={isDirectUsdc ? depositWalletAddress : undefined}
+              usdPerUnit={usdPerUnit}
+            />
           </div>
-        </div>
-      ) : create.isPending || (needsCreate && !create.isError) ? (
-        // Spinner only while the create is actually in flight (or about to
-        // auto-fire). A failed create falls through to the error + Retry below
-        // instead of hanging here forever.
-        <Spinner label="Preparing your deposit address…" />
-      ) : selectedAsset && saved.isSuccess && !loadError ? (
-        <ErrorNote
-          message={`No ${selectedAsset.chainName} deposit address is available yet — try again in a moment.`}
-        />
+        ) : create.isPending || (needsCreate && !create.isError) ? (
+          <Spinner label="Preparing your deposit address…" />
+        ) : saved.isSuccess && !loadError ? (
+          <ErrorNote
+            message={`No ${selectedAsset.chainName} deposit address is available yet — try again in a moment.`}
+          />
+        ) : null
       ) : null}
 
       {/* Live inbound transfers: success celebration + staged trackers. */}
@@ -322,14 +228,159 @@ export function TopUpPanel({
         ))}
       </AnimatePresence>
 
-      {selectedAsset && bridgeAddress ? (
-        <BridgeSendPanel
-          key={selectedAsset.id}
-          asset={selectedAsset}
-          bridgeAddress={bridgeAddress}
-          directDepositWallet={isDirectUsdc ? depositWalletAddress : undefined}
-        />
-      ) : null}
+      {/* Secondary, opt-in: manual deposit address + the full asset/chain
+          catalog (Solana/BTC and anything the wallet doesn't hold). */}
+      <div className="overflow-hidden rounded-md border border-border">
+        <button
+          type="button"
+          onClick={() => setManualOpen((v) => !v)}
+          aria-expanded={manualOpen}
+          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12px] text-muted hover:text-fg"
+        >
+          <span>Deposit manually · other assets &amp; chains</span>
+          <ChevronDown
+            size={14}
+            className={cn("shrink-0 transition-transform", manualOpen && "rotate-180")}
+          />
+        </button>
+        <AnimatedHeight>
+          {manualOpen ? (
+            <div className="space-y-3 border-t border-border p-3">
+              {/* Token-first picker: the big five, then the whole catalog. */}
+              <div className="flex flex-wrap gap-1.5">
+                {popular.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => {
+                      setGroup(g);
+                      setCustomAssetId(null);
+                      setChainChoice(null);
+                      setPicked(true);
+                      setPickerOpen(false);
+                    }}
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
+                      !customAsset && activeGroup === g
+                        ? "border-accent/60 bg-accent/10 text-fg"
+                        : "border-border bg-surface-2 text-muted hover:text-fg",
+                    )}
+                  >
+                    {g}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen((v) => !v)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
+                    customAsset || pickerOpen
+                      ? "border-accent/60 bg-accent/10 text-fg"
+                      : "border-border bg-surface-2 text-muted hover:text-fg",
+                  )}
+                >
+                  {customAsset ? `${customAsset.token.symbol} ▾` : "More ▾"}
+                </button>
+              </div>
+
+              {pickerOpen ? (
+                <div className="rounded-md border border-border bg-surface-2 p-2">
+                  <input
+                    autoFocus
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder={`Search ${assetRows.length} assets or chains…`}
+                    className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-fg placeholder:text-muted focus:border-accent/50 focus:outline-none"
+                  />
+                  <ul className="mt-1.5 max-h-44 space-y-0.5 overflow-y-auto">
+                    {searchResults.map((asset) => (
+                      <li key={asset.id}>
+                        <button
+                          type="button"
+                          onClick={() => pickAsset(asset)}
+                          className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-surface"
+                        >
+                          <span className="min-w-0 truncate text-[13px] font-medium text-fg">
+                            {asset.token.symbol}
+                            <span className="ml-1.5 text-[11px] font-normal text-muted">
+                              {asset.token.name}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted">{asset.chainName}</span>
+                        </button>
+                      </li>
+                    ))}
+                    {searchResults.length === 0 ? (
+                      <li className="px-2 py-1.5 text-[12px] text-muted">Nothing matches.</li>
+                    ) : null}
+                  </ul>
+                </div>
+              ) : null}
+
+              {chains.length > 1 ? (
+                <div>
+                  <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Network</div>
+                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                    {chains.map((chain) => {
+                      const active = selectedChain?.chainId === chain.chainId;
+                      return (
+                        <button
+                          key={chain.chainId}
+                          type="button"
+                          onClick={() => {
+                            setChainChoice(chain.chainId);
+                            setCustomAssetId(null);
+                            setPicked(true);
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
+                            active
+                              ? "border-accent/60 bg-accent/10"
+                              : "border-border bg-surface-2 hover:border-border-strong",
+                          )}
+                        >
+                          <ChainIcon
+                            chainId={chain.chainId}
+                            name={chain.chainName}
+                            size={20}
+                            className="shrink-0"
+                          />
+                          <span className="block min-w-0 flex-1 truncate text-[12px] font-medium text-fg">
+                            {chain.chainName}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedAsset && bridgeAddress ? (
+                <div className="rounded-md border border-border bg-surface p-3">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[10px] uppercase tracking-wide text-muted">
+                        Deposit {selectedAsset.token.symbol} on {selectedAsset.chainName}
+                      </span>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span className="flex-1 break-all font-mono text-[12px] leading-relaxed text-fg">
+                          {bridgeAddress}
+                        </span>
+                        <CopyButton text={bridgeAddress} />
+                      </div>
+                      <p className="mt-1.5 text-[11px] leading-snug text-muted">
+                        Send from any wallet or exchange — it converts automatically and lands in
+                        your balance in a few minutes. This address is yours and won&apos;t change.
+                      </p>
+                    </div>
+                    <QrBadge value={bridgeAddress} />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </AnimatedHeight>
+      </div>
 
       {loadError ? (
         <div className="space-y-2">
@@ -341,6 +392,84 @@ export function TopUpPanel({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** Compact token amount: 2 dp for ≥1, 4 dp for smaller balances. */
+const formatAmount = (amount: number): string =>
+  amount >= 1 ? amount.toFixed(2) : amount.toFixed(4);
+
+/**
+ * The connected wallet's deposit-ready balances (asset · chain · amount · USD),
+ * sorted by value — the primary "pick what you have" list. Handles the
+ * loading / not-connected / nothing-held states with a nudge to the manual
+ * deposit disclosure.
+ */
+function HoldingsList({
+  wallet,
+  selectedAssetId,
+  onPick,
+  onManual,
+}: {
+  wallet: WalletHoldingsResult;
+  selectedAssetId: string | null;
+  onPick: (holding: WalletHolding) => void;
+  onManual: () => void;
+}) {
+  if (wallet.isLoading) return <Spinner label="Reading your wallet…" />;
+
+  if (!wallet.isConnected) {
+    return (
+      <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted">
+        Connect your wallet to see the assets you can deposit.
+      </p>
+    );
+  }
+
+  if (wallet.holdings.length === 0) {
+    return (
+      <div className="space-y-2 rounded-md border border-dashed border-border px-3 py-5 text-center">
+        <p className="text-[12px] text-muted">
+          No deposit-ready balances found in your wallet on the supported chains.
+        </p>
+        <Button type="button" size="sm" variant="outline" onClick={onManual}>
+          Deposit manually
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted">Your assets</div>
+      {wallet.holdings.map((h) => {
+        const active = selectedAssetId === h.asset.id;
+        return (
+          <button
+            key={h.key}
+            type="button"
+            onClick={() => onPick(h)}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors",
+              active
+                ? "border-accent/60 bg-accent/10"
+                : "border-border bg-surface-2 hover:border-border-strong",
+            )}
+          >
+            <ChainIcon chainId={h.chainId} name={h.chainName} size={26} className="shrink-0" />
+            <span className="min-w-0 flex-1 leading-tight">
+              <span className="block truncate text-[13px] font-semibold text-fg">{h.group}</span>
+              <span className="tabular block truncate text-[11px] text-muted">
+                {formatAmount(h.amount)} {h.group} · {h.chainName}
+              </span>
+            </span>
+            <span className="tabular shrink-0 text-right text-[13px] font-semibold text-fg">
+              {h.usd != null ? `$${h.usd.toFixed(2)}` : "—"}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

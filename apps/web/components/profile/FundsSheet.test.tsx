@@ -18,11 +18,22 @@ const wagmiState = {
     address: undefined as `0x${string}` | undefined,
     chainId: undefined as number | undefined,
   },
+  // chainId → allow-failure multicall results (holdings scan), aligned to
+  // evmTokensForChain's order. Empty → the wallet holds nothing readable.
+  reads: {} as Record<number, { status: string; result: bigint }[]>,
 };
 
 vi.mock("wagmi", () => ({
   useAccount: () => wagmiState.account,
-  useBalance: () => ({ data: undefined, refetch: vi.fn() }),
+  useBalance: () => ({ data: { value: 5_000000n, decimals: 6 }, refetch: vi.fn() }),
+  useReadContracts: (cfg: {
+    contracts?: { chainId?: number }[];
+    query?: { enabled?: boolean };
+  }) => {
+    if (!cfg.query?.enabled) return { data: undefined, isLoading: false };
+    const chainId = cfg.contracts?.[0]?.chainId ?? 0;
+    return { data: wagmiState.reads[chainId], isLoading: false };
+  },
   useWriteContract: () => ({
     writeContract: vi.fn(),
     data: undefined,
@@ -101,6 +112,7 @@ vi.mock("@/lib/queries", () => ({
     isLoading: false,
     error: null,
   }),
+  usePrices: () => ({ data: { prices: { ETH: 3000, POL: 0.5, BTC: 95000 } }, isLoading: false }),
   useSavedDepositAddresses: (enabled = true) => ({
     data: enabled ? queryState.saved : undefined,
     isSuccess: enabled,
@@ -129,6 +141,10 @@ const sheet = () => (
   />
 );
 
+/** Reveal the secondary manual deposit disclosure (chips, catalog, address). */
+const openManual = () =>
+  fireEvent.click(screen.getByRole("button", { name: /other assets/i }));
+
 beforeEach(() => {
   queryState.flags = { bridgeFunding: true, walletWithdraw: false, bridgeWithdrawals: false };
   queryState.saved = {
@@ -138,18 +154,59 @@ beforeEach(() => {
   };
   queryState.createMutation = inertMutation();
   wagmiState.account = { address: undefined, chainId: undefined };
+  wagmiState.reads = {};
 });
 
-describe("FundsSheet top-up (bridge-first)", () => {
-  it("renders popular token chips and defaults to USDC on Ethereum with QR", () => {
+describe("FundsSheet top-up (holdings-first)", () => {
+  it("leads with a prompt to connect, not the manual address", () => {
     render(sheet());
-    for (const chip of ["USDC", "USDT", "ETH", "SOL", "BTC"]) {
-      expect(screen.getByRole("button", { name: chip })).toBeInTheDocument();
-    }
-    expect(screen.getByText("Deposit USDC on Ethereum")).toBeInTheDocument();
-    expect(screen.getByText(ADDRESSES.evm)).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Deposit address QR code" })).toBeInTheDocument();
-    expect(screen.getByText("min $5")).toBeInTheDocument();
+    expect(
+      screen.getByText("Connect your wallet to see the assets you can deposit."),
+    ).toBeInTheDocument();
+    // The manual address/QR is opt-in, not front-and-centre.
+    expect(screen.queryByText("Deposit USDC on Ethereum")).toBeNull();
+    expect(screen.queryByText(ADDRESSES.evm)).toBeNull();
+  });
+
+  it("lists connected-wallet holdings with USD value, sorted by value", () => {
+    wagmiState.account = { address: "0x1111111111111111111111111111111111111111", chainId: 137 };
+    // Polygon EVM scan order: [USDC.e, USDC] → holds 5 USDC.e.
+    wagmiState.reads = {
+      137: [
+        { status: "success", result: 5_000000n },
+        { status: "success", result: 0n },
+      ],
+    };
+    render(sheet());
+    expect(screen.getByText("Your assets")).toBeInTheDocument();
+    expect(screen.getByText("5.00 USDC · Polygon")).toBeInTheDocument();
+    // No amount slider until a holding is chosen.
+    expect(screen.queryByRole("slider")).toBeNull();
+  });
+
+  it("tapping a holding reveals the amount slider send flow", () => {
+    wagmiState.account = { address: "0x1111111111111111111111111111111111111111", chainId: 137 };
+    wagmiState.reads = {
+      137: [
+        { status: "success", result: 5_000000n },
+        { status: "success", result: 0n },
+      ],
+    };
+    render(sheet());
+    fireEvent.click(screen.getByText("5.00 USDC · Polygon"));
+    expect(screen.getByRole("slider")).toBeInTheDocument();
+    expect(screen.getByText("USDC · Polygon")).toBeInTheDocument(); // send-section header
+  });
+
+  it("shows a nudge to deposit manually when the wallet holds nothing readable", () => {
+    wagmiState.account = { address: "0x1111111111111111111111111111111111111111", chainId: 1 };
+    wagmiState.reads = {}; // nothing held
+    render(sheet());
+    expect(
+      screen.getByText(/No deposit-ready balances found in your wallet/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Deposit manually" }));
+    expect(screen.getByRole("button", { name: "USDC" })).toBeInTheDocument();
   });
 
   it("never shows staging jargon or leads with USDC.e", () => {
@@ -157,15 +214,30 @@ describe("FundsSheet top-up (bridge-first)", () => {
     expect(screen.queryByText(/staged behind a server flag/i)).toBeNull();
     expect(screen.queryByText(/USDC\.e/)).toBeNull();
   });
+});
+
+describe("FundsSheet manual deposit disclosure", () => {
+  it("reveals popular chips + the default USDC-on-Ethereum address and QR", () => {
+    render(sheet());
+    openManual();
+    for (const chip of ["USDC", "USDT", "ETH", "SOL", "BTC"]) {
+      expect(screen.getByRole("button", { name: chip })).toBeInTheDocument();
+    }
+    expect(screen.getByText("Deposit USDC on Ethereum")).toBeInTheDocument();
+    expect(screen.getByText(ADDRESSES.evm)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Deposit address QR code" })).toBeInTheDocument();
+  });
 
   it("defaults the network to the connected wallet's chain when supported", () => {
     wagmiState.account = { address: "0xabc0000000000000000000000000000000000abc", chainId: 8453 };
     render(sheet());
+    openManual();
     expect(screen.getByText("Deposit USDC on Base")).toBeInTheDocument();
   });
 
   it("switches family address when picking a non-EVM token", () => {
     render(sheet());
+    openManual();
     fireEvent.click(screen.getByRole("button", { name: "SOL" }));
     expect(screen.getByText("Deposit SOL on Solana")).toBeInTheDocument();
     expect(screen.getByText(ADDRESSES.svm)).toBeInTheDocument();
@@ -173,14 +245,15 @@ describe("FundsSheet top-up (bridge-first)", () => {
 
   it("renders chain-logo buttons and switches network on click", () => {
     render(sheet());
+    openManual();
     expect(screen.getByText("Deposit USDC on Ethereum")).toBeInTheDocument();
-    // Chain picker renders a labelled logo button per chain carrying the token.
     fireEvent.click(screen.getByRole("button", { name: /Base logo Base/ }));
     expect(screen.getByText("Deposit USDC on Base")).toBeInTheDocument();
   });
 
   it("finds exotic routes through the More search (USDT on Tron)", () => {
     render(sheet());
+    openManual();
     fireEvent.click(screen.getByRole("button", { name: "More ▾" }));
     fireEvent.change(screen.getByPlaceholderText(/Search .* assets/), {
       target: { value: "tron" },
@@ -199,6 +272,9 @@ describe("FundsSheet top-up (bridge-first)", () => {
     };
     render(sheet());
     expect(queryState.createMutation.mutate).toHaveBeenCalledTimes(1);
+    // The "preparing address" spinner appears once an asset is chosen.
+    openManual();
+    fireEvent.click(screen.getByRole("button", { name: "USDC" }));
     expect(screen.getByText("Preparing your deposit address…")).toBeInTheDocument();
   });
 

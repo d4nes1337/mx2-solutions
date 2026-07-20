@@ -19,7 +19,7 @@ import { useActiveTransfers } from "@/lib/use-active-transfers";
 import { ApiError } from "@/lib/api";
 import { ChainIcon } from "@/components/wallet/ChainIcon";
 import { AnimatedHeight, FadeRise } from "@/components/motion/primitives";
-import { AmountPresets } from "./AmountPresets";
+import { AmountSlider } from "./AmountSlider";
 import { CopyButton } from "./shared";
 import { TransferTracker } from "./TransferTracker";
 import { TransferSuccess } from "./TransferSuccess";
@@ -174,13 +174,16 @@ export function WithdrawPanel({
         </div>
       ) : null}
 
-      <AmountPresets
+      <AmountSlider
         value={amount}
         onChange={(next) => {
           setAmount(next);
           setConfirming(false);
         }}
-        max={availableUsd}
+        maxAmount={availableUsd}
+        unitLabel="USD"
+        decimals={2}
+        minUsd={1}
       />
 
       <AnimatedHeight>
