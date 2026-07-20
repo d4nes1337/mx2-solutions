@@ -10,7 +10,17 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Empty, LiveDot, Segmented, Skeleton, cn } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  LiveDot,
+  Segmented,
+  Skeleton,
+  cn,
+} from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
 import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/smart-orders/doc";
@@ -448,7 +458,10 @@ export function StrategyDetailShell() {
           {row.supersedes ? (
             <>
               Edited version of an earlier strategy —{" "}
-              <Link href={`/smart-orders/${row.supersedes}`} className="text-accent hover:underline">
+              <Link
+                href={`/smart-orders/${row.supersedes}`}
+                className="text-accent hover:underline"
+              >
                 view previous version
               </Link>
               . Spend caps carried over.

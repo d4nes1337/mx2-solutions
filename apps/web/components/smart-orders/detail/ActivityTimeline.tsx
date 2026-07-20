@@ -135,11 +135,19 @@ const eventEntry = (e: TimelineEvent): Entry | null => {
         tone: "brand",
         label: "Auto-retry scheduled",
         ...(typeof meta["until"] === "string"
-          ? { detail: `will execute when funds arrive (until ${timeLabel(new Date(meta["until"] as string).getTime())})` }
+          ? {
+              detail: `will execute when funds arrive (until ${timeLabel(new Date(meta["until"] as string).getTime())})`,
+            }
           : {}),
       };
     case "rule.execution.retried":
-      return { key: e.id, at, icon: Play, tone: "brand", label: "Auto-retry — re-verifying and executing" };
+      return {
+        key: e.id,
+        at,
+        icon: Play,
+        tone: "brand",
+        label: "Auto-retry — re-verifying and executing",
+      };
     case "rule.execution.retry_abandoned":
       return {
         key: e.id,

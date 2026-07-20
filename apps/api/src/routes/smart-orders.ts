@@ -382,7 +382,8 @@ export const registerSmartOrdersRoutes = (
     if (!f.conditionalLiveExecution) {
       blockers.push({
         code: "live_execution_disabled",
-        detail: "Unattended execution is disabled on this server — triggers wait for your confirmation.",
+        detail:
+          "Unattended execution is disabled on this server — triggers wait for your confirmation.",
       });
     }
     if (!f.liveTrading) {
@@ -631,7 +632,9 @@ export const registerSmartOrdersRoutes = (
     const includeArchived = (req.query as Record<string, string>)["includeArchived"] === "1";
     const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100, { includeArchived });
     return {
-      strategies: rows.map((r) => serializeStrategy(r, deps.config.features.conditionalLiveExecution)),
+      strategies: rows.map((r) =>
+        serializeStrategy(r, deps.config.features.conditionalLiveExecution),
+      ),
     };
   });
 

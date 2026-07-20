@@ -48,8 +48,7 @@ export const nextAction = (
   // The authorize rung (owner beta finding): a funded account whose deposit
   // wallet lacks the exchange allowances can't trade — and previously NOTHING
   // in the UI said so. Sits before ready/delegate so it can never be skipped.
-  if (account.kind === "internal_privy" && allowancesClean === false)
-    return "bootstrap_allowances";
+  if (account.kind === "internal_privy" && allowancesClean === false) return "bootstrap_allowances";
   if (account.status === "ready" && credentialsReady) return null;
   if (account.status === "needs_delegation") return "delegate";
   if (!credentialsReady) return "setup_credentials";

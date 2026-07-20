@@ -55,7 +55,9 @@ export function AmountPresets({
           inputMode="decimal"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? (max !== null ? `Amount (max $${max.toFixed(2)})` : "Amount (USD)")}
+          placeholder={
+            placeholder ?? (max !== null ? `Amount (max $${max.toFixed(2)})` : "Amount (USD)")
+          }
           min="0"
           step="1"
           disabled={disabled}

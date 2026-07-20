@@ -502,9 +502,7 @@ function DirectPolygonTopUp({ depositWalletAddress }: { depositWalletAddress: st
                 value={amount}
                 onChange={setAmount}
                 max={
-                  connectedBalance.data
-                    ? Number(formatUnits(connectedBalance.data.value, 6))
-                    : null
+                  connectedBalance.data ? Number(formatUnits(connectedBalance.data.value, 6)) : null
                 }
                 placeholder="Amount (USDC)"
               />

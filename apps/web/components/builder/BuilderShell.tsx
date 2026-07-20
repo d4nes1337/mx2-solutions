@@ -397,21 +397,24 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // canvas moves to a fresh blank draft, so returning to the builder doesn't
   // resurrect already-armed work.
   const save = () => {
-    create.mutate({ ...compileDoc(doc), ...(editOf ? { supersedes: editOf } : {}) }, {
-      onSuccess: (created) => {
-        // Remember the armed caps so the next auto strategy starts prefilled.
-        if (doc.action.kind === "order" && doc.action.execution === "auto") {
-          saveLimitPrefs(doc.limits);
-        }
-        const consumedId = useBuilderStore.getState().draftId;
-        useBuilderStore.getState().spawnDraft();
-        if (consumedId) {
-          markDraftConsumedLocal(consumedId, created.id);
-          void markDraftConsumedOnServer(consumedId, created.id);
-        }
-        router.push("/smart-orders");
+    create.mutate(
+      { ...compileDoc(doc), ...(editOf ? { supersedes: editOf } : {}) },
+      {
+        onSuccess: (created) => {
+          // Remember the armed caps so the next auto strategy starts prefilled.
+          if (doc.action.kind === "order" && doc.action.execution === "auto") {
+            saveLimitPrefs(doc.limits);
+          }
+          const consumedId = useBuilderStore.getState().draftId;
+          useBuilderStore.getState().spawnDraft();
+          if (consumedId) {
+            markDraftConsumedLocal(consumedId, created.id);
+            void markDraftConsumedOnServer(consumedId, created.id);
+          }
+          router.push("/smart-orders");
+        },
       },
-    });
+    );
   };
 
   const saveError =
@@ -542,8 +545,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
                           <Link href="/wallet" className="text-accent hover:underline">
                             Arima trading wallet
                           </Link>{" "}
-                          within the limits above. If the wallet isn&apos;t ready, triggers wait
-                          for your signature instead.
+                          within the limits above. If the wallet isn&apos;t ready, triggers wait for
+                          your signature instead.
                         </p>
                       )
                     ) : null}

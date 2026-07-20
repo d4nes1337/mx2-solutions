@@ -513,10 +513,7 @@ export const createBridgeStore = (db: Database): BridgeStore => {
           updatedAt: sql`now()`,
         })
         .where(
-          and(
-            eq(bridgeDeposits.id, depositId),
-            notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL),
-          ),
+          and(eq(bridgeDeposits.id, depositId), notInArray(bridgeDeposits.state, DEPOSIT_TERMINAL)),
         )
         .returning();
       return row ?? null;

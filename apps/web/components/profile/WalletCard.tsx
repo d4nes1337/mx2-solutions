@@ -80,7 +80,11 @@ function StatusBadge({ account }: { account: TradingAccount }) {
   // out — say so instead of a reassuring "Funded" (owner beta finding).
   if (account.nextAction === "bootstrap_allowances")
     return (
-      <Badge tone="warn" dot title="Press “Authorize trading” to grant the one-time exchange approvals">
+      <Badge
+        tone="warn"
+        dot
+        title="Press “Authorize trading” to grant the one-time exchange approvals"
+      >
         Needs authorization
       </Badge>
     );

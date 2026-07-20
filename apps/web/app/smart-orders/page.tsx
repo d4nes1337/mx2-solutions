@@ -95,8 +95,7 @@ export default function SmartOrdersPage() {
       {signedIn &&
       (autoReadiness.data?.blockers.length ?? 0) > 0 &&
       liveRows.some(
-        (r) =>
-          r.definitionV2.action.kind === "order" && r.definitionV2.action.execution === "auto",
+        (r) => r.definitionV2.action.kind === "order" && r.definitionV2.action.execution === "auto",
       ) ? (
         <div className="rounded-lg border border-warn/30 bg-warn/10 p-3 text-[12px] leading-snug text-warn">
           <p className="font-semibold">

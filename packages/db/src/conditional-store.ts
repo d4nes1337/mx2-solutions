@@ -383,9 +383,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
     return db
       .select()
       .from(conditionalRules)
-      .where(
-        and(eq(conditionalRules.status, "EXECUTING"), lt(conditionalRules.updatedAt, cutoff)),
-      );
+      .where(and(eq(conditionalRules.status, "EXECUTING"), lt(conditionalRules.updatedAt, cutoff)));
   },
 
   async revertExecuting(id) {
@@ -601,12 +599,7 @@ export const createTriggerStore = (db: Database): TriggerStore => ({
     return db
       .select()
       .from(ruleTriggers)
-      .where(
-        and(
-          eq(ruleTriggers.status, "awaiting_user"),
-          lt(ruleTriggers.autoRetryUntil, now),
-        ),
-      )
+      .where(and(eq(ruleTriggers.status, "awaiting_user"), lt(ruleTriggers.autoRetryUntil, now)))
       .orderBy(desc(ruleTriggers.triggeredAt))
       .limit(limit);
   },

@@ -86,9 +86,7 @@ export function QuickEditSheet({
   };
 
   const applyError =
-    create.error instanceof ApiError || create.error instanceof Error
-      ? create.error.message
-      : null;
+    create.error instanceof ApiError || create.error instanceof Error ? create.error.message : null;
 
   return (
     <SheetShell

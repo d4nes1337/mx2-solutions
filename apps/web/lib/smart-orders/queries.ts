@@ -223,9 +223,7 @@ export function useStrategyDisarm() {
 export function useCreateStrategy() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (
-      def: StrategyDefinition & { expiresAt?: string | null; supersedes?: string },
-    ) => {
+    mutationFn: (def: StrategyDefinition & { expiresAt?: string | null; supersedes?: string }) => {
       const { expiresAtMs, version, ...rest } = def;
       void version;
       return api.post<StrategyRow>("/api/smart-orders", {
