@@ -24,6 +24,8 @@ import {
   createNotificationChannelStore,
   createLinkCodeStore,
   createSignLinkTokenStore,
+  createInvitationStore,
+  createWaitlistStore,
 } from "@mx2/db";
 import {
   createGammaClient,
@@ -68,6 +70,8 @@ const main = async (): Promise<void> => {
   const notificationChannels = createNotificationChannelStore(dbHandle.db);
   const linkCodes = createLinkCodeStore(dbHandle.db);
   const signTokens = createSignLinkTokenStore(dbHandle.db);
+  const invitations = createInvitationStore(dbHandle.db);
+  const waitlistStore = createWaitlistStore(dbHandle.db);
   const discordOauth =
     config.features.discordBot &&
     config.notifications.discordClientId &&
@@ -125,6 +129,8 @@ const main = async (): Promise<void> => {
     notificationChannels,
     linkCodes,
     signTokens,
+    invitations,
+    waitlistStore,
     ...(discordOauth ? { discordOauth } : {}),
     triggerStore,
     privyWallets,

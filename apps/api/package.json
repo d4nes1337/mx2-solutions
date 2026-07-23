@@ -7,7 +7,8 @@
     "build": "tsc -b",
     "dev": "tsx watch --env-file-if-exists=../../.env src/server.ts",
     "start": "node --env-file-if-exists=../../.env dist/server.js",
-    "check-live-readiness": "tsx --env-file-if-exists=../../.env.production src/scripts/check-live-readiness.ts"
+    "check-live-readiness": "tsx --env-file-if-exists=../../.env.production src/scripts/check-live-readiness.ts",
+    "verify-builder-attribution": "tsx --env-file-if-exists=../../.env src/scripts/verify-builder-attribution.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

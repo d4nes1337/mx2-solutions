@@ -13,7 +13,7 @@ import type {
   TradingAccountStore,
   TradingAccountClobCredentialStore,
 } from "@mx2/db";
-import { decryptCredentials } from "@mx2/core";
+import { decryptCredentials, isNonZeroBuilderCode } from "@mx2/core";
 import { submit1271Order, type L2Credentials } from "@mx2/polymarket-client";
 import type { AuthenticatedClobClient } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
@@ -253,6 +253,14 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       if (!deps.config.features.privySigning) {
         return skip(rule, triggerId, "privy_signing_disabled");
       }
+      // Attribution is release-critical (brief §7.2): an auto-executed order
+      // must carry the configured non-zero builder code. Config fail-closes at
+      // startup when live execution is on without one, so this is a
+      // defensive fail-closed skip.
+      const builderCode = deps.config.polymarket.builderCode;
+      if (!isNonZeroBuilderCode(builderCode)) {
+        return skip(rule, triggerId, "builder_code_unconfigured");
+      }
       const accounts = await deps.tradingAccounts.listByOwner(wallet);
       const account = accounts.find(
         (a) =>
@@ -369,6 +377,8 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
           tickSize: action.tickSize ?? "0.01",
           negRisk: action.negRisk ?? false,
           orderType: action.orderType,
+          // Builder attribution (verified inside build1271SignedOrder).
+          builderCode,
           ...(action.postOnly !== undefined ? { postOnly: action.postOnly } : {}),
           ...(action.orderType === "GTD" && action.expiresAfterMs !== undefined
             ? // Wire expiration compensates Polymarket's ~1-min early expiry (ADR-0013).

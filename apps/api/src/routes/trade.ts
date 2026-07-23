@@ -1,6 +1,7 @@
 import { getAddress } from "viem";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppConfig } from "@mx2/config";
+import { builderCodesEqual, isNonZeroBuilderCode } from "@mx2/core";
 import type {
   AuditStore,
   SessionStore,
@@ -480,6 +481,20 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         };
       }
 
+      // Builder attribution is a release-critical invariant (brief §7): every
+      // submitted order must carry the configured non-zero builder code. Config
+      // fail-closes at startup when live trading is on without one, so reaching
+      // here without a valid code is a server misconfiguration — fail closed.
+      const builderCode = deps.config.polymarket.builderCode;
+      if (!isNonZeroBuilderCode(builderCode)) {
+        reply.code(503);
+        return {
+          error: "ORDER_BUILDER_UNCONFIGURED",
+          message:
+            "Trading is enabled without a valid builder attribution code — server misconfiguration.",
+        };
+      }
+
       // Obtain a signed CLOB order. The selected trading account, not a global
       // feature flag, decides whether a browser signature is required.
       let signedOrder: SignedClobOrder;
@@ -559,6 +574,9 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
               negRisk,
               orderType,
               postOnly,
+              // Attribution: the SDK writes this into the signed `builder`
+              // field and build1271SignedOrder verifies it survived signing.
+              builderCode,
               ...(expiresAtSec !== undefined ? { expiresAtSec } : {}),
             },
           )) as unknown as SignedClobOrder;
@@ -607,6 +625,26 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
               "Signed order does not match the selected trading account signer, funder, or signature type.",
           };
         }
+        // Attribution integrity (brief §7.1): a browser-signed order must carry
+        // the exact configured builder code. A client that stripped or replaced
+        // it is rejected BEFORE any intent is created or order submitted.
+        if (!builderCodesEqual(signedOrder.builder, builderCode)) {
+          await deps.auditStore.emit({
+            actor: user.walletAddress,
+            action: "order.builder_mismatch",
+            subject: `idem:${idempotencyKey}`,
+            metadata: {
+              tradingAccountId: account.id,
+              accountKind: account.kind,
+              signedBuilder: signedOrder.builder,
+            },
+          });
+          reply.code(400);
+          return {
+            error: "ORDER_BUILDER_MISMATCH",
+            message: "Signed order is missing or carries the wrong builder attribution code.",
+          };
+        }
         tokenId = signedOrder.tokenId;
         side = signedOrder.side === "BUY" || signedOrder.side === 0 ? "BUY" : "SELL";
         funder = signedOrder.maker;
@@ -632,7 +670,12 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         signatureType: account.signatureType,
         signingMode: account.signingMode,
         metadata: {
-          builderCode: deps.config.polymarket.builderCode,
+          // Record BOTH the configured code and the ACTUAL signed builder field
+          // (not just the intent we hoped for) so the audit trail never claims
+          // attribution the on-chain order does not carry.
+          builderCode,
+          signedBuilder: signedOrder.builder,
+          builderMatch: builderCodesEqual(signedOrder.builder, builderCode),
           tradingAccountKind: account.kind,
           tradingAccountLabel: account.label,
         },
@@ -651,6 +694,9 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
           orderType,
           funder,
           tradingAccountId: account.id,
+          accountKind: account.kind,
+          signedBuilder: signedOrder.builder,
+          builderMatch: builderCodesEqual(signedOrder.builder, builderCode),
         },
       });
 
@@ -691,7 +737,16 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         actor: user.walletAddress,
         action: "order.submitted",
         subject: `intent:${intent.id}`,
-        metadata: { clobOrderId, status: submitResult.value.status, tradingAccountId: account.id },
+        metadata: {
+          clobOrderId,
+          status: submitResult.value.status,
+          tradingAccountId: account.id,
+          // Builder attribution observability (brief §7.3): account kind +
+          // whether the SIGNED order carried the configured code.
+          accountKind: account.kind,
+          signedBuilder: signedOrder.builder,
+          builderMatch: builderCodesEqual(signedOrder.builder, builderCode),
+        },
       });
 
       reply.code(201);

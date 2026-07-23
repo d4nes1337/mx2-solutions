@@ -335,6 +335,7 @@ const buildRulesApp = (opts: {
       revokedAt: null,
     }),
     revoke: async () => {},
+    revokeAllForWallet: async () => 0,
   };
   const marketSnapshots: MarketSnapshotStore = {
     upsert: async () => {
@@ -669,6 +670,93 @@ describe("conditional rules routes", () => {
       payload: {},
     });
     expect(confirm2.json().idempotent).toBe(true);
+    await app.close();
+  });
+});
+
+// ── Action Center batch ──────────────────────────────────────────────────────
+
+describe("GET /api/action-center", () => {
+  it("READY_TO_SIGN when fresh data still satisfies the condition", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: snapshot() });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      actionableCount: number;
+      items: { triggerId: string; state: string; action: { side: string; sizeShares: number } }[];
+    };
+    expect(body.actionableCount).toBe(1);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]!.triggerId).toBe("trig-1");
+    expect(body.items[0]!.state).toBe("READY_TO_SIGN");
+    expect(body.items[0]!.action).toMatchObject({ side: "BUY", sizeShares: 100 });
+    await app.close();
+  });
+
+  it("PRICE_MOVED when fresh data no longer satisfies the condition", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    // Fresh book, but every ask is above the 0.5 threshold → condition fails.
+    const moved = snapshot({
+      asks: [
+        { price: "0.55", size: "1000" },
+        { price: "0.56", size: "1000" },
+        { price: "0.57", size: "1000" },
+      ],
+    });
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: moved });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    const body = res.json() as { actionableCount: number; items: { state: string }[] };
+    expect(body.items[0]!.state).toBe("PRICE_MOVED");
+    expect(body.actionableCount).toBe(0);
+    await app.close();
+  });
+
+  it("WAITING_FOR_FRESH_DATA and fails closed when data is stale/missing", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    // No snapshot for the referenced token → treated as stale (fail-closed).
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: null });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    const body = res.json() as { actionableCount: number; items: { state: string }[] };
+    expect(body.items[0]!.state).toBe("WAITING_FOR_FRESH_DATA");
+    expect(body.actionableCount).toBe(0);
+    await app.close();
+  });
+
+  it("requires a full session (401 without a cookie)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: snapshot() });
+    const res = await app.inject({ method: "GET", url: "/api/action-center" });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("rejects a restricted sign-link session (cannot enumerate the wallet's orders)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({
+      ruleStore,
+      triggerStore,
+      snapshotRow: snapshot(),
+      sessionScope: { type: "trigger", triggerId: "trig-1" },
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(401);
     await app.close();
   });
 });

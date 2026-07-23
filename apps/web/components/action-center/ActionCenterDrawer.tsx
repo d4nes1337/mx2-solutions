@@ -1,0 +1,319 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { AnimatePresence, m } from "motion/react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Bell, Check, Clock, Loader2, Send, Volume2, X } from "lucide-react";
+import type { ActionCenterItem, ActionCenterState } from "@/lib/types";
+import { useDismissTrigger } from "@/lib/queries";
+import { useActionCenterUi } from "@/lib/action-center-store";
+import { useNotificationPrefs } from "@/lib/notification-prefs";
+import { requestDesktopPermission, desktopPermission } from "@/lib/action-center/desktop";
+import { playAlertSound } from "@/lib/action-center/sound";
+import { Badge, Button, cn } from "@/components/ui";
+import { useReducedMotion } from "@/components/motion";
+
+const STATE_META: Record<
+  ActionCenterState,
+  { label: string; tone: "brand" | "warn" | "neutral"; cta: string }
+> = {
+  READY_TO_SIGN: { label: "Ready to sign", tone: "brand", cta: "Review & sign" },
+  PRICE_MOVED: { label: "Price moved", tone: "warn", cta: "Review what changed" },
+  WAITING_FOR_FRESH_DATA: {
+    label: "Waiting for fresh data",
+    tone: "neutral",
+    cta: "Refresh check",
+  },
+};
+
+const ageLabel = (ms: number | null): string | null => {
+  if (ms === null) return null;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s old`;
+  return `${Math.round(s / 60)}m old`;
+};
+
+/** matchMedia hook: desktop → right drawer, mobile → bottom sheet. */
+function useIsDesktop(): boolean {
+  const [desktop, setDesktop] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const on = () => setDesktop(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return desktop;
+}
+
+function ItemCard({
+  item,
+  onReview,
+  onRefresh,
+}: {
+  item: ActionCenterItem;
+  onReview: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const dismiss = useDismissTrigger();
+  const meta = STATE_META[item.state];
+  const age = ageLabel(item.dataAgeMs);
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-3">
+      <div className="flex items-center justify-between gap-2">
+        <Badge
+          tone={meta.tone === "brand" ? "brand" : meta.tone === "warn" ? "warn" : "neutral"}
+          dot
+        >
+          {meta.label}
+        </Badge>
+        <span className="text-[11px] text-faint">
+          {new Date(item.triggeredAt).toLocaleTimeString()}
+        </span>
+      </div>
+
+      <p className="mt-2 text-[13px] font-semibold text-fg">{item.ruleName}</p>
+      <p className="text-[12px] text-muted">
+        {item.market.title ?? item.market.outcome} · {item.market.outcome}
+      </p>
+      <p className="mt-1 text-[12px] text-muted">{item.conditionSummary}</p>
+
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[12px]">
+        <span className="text-muted">
+          {item.action.side === "BUY" ? "Buy" : "Sell"}{" "}
+          <span className="tabular text-fg">{item.action.sizeShares}</span> {item.market.outcome}
+        </span>
+        <span className="text-muted">
+          Max <span className="tabular text-fg">${item.action.maxSpendUsd}</span>
+        </span>
+        {item.threshold ? (
+          <span className="text-muted">
+            Threshold <span className="tabular text-fg">{item.threshold}</span>
+          </span>
+        ) : null}
+        {item.actual ? (
+          <span className="text-muted">
+            Now <span className="tabular text-fg">{item.actual}</span>
+          </span>
+        ) : null}
+        <span className="text-muted">
+          Limit{" "}
+          <span className="tabular text-fg">{Math.round(Number(item.action.price) * 100)}c</span> ·{" "}
+          {item.action.orderType}
+        </span>
+        {age ? (
+          <span className="inline-flex items-center gap-1 text-faint">
+            <Clock size={11} aria-hidden /> {age}
+          </span>
+        ) : null}
+      </div>
+
+      {item.account ? (
+        <p className="mt-1 text-[11px] text-faint">Account: {item.account.label}</p>
+      ) : null}
+
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button
+          size="sm"
+          variant={item.state === "READY_TO_SIGN" ? "primary" : "outline"}
+          onClick={() =>
+            item.state === "WAITING_FOR_FRESH_DATA" ? onRefresh() : onReview(item.triggerId)
+          }
+        >
+          {meta.cta}
+        </Button>
+        <button
+          type="button"
+          onClick={() => dismiss.mutate(item.triggerId)}
+          disabled={dismiss.isPending}
+          className="text-[12px] text-muted hover:text-fg"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Footer controls: the explicit browser-alert opt-in + per-device toggles. */
+function NotificationControls() {
+  const prefs = useNotificationPrefs();
+  const perm = desktopPermission();
+
+  const enable = () => {
+    // The ONE gesture that may request OS permission and unlock audio.
+    prefs.set({ browserAlerts: true });
+    void requestDesktopPermission();
+    playAlertSound(prefs.volume);
+  };
+
+  if (!prefs.browserAlerts) {
+    return (
+      <div className="space-y-2 border-t border-border pt-3">
+        <p className="text-[12px] leading-snug text-muted">
+          Get alerted the moment a Smart Order is ready to sign — a ping, a tab badge, and (when the
+          tab is in the background) a desktop notification.
+        </p>
+        <Button size="sm" className="w-full" onClick={enable}>
+          <Bell size={13} aria-hidden />
+          Enable browser alerts
+        </Button>
+        <p className="text-[11px] text-muted">
+          You can also{" "}
+          <Link href="/wallet" className="text-accent hover:underline">
+            connect Telegram
+          </Link>{" "}
+          for alerts when Arima is closed.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 border-t border-border pt-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fg">
+          <Check size={13} className="text-pos" aria-hidden /> Browser alerts on
+        </span>
+        <button
+          type="button"
+          onClick={() => playAlertSound(prefs.volume)}
+          className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+        >
+          <Volume2 size={12} aria-hidden /> Play test sound
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5 text-[12px]">
+        <label className="flex items-center gap-1.5 text-muted">
+          <input
+            type="checkbox"
+            checked={prefs.sound}
+            onChange={(e) => prefs.set({ sound: e.target.checked })}
+          />
+          Sound
+        </label>
+        <label className="flex items-center gap-1.5 text-muted">
+          <input
+            type="checkbox"
+            checked={prefs.desktop}
+            onChange={(e) => prefs.set({ desktop: e.target.checked })}
+          />
+          Desktop {perm === "denied" ? "(blocked)" : ""}
+        </label>
+        <label className="col-span-2 flex items-center gap-1.5 text-muted">
+          <input
+            type="checkbox"
+            checked={prefs.showDetails}
+            onChange={(e) => prefs.set({ showDetails: e.target.checked })}
+          />
+          Show trade details in desktop notifications
+        </label>
+      </div>
+      <p className="text-[11px] text-muted">
+        <Link href="/wallet" className="text-accent hover:underline">
+          <Send size={11} className="mr-0.5 inline" aria-hidden />
+          Connect Telegram
+        </Link>{" "}
+        for alerts when Arima is closed.
+      </p>
+    </div>
+  );
+}
+
+export function ActionCenterDrawer({
+  items,
+  onReview,
+}: {
+  items: ActionCenterItem[];
+  onReview: (id: string) => void;
+}) {
+  const { open, closeDrawer } = useActionCenterUi();
+  const qc = useQueryClient();
+  const reduced = useReducedMotion();
+  const desktop = useIsDesktop();
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDrawer();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, closeDrawer]);
+
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["action-center"] });
+
+  const enter = reduced ? { opacity: 1 } : desktop ? { x: 0 } : { y: 0 };
+  const from = reduced ? { opacity: 0 } : desktop ? { x: "100%" } : { y: "100%" };
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <div className="fixed inset-0 z-50">
+          <m.div
+            className="absolute inset-0 bg-black/50"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={reduced ? { duration: 0 } : { duration: 0.15 }}
+            onClick={closeDrawer}
+            aria-hidden
+          />
+          <m.aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Action Center"
+            className={cn(
+              "absolute flex flex-col border-border bg-surface shadow-panel",
+              desktop
+                ? "right-0 top-0 h-full w-[380px] border-l"
+                : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl border-t",
+            )}
+            initial={from}
+            animate={enter}
+            exit={from}
+            transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 360, damping: 34 }}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <h2 className="inline-flex items-center gap-2 text-[15px] font-semibold text-fg">
+                <Bell size={16} aria-hidden /> Action Center
+              </h2>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={closeDrawer}
+                className="rounded-md p-1 text-muted transition-colors hover:text-fg"
+              >
+                <X size={16} aria-hidden />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-2 overflow-y-auto p-3">
+              {items.length === 0 ? (
+                <p className="px-1 py-8 text-center text-[13px] text-muted">
+                  Nothing needs your attention right now. Armed Smart Orders will appear here the
+                  moment they&apos;re ready to sign.
+                </p>
+              ) : (
+                items.map((item) => (
+                  <ItemCard
+                    key={item.triggerId}
+                    item={item}
+                    onReview={onReview}
+                    onRefresh={refresh}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1">
+              <NotificationControls />
+            </div>
+          </m.aside>
+        </div>
+      ) : null}
+    </AnimatePresence>
+  );
+}

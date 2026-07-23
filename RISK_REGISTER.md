@@ -79,3 +79,88 @@ _Last updated: 2026-07-18. Ordered with the top blocker first._
   the 2026-07-19 plan but not yet built (session budget); unit/route/engine
   coverage (61 files, 690 tests) + live interactive verification stand in until
   it lands. Owner manual pass still required before any flag flip.
+
+---
+
+## Addendum — 2026-07-23 private-beta release (Slice 1: access boundary)
+
+- **R-047 (NEW): waitlist PII.** `waitlist_entries` stores email and/or wallet (+ optional
+  handle/use-case enrichment) — the first user PII beyond wallet addresses. Mitigations: explicit
+  consent checkbox with recorded `consent_at` + minimal privacy note at the form (owner decision
+  2026-07-23); emails never in logs or audit metadata (tested); reads admin-gated only; deletion
+  on request is a manual owner action during beta. **Full ToS/privacy/risk disclosures are a
+  Stage C admission blocker** (brief §11.1). Status: Open (accepted for the 5–7 cohort).
+- **R-048 (NEW): invitation integrity (enumeration/replay/transfer).** Mitigations: 128-bit
+  random codes hashed at rest (SHA256, unique), single-use atomic consume, expiry, redemption
+  bound server-side to the signature-verified wallet (wrong-wallet replay → `INVITE_INVALID`,
+  audited), same-wallet replay idempotent, admin mint/revoke audited, constant-time admin-secret
+  compare, per-IP limits on the public waitlist route. Enumeration through the redemption path
+  additionally costs a signed EIP-712 challenge per attempt. Status: Mitigated (verified live
+  2026-07-23).
+- **Closed: session-outlives-revocation gap.** Previously the allowlist was checked only at
+  login, so removing a wallet left its sessions valid until expiry. `enforceAllowlistOnSessions`
+  (ADR-0022) now re-checks on every authenticated request and invite revocation also revokes all
+  the wallet's sessions — verified live: allowlist deactivation 401s the next request on an
+  existing cookie.
+
+### Slice 2: wallet hierarchy (ADR-0023)
+
+- **R-049 (NEW, LOW): existing-wallet preservation on the hierarchy change.** Removing login
+  auto-provision must not strand any existing funded internal wallet (brief §5.4). Mitigation:
+  the change only stops CREATING wallets — `GET /api/trading-accounts` still lists/reconciles,
+  and the fund/withdraw/ghost-restore/reissue paths in `WalletsSection` are unchanged; no
+  migration, no data touched. Route tests cover archive→restore; the wallet UI keeps the Restore
+  path. Status: Mitigated (no schema change; rollback = revert commits).
+- **Verification gap (accepted):** the interactive signed-in wallet view (primary main card, the
+  `EnableArimaWalletDialog` opt-in) is wallet-connection-gated and not driveable headlessly; the
+  API opt-in behavior + the no-auto-provision invariant are verified live (7/7) and unit-tested,
+  so the residual is a visual owner live check only. `.claude/launch.json` now sets
+  `FEATURE_PRIVY_SIGNING=true` in dev (with the existing mock signer) so the opt-in flow is
+  exercisable locally — no effect on staging/prod flag posture.
+
+### Slice 3: builder attribution integrity (ADR-0024)
+
+- **Closed: server-signed orders were unattributed.** Every POLY_1271 server path submitted
+  `builder = bytes32(0)` while metadata claimed the configured code. `build1271SignedOrder` now
+  attaches + verifies the code (`assertSignedBuilder`), config fail-closes without one when live,
+  the browser path rejects `ORDER_BUILDER_MISMATCH`, and audits record the actual signed builder.
+  Verified live: the code is genuinely credited on Polymarket (owner's prior $5 trade appears in
+  `GET /builder/trades`). This materially reduces the attribution/credential-misuse surface in
+  R-004/R-013.
+
+### Slice 5: activation-path UX fixes (ADR-0026)
+
+- **Closed (partial): AI money-amount misread.** A "$200" request previously became a 200-SHARE
+  order and the AI order price could fall back to `0`. Now `budgetUsd` converts to shares at the
+  fresh price with the assumption surfaced, and the price anchors to fresh market context (labeled
+  50¢ only as a last resort). Prepared-order safety net unchanged: the order is still reviewed +
+  signed before anything moves (R-024). Verified by unit tests.
+- **R-052 (NEW, LOW): contradictory market-availability states remain (§8.1.4 deferred).** The
+  cockpit still computes geoblock / lifecycle / book-unavailable / AUTO signals independently, so
+  two can appear at once. Each is individually honest (fail-closed where it protects), so the risk
+  is comprehension, not correctness. Mitigation: a focused follow-up will add a single tradability
+  resolver; the Action Center (Slice 4) already uses the brief's honest vocabulary. Status: Open
+  (deferred, tracked).
+
+### Slice 4: global Action Center (ADR-0025)
+
+- **R-051 (NEW, LOW): Action Center poll load.** The global host adds a 4s wallet-scoped poll of
+  `GET /api/action-center` per signed-in tab (on top of the existing 4–5s triggers/overview
+  polls). Mitigation: snapshot-only reads (no upstream fan-out), bounded item count, `enabled`
+  gated on signed-in, `placeholderData` to avoid flicker, and cross-tab work is deduped (only the
+  leader dings). For 5–10 users this is negligible; latency is recorded so SSE can be justified
+  later (extends R-018). Status: Open (monitor at beta).
+- **Notification safety (invariant preserved):** a toast / desktop notification / tab badge never
+  executes an order — every path opens `TriggerConfirm`, which still requires the fresh preview +
+  the main-wallet EIP-712 signature (brief §6.11). Desktop bodies are privacy-safe by default (no
+  trade details unless the user opts in); OS permission is requested only from the explicit
+  "Enable browser alerts" gesture; `/m/*` restricted sessions are excluded from the host and the
+  endpoint (401 for scoped sessions). No new flag, no migration.
+
+- **R-050 (NEW, LOW/MED): ExchangeV3 rollout.** `clob-client-v2` 1.0.7 added ExchangeV3 order
+  signing; we build/verify against the V2 exchange addresses (INTEGRATION §12a) and pin the
+  ERC-7739 envelope in a contract test. If Polymarket migrates a market to ExchangeV3, our V2
+  build would be rejected at submit (fail-closed, no misattribution or fund loss) rather than
+  silently mis-sign. Mitigation: monitor upstream; the contract test flags an envelope change on
+  the next SDK bump. Status: Open (watch); async-execution response change (1.1.0, `tradeIDs`) is
+  already absorbed by the tolerant `SubmitOrderResponseSchema`.

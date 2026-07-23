@@ -142,8 +142,7 @@ const sheet = () => (
 );
 
 /** Reveal the secondary manual deposit disclosure (chips, catalog, address). */
-const openManual = () =>
-  fireEvent.click(screen.getByRole("button", { name: /other assets/i }));
+const openManual = () => fireEvent.click(screen.getByRole("button", { name: /other assets/i }));
 
 beforeEach(() => {
   queryState.flags = { bridgeFunding: true, walletWithdraw: false, bridgeWithdrawals: false };
@@ -202,9 +201,7 @@ describe("FundsSheet top-up (holdings-first)", () => {
     wagmiState.account = { address: "0x1111111111111111111111111111111111111111", chainId: 1 };
     wagmiState.reads = {}; // nothing held
     render(sheet());
-    expect(
-      screen.getByText(/No deposit-ready balances found in your wallet/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/No deposit-ready balances found in your wallet/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Deposit manually" }));
     expect(screen.getByRole("button", { name: "USDC" })).toBeInTheDocument();
   });

@@ -7,8 +7,7 @@ import { Sparkles } from "lucide-react";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
 import { cn, Empty, Skeleton, ErrorNote } from "@/components/ui";
-import { TriggerAlert } from "@/components/TriggerAlert";
-import { TriggerConfirm } from "@/components/TriggerConfirm";
+import { useActionCenterUi } from "@/lib/action-center-store";
 import { DraftsSection } from "@/components/smart-orders/DraftsSection";
 import { EMPTY_FILTERS, FilterBar } from "@/components/smart-orders/FilterBar";
 import { NotifyUpsell } from "@/components/smart-orders/NotifyUpsell";
@@ -42,7 +41,8 @@ function SmartOrdersDashboard() {
   const focus = searchParams.get("focus");
   const signedIn = Boolean(session.data);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [reviewTriggerId, setReviewTriggerId] = useState<string | null>(null);
+  // The fresh-review + signing modal is owned by the global Action Center host.
+  const openReview = useActionCenterUi((s) => s.openReview);
   const strategies = useStrategies(signedIn, filters.showArchived);
   const overviewQuery = useStrategiesOverview(signedIn);
   const autoReadiness = useAutoReadiness(signedIn);
@@ -101,7 +101,7 @@ function SmartOrdersDashboard() {
       overview={overview.get(row.id)}
       sparklines={overviewQuery.data?.sparklines}
       onOpen={openPanel}
-      onReviewTrigger={setReviewTriggerId}
+      onReviewTrigger={openReview}
     />
   );
 
@@ -193,7 +193,6 @@ function SmartOrdersDashboard() {
           </Empty>
         ) : (
           <>
-            <TriggerAlert />
             <PulseStrip sections={sections} overview={overview} />
             <FilterBar
               filters={filters}
@@ -263,9 +262,6 @@ function SmartOrdersDashboard() {
             ) : null}
           </>
         )}
-        {reviewTriggerId ? (
-          <TriggerConfirm triggerId={reviewTriggerId} onClose={() => setReviewTriggerId(null)} />
-        ) : null}
       </div>
 
       {/* Side panel: sticky column on desktop, bottom sheet below lg. Both

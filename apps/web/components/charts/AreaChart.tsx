@@ -161,7 +161,11 @@ export function AreaChart({
   };
 
   return (
-    <div ref={wrapRef} className={className} style={{ position: "relative", height }}>
+    <div
+      ref={wrapRef}
+      className={className}
+      style={{ position: "relative", height, minWidth: 0, maxWidth: "100%", overflow: "hidden" }}
+    >
       <svg width={w} height={H} role="img" aria-label="price chart" style={{ display: "block" }}>
         <defs>
           <linearGradient id={`grad-${uid}`} x1="0" y1="0" x2="0" y2="1">

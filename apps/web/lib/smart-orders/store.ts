@@ -321,7 +321,14 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
       if (nodeId === "action") {
         if (s.doc.action.kind !== "order") return s;
-        return bump({ ...s.doc, marketMeta, action: { ...s.doc.action, market: ref } }, s);
+        // Anchor the limit price to the picked outcome's current price (fresh
+        // market context, brief §8.1.5) instead of leaving the static default.
+        const cp = meta?.currentPrice;
+        const price =
+          typeof cp === "number" && Number.isFinite(cp)
+            ? Math.min(0.99, Math.max(0.01, Math.round(cp * 100) / 100))
+            : s.doc.action.price;
+        return bump({ ...s.doc, marketMeta, action: { ...s.doc.action, market: ref, price } }, s);
       }
       const node = findNode(s.doc.expr, nodeId);
       if (!node || node.type !== "condition" || node.condition.kind === "time_window") return s;

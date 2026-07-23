@@ -32,6 +32,12 @@ export interface MarketMeta {
   /** Maker-rewards program params captured at bind time (Gamma, A-050). */
   rewardsMinSize?: number | null;
   rewardsMaxSpread?: number | null;
+  /**
+   * The picked outcome's current price (0–1) at bind time. Used to anchor a
+   * new order's limit price to fresh market context instead of a static
+   * default (brief §8.1.5).
+   */
+  currentPrice?: number | null;
 }
 
 export interface StrategyDoc {

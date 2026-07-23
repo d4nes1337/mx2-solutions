@@ -74,6 +74,13 @@ export interface ClobV2OrderParams {
   postOnly?: boolean;
   /** GTD only: unix seconds expiration. */
   expiresAtSec?: number;
+  /**
+   * Public bytes32 builder attribution code. Serialized by the SDK into the
+   * signed order's `builder` field (INTEGRATION §12a). REQUIRED for every
+   * beta/live server-signed order — the caller passes the configured code and
+   * verifies it survived signing (see assertSignedBuilder).
+   */
+  builderCode?: string;
 }
 
 export interface ClobV2OrderAck {
@@ -119,8 +126,6 @@ export interface ClobV2SessionOptions {
   creds?: ApiKeyCreds;
   host?: string;
   chainId?: number;
-  /** Non-secret builder attribution code, when configured. */
-  builderConfig?: { apiKey: string; secret: string; passphrase: string } | undefined;
 }
 
 const mapThrown = (e: unknown): PolymarketError => {
@@ -166,12 +171,15 @@ export const build1271SignedOrder = async (
   if (!(params.price >= tick && params.price <= 1 - tick)) {
     throw new Error(`invalid price (${params.price}) for tick size ${params.tickSize}`);
   }
-  return (await builder.buildOrder(
+  const signed = (await builder.buildOrder(
     {
       tokenID: params.tokenId,
       price: params.price,
       size: params.size,
       side: params.side === "BUY" ? Side.BUY : Side.SELL,
+      // The SDK serializes builderCode into the signed order's `builder` field
+      // (part of the ERC-7739 contents hash, so it is cryptographically bound).
+      ...(params.builderCode ? { builderCode: params.builderCode } : {}),
       ...(params.orderType === "GTD" && params.expiresAtSec !== undefined
         ? { expiration: String(params.expiresAtSec) }
         : {}),
@@ -179,6 +187,30 @@ export const build1271SignedOrder = async (
     { tickSize: params.tickSize, negRisk: params.negRisk },
     2,
   )) as unknown as Record<string, unknown>;
+
+  // Fail closed if the code did not survive signing: never submit an order the
+  // caller believes is attributed when the `builder` field says otherwise.
+  if (params.builderCode !== undefined) {
+    assertSignedBuilder(signed, params.builderCode);
+  }
+  return signed;
+};
+
+/**
+ * Post-build guard: the signed order's `builder` field must equal the expected
+ * code (case-insensitive). Throws — a mismatch means the order would be
+ * submitted unattributed (or misattributed), which is release-blocking (§7).
+ */
+export const assertSignedBuilder = (
+  signedOrder: Record<string, unknown>,
+  expectedBuilderCode: string,
+): void => {
+  const actual = signedOrder["builder"];
+  if (typeof actual !== "string" || actual.toLowerCase() !== expectedBuilderCode.toLowerCase()) {
+    throw new Error(
+      `signed order builder mismatch: expected ${expectedBuilderCode}, got ${String(actual)}`,
+    );
+  }
 };
 
 export const createClobV2Session = (opts: ClobV2SessionOptions): ClobV2Session => {

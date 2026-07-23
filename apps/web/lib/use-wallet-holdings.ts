@@ -112,7 +112,8 @@ export function useWalletHoldings(
   }, [on, tokensByChain, prices, r0.data, r1.data, r2.data, r3.data, r4.data, r5.data]);
 
   const results = [r0, r1, r2, r3, r4, r5];
-  const isLoading = on && results.some((r, i) => (contractsByChain[i]?.length ?? 0) > 0 && r.isLoading);
+  const isLoading =
+    on && results.some((r, i) => (contractsByChain[i]?.length ?? 0) > 0 && r.isLoading);
   const scannedAnyToken = tokensByChain.some((t) => t.length > 0);
 
   return { holdings, isLoading, isConnected: on, scannedAnyToken };

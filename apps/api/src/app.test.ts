@@ -127,10 +127,13 @@ const mockSessions: SessionStore = {
   create: async (o) => makeSessionRow(o.userWallet),
   findByTokenHash: async () => null,
   revoke: async () => {},
+  revokeAllForWallet: async () => 0,
 };
 
 const mockAllowlist: AllowlistStore = {
-  isAllowed: async () => false,
+  // Sessions only exist for allowlisted wallets; request-time enforcement
+  // (enforceAllowlistOnSessions) would 401 every authed call otherwise.
+  isAllowed: async () => true,
   findEntry: async () => null,
   add: async (w, by, note) =>
     ({

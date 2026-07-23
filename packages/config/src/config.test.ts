@@ -5,6 +5,9 @@ const base: NodeJS.ProcessEnv = {
   DATABASE_URL: "postgresql://u:p@localhost:5432/db",
 };
 
+// Valid non-zero public builder code — required whenever live trading is on.
+const BUILDER_CODE = "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0";
+
 describe("loadConfig", () => {
   it("applies safe defaults with all risk features off", () => {
     const cfg = loadConfig(base);
@@ -21,8 +24,34 @@ describe("loadConfig", () => {
   });
 
   it("parses boolean flags from strings", () => {
-    const cfg = loadConfig({ ...base, FEATURE_LIVE_TRADING: "true" });
+    const cfg = loadConfig({
+      ...base,
+      FEATURE_LIVE_TRADING: "true",
+      POLYMARKET_BUILDER_CODE: BUILDER_CODE,
+    });
     expect(cfg.features.liveTrading).toBe(true);
+  });
+
+  it("fails closed when live trading is on without a builder code", () => {
+    expect(() => loadConfig({ ...base, FEATURE_LIVE_TRADING: "true" })).toThrow(ConfigError);
+    // The all-zero code is a valid bytes32 but unattributed → still rejected.
+    expect(() =>
+      loadConfig({
+        ...base,
+        FEATURE_LIVE_TRADING: "true",
+        POLYMARKET_BUILDER_CODE: `0x${"0".repeat(64)}`,
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it("rejects a malformed builder code even when trading is off", () => {
+    expect(() => loadConfig({ ...base, POLYMARKET_BUILDER_CODE: "not-bytes32" })).toThrow(
+      ConfigError,
+    );
+    // An empty string is treated as "not set", not a malformed value.
+    expect(loadConfig({ ...base, POLYMARKET_BUILDER_CODE: "" }).polymarket.builderCode).toBe(
+      undefined,
+    );
   });
 
   it("lets an operator opt out of Bridge funding", () => {
@@ -43,6 +72,7 @@ describe("loadConfig", () => {
       FEATURE_CONDITIONAL_LIVE_EXECUTION: "true",
       FEATURE_PRIVY_SIGNING: "true",
       FEATURE_LIVE_TRADING: "true",
+      POLYMARKET_BUILDER_CODE: BUILDER_CODE,
       MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
     });
     expect(cfg.features.conditionalLiveExecution).toBe(true);

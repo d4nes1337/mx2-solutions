@@ -1,8 +1,157 @@
 # Project Status
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-07-23_
 
 ## Recent
+
+- **Private-beta release — Slice 5: activation-path UX fixes (built + verified; D-049, ADR-0026,
+  no migration).** Comprehension/correctness fixes on the first-time path (brief §8; not a
+  redesign). **AI dollars-vs-shares (§8.1.1):** the `create_strategy` action gains an optional
+  `budgetUsd` (mutually exclusive with `size`) — the server converts a budget to shares at the
+  candidate's FRESH price and surfaces the assumption ("Interpreted $200 as N shares at Yc — edit
+  the size if you meant a share count"); a "$200" request can never silently become 200 shares.
+  **Fresh-price anchoring (§8.1.5):** the AI order price no longer falls back to `0` (anchors to
+  the candidate's current price, 50¢ only as a labeled last resort), and binding a market to a
+  builder order action snaps the limit to the picked outcome's current price
+  (`MarketMeta.currentPrice`). **Hero stability (§8.1.2):** the hero treats flags-loading as AI-on
+  (the beta default) so the first paint matches the resolved state — no post-hydration message swap
+  or layout shift. **Entry paths (§8.1.6/7):** three clear ways to start (describe / template / new
+  **"start blank"** = `?start=blank` empty canvas built via the Add-a-block palette); canvas stays
+  desktop-first, 4-market cap unchanged. **Mobile overflow (§8.1.3):** fixed the grid
+  `min-width:auto` blowout on the homepage chart column, clipped the desktop-first React Flow
+  viewport, made the template-chip row scroll and the workspace tab bar truncate — the homepage +
+  public draft path now have zero horizontal page scroll at 375px. The honest homepage example
+  (§8.1.10) is already served by the backtested "Proven plays" showcases. **Deferred:** the
+  unified market-availability resolver (§8.1.4) — a cross-component cockpit reconciliation tracked
+  as a focused follow-up (each state is individually honest; the gap is only that two can appear at
+  once; the Action Center already uses the brief's vocabulary). **Tests: 771 root + 300 web green**
+  (new: AI budget→shares + missing-price anchoring; builder store price-anchoring on bind);
+  `pnpm check` exit 0. **Verified** (browser, mobile 375px): homepage + builder zero horizontal
+  overflow; `?start=blank` opens an empty canvas; desktop homepage shows the stable AI hero + three
+  entry paths, no swap. **Next: P1 — Season 0 (cut before compromising the now-complete P0 path),
+  then Slice 7 release hardening.**
+
+- **Private-beta release — Slice 4: global Action Center (built + verified live; D-048, ADR-0025,
+  no migration).** A signed-in user can now notice, inspect, and sign a triggered Smart Order from
+  anywhere in the app. New snapshot-only, fail-closed `GET /api/action-center` (full-session auth,
+  wallet-scoped, bounded, no upstream fan-out) resolves every awaiting trigger to an honest state
+  via the shared `@mx2/rules` evaluator — **READY_TO_SIGN** (fresh + condition holds),
+  **PRICE_MOVED** (fresh + no longer holds), **WAITING_FOR_FRESH_DATA** (any stale/missing market —
+  fail-closed); `actionableCount` = ready count. One global `ActionCenterHost` in AppChrome (never
+  on `/m/*`) owns: the 4s-poll query (refetch on focus; confirm/dismiss invalidate the global
+  query immediately), the **header bell** + count (a11y "Action Center — N ready to sign", 9+ cap,
+  subtle dot when awaiting-but-not-ready), a **right drawer** (desktop) / **bottom sheet** (mobile)
+  with per-item content + per-state CTA (Review & sign / Review what changed / Refresh check) +
+  Dismiss, a single **toast**, the **tab title** `(N) Ready to sign · Arima` + **canvas favicon
+  badge** (restored at zero / sign-out), opt-in **sound** (bundled `/sounds/alert.wav`, once per
+  new-ready, never on poll/render/focus/PRICE_MOVED/stale), **desktop notifications** (privacy-safe
+  body by default), and **cross-tab dedupe** (BroadcastChannel + Web Locks leader + localStorage
+  handled-ids, pruned) so every tab badges but only the leader dings. Opening any surface opens the
+  unchanged **`TriggerConfirm`** fresh-review + signing modal — notifications never execute an
+  order. Both page-local `TriggerAlert` mounts (and the component) removed; the Smart Orders card
+  "Review & sign" routes through the shared store. Alerts are gated behind an explicit **"Enable
+  browser alerts"** gesture (the only moment OS permission is requested — never on load); arming a
+  strategy nudges the opt-in once, with an optional **"connect Telegram"** link (owner refinement).
+  **Tests: 769 root + 297 web green** (new: action-center 5 states/auth/fail-closed/`/m` isolation;
+  cross-tab dedup + tab-badge + prefs 5); `pnpm check` exit 0. **Verified live** (real seeded
+  session): the bell renders; the desktop right drawer opens with the empty state + browser-alerts
+  priming + Telegram link; the enable gesture flips to per-device controls (Sound / Desktop shown
+  "(blocked)" when OS permission denied / Show-details / Play test sound); authed endpoint 200 +
+  correct shape, unauth 401; signed-out chrome clean with the bell absent. Owner live checks
+  (wallet + live-trigger gated): audible ping, granted-permission desktop notification, two-tab
+  single-notification dedupe, populated drawer + toast. **This completes the dependable P0 path:
+  public draft → invite → save/arm → Action Center → fresh review → wallet signature →
+  builder-attributed submit.** Next: Slice 5 — activation-path UX fixes.
+
+- **Private-beta release — Slice 3: builder attribution integrity + V2 SDK refresh (built +
+  verified live; D-047, ADR-0024, no migration).** Closed the release-critical gap the Slice 0
+  audit found: **every server-signed order path was submitting `builder = bytes32(0)`
+  (unattributed)** while the intent metadata recorded the configured code as if applied, and the
+  browser path had no server-side builder check. Now: shared builder-code predicates in `@mx2/core`
+  (`isNonZeroBuilderCode`, `builderCodesEqual`, …); **config fail-closes** — `FEATURE_LIVE_TRADING`
+  on without a non-zero bytes32 `POLYMARKET_BUILDER_CODE` throws at startup, malformed always
+  throws; `builderCode` threaded through `ClobV2OrderParams` → `build1271SignedOrder` → the SDK's
+  `UserOrderV2.builderCode` and **verified post-build by `assertSignedBuilder` (fail-closed if it
+  didn't survive signing)**; all three server call sites (manual route, auto-executor, quoter
+  live-executor) pass it with a defensive unconfigured guard; the browser path rejects
+  `ORDER_BUILDER_MISMATCH` (400, audited `order.builder_mismatch`) when the signed `builder` ≠
+  configured; intent metadata + `order.intent`/`order.submitted` audits now record the ACTUAL
+  signed builder + `builderMatch` + account kind. Owner diagnostic
+  `apps/api/src/scripts/verify-builder-attribution.ts` (`pnpm --filter @mx2/api verify-builder-attribution`)
+  cross-references local intents vs the PUBLIC `GET /builder/trades` endpoint. Raw builder code
+  moved out of the TriggerConfirm primary UI into an advanced disclosure. **SDK
+  `@polymarket/clob-client-v2` 1.0.6→1.1.0** (async-execution response — `tradeIDs` — absorbed by
+  our tolerant `SubmitOrderResponseSchema`; ExchangeV3 is a fail-closed watch item). Dead
+  `builderConfig` option + zero call sites cleaned up. **Tests: 764 root + 292 web green** (new:
+  config fail-closed matrix, non-zero-builder contract assertion + `assertSignedBuilder`,
+  `ORDER_BUILDER_MISMATCH` route test; live-trading test configs seeded with the code);
+  `pnpm check` exit 0 against SDK 1.1.0. **Verified live:** API boots under the owner's local
+  live-trading `.env` and serves the code on `/api/trade/status`; the diagnostic hit the LIVE
+  Polymarket endpoint and found the owner's prior low-value trade **genuinely attributed**
+  (1 trade, $5.00, matched 2026-07-01) — end-to-end proof the code is credited. Risk R-050
+  (ExchangeV3 rollout watch) registered; R-004/R-013 attribution surface reduced. **Next:
+  Slice 4 — global Action Center.**
+
+- **Private-beta release — Slice 2: wallet hierarchy (built + verified live; D-046, ADR-0023,
+  no migration).** The connected/main wallet is now the promoted default; the internal Privy
+  "Arima Wallet" is an explicit opt-in Beta. **Signing in no longer provisions an Arima Wallet** —
+  removed both auto-provision paths (client `AutoProvisionTradingWallet` effect + the server
+  `POST /api/auth/verify` side-effect) and the now-dead auth deps; `ensureTradingWalletProvisioned`
+  stays but is reached only via the explicit `POST /api/trading-wallet/provision` (+`/reissue`),
+  which emits a new `trading_wallet.opt_in` audit event on a genuine first create. New
+  `EnableArimaWalletDialog` (SheetShell) is the single confirmation gate for a fresh internal
+  wallet — six required disclosures (separate ring-fenced balance, automation capability, hard
+  per-order/daily/total limits, pause/withdraw, primary key never requested, automation subject to
+  flags + regional restrictions); a **restore** (wallet still exists at the provider) stays a
+  direct action. Chrome de-emphasis: **deleted the global header Deposit control** (`HeaderWallet`
+  - its test removed) and the inverted-emphasis `TradingModeCards`; the account-menu pre-opt-in
+    entry is now a neutral "Arima Wallet · Beta / Optional" row (no prominent Add funds). Wallet page
+    leads connected-wallet-first (subtitle + `WalletsSection` primary login card) and only surfaces
+    the Arima setup stepper (`TradingSetupPanel`) once opted in; funding is contextual/post-opt-in.
+    Execution selector relabelled **"Ask me to sign" / "Auto · Arima Wallet"** (default `prepare`)
+    with helper copy + a link into the Arima Wallet readiness flow. Existing funded internal wallets
+    are untouched (brief §5.4) — listing/reconcile/fund/withdraw/ghost-restore/reissue all preserved.
+    **Tests: 760 root + 292 web green** (new: login-never-provisions + fresh-provision-opt-in-audit;
+    removed HeaderWallet tests); `pnpm check` exit 0. **Verified live** (scripted EIP-712 wallet,
+    privy signing on): fresh sign-in creates no internal account + `provisioned:false`; explicit
+    `/provision` creates it as a fresh opt-in with a `trading_wallet.opt_in` audit (7/7). Browser:
+    header shows no Deposit; wallet page connected-wallet-first; builder selector reads the new
+    labels with the sentence flipping to "…automatically from my Arima trading wallet" + AUTO badge;
+    zero console errors. The interactive signed-in wallet view (primary main card + opt-in dialog) is
+    a wallet-connection-gated owner live check. **Next: Slice 3 — builder attribution integrity**
+    (thread the builder code into every server-signed order, reject `ORDER_BUILDER_MISMATCH`, SDK
+    1.0.6→1.1.0, owner diagnostic vs the public Builder Trades endpoint).
+
+- **Private-beta release — Slice 1: access boundary (built + verified live; D-045, ADR-0022,
+  migration 0021).** First slice of the owner-approved private-beta brief
+  (`docs/plans/ARIMA_PRIVATE_BETA_RELEASE_BRIEF.md`; Slice 0 audit approved 2026-07-23 with four
+  gate answers recorded in DECISIONS). The public↔invited boundary is now enforced at the API:
+  **waitlist** (`waitlist_entries`; public `POST /api/waitlist`, 5/min+20/day per IP, honeypot,
+  strict schema, consent required; joining needs an email OR a connected wallet — owner shrank
+  the form mid-review, and it ships as a global **pop-up** (`WaitlistModal` + `waitlist-ui`
+  store, `/waitlist` = deep link over home)); **one-time invitation codes** (`invitations`;
+  SHA256-hashed at rest, `arima-` 128-bit, single-use atomic redemption inside
+  `POST /api/auth/verify` bound to the signature-verified wallet, idempotent same-wallet replay,
+  linked waitlist entries auto-progress waiting→invited→accepted); **request-time enforcement**
+  (`enforceAllowlistOnSessions` wraps the session store in `buildApp`, so EVERY auth gate — full
+  and scoped — treats a session as valid only while the wallet keeps an active allowlist row;
+  invite revocation also `revokeAllForWallet`s — closes the pre-existing
+  session-outlives-revocation gap); **owner tooling** (`POST/GET /api/admin/invitations`,
+  `/:id/revoke`, `GET /api/admin/waitlist` behind hardened timingSafeEqual `x-admin-secret`;
+  codes shown exactly once at mint); web: invite-code entry on the NOT_ALLOWLISTED sign-in state
+  (header + builder save panel share one `InviteCodeForm`), "Your draft is ready — private beta
+  access is required to save, arm, and receive live triggers" copy, public drafting untouched.
+  Existing allowlisted wallets are grandfathered (no action). `FEATURE_OPEN_BETA` stays an
+  explicit future decision (default false; local launch config flipped to false). New audit
+  actions `waitlist.joined`, `invite.created/redeemed/redemption_rejected/revoked`. **Tests:
+  759 root + 295 web green** (new: waitlist route 6, admin invites 6, auth invite-redemption 5,
+  allowlist-session wrapper 4); `pnpm check` exit 0. **Verified live** (scripted EIP-712 wallet
+  against the running API + PG): 403+hints → waitlist join → seeded-code redemption → session →
+  private routes 401 anonymous → wrong-wallet replay rejected → allowlist deactivation kills the
+  live cookie; browser: pop-up submit 200 → success state, deep link opens over home. Risks
+  R-047 (waitlist PII; full legal docs block Stage C) + R-048 (invite integrity; mitigated)
+  registered. **Next: Slice 2 — wallet hierarchy** (kill both auto-provision paths, main-wallet
+  default, lazy opt-in Arima Wallet).
 
 - **Smart Orders → action dashboard (built; D-044).** The tab now answers "where is my money
   about to move and what do I do right now": a pulse strip ("1 ready to sign · 3 approaching —

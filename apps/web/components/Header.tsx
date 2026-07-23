@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { LogoMark } from "@/components/brand/LogoMark";
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
 import { AccountMenu } from "@/components/AccountMenu";
-import { HeaderWallet } from "@/components/HeaderWallet";
+import { ActionCenterBell } from "@/components/action-center/ActionCenterBell";
 import { HelpButton } from "@/components/onboarding/HelpButton";
 import { useFeatureFlags } from "@/lib/queries";
 import { cn } from "./ui";
@@ -79,7 +79,10 @@ export function Header() {
           </nav>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
-          <HeaderWallet />
+          {/* No global Deposit control: the main wallet is the default trading
+              path; funding lives only in the contextual Arima Wallet flows on
+              the Wallet page, after opt-in (brief §5.3.1). */}
+          <ActionCenterBell />
           <HelpButton />
           <ThemeSwitcher />
           <AccountMenu />

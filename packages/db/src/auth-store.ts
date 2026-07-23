@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "./client.js";
 import {
   authChallenges,
@@ -102,6 +102,12 @@ export interface SessionStore {
   /** Returns the session only if it exists, has not expired, and has not been revoked. */
   findByTokenHash(tokenHash: string): Promise<SessionRow | null>;
   revoke(tokenHash: string): Promise<void>;
+  /**
+   * Revokes every live session (full AND scoped) for a wallet. Used when a
+   * wallet's beta access is revoked so cut-off is immediate, not
+   * session-expiry-eventual.
+   */
+  revokeAllForWallet(userWallet: string): Promise<number>;
 }
 
 export const createSessionStore = (db: Database): SessionStore => ({
@@ -130,6 +136,15 @@ export const createSessionStore = (db: Database): SessionStore => ({
       .update(sessions)
       .set({ revokedAt: sql`now()` })
       .where(eq(sessions.tokenHash, tokenHash));
+  },
+
+  async revokeAllForWallet(userWallet) {
+    const rows = await db
+      .update(sessions)
+      .set({ revokedAt: sql`now()` })
+      .where(and(eq(sessions.userWallet, userWallet), isNull(sessions.revokedAt)))
+      .returning({ id: sessions.id });
+    return rows.length;
   },
 });
 

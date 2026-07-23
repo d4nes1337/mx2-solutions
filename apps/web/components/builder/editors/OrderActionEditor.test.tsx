@@ -51,7 +51,7 @@ describe("OrderActionEditor", () => {
   it("prefills auto caps from last-used values on switching to Auto", () => {
     saveLimitPrefs({ maxNotionalPerOrder: 10, maxDailyNotional: 15, maxTotalNotional: 15 });
     renderEditor();
-    fireEvent.click(screen.getByText("Auto"));
+    fireEvent.click(screen.getByText("Auto · Arima Wallet"));
     expect(useBuilderStore.getState().doc.limits).toEqual({
       maxNotionalPerOrder: 10,
       maxDailyNotional: 15,
@@ -61,7 +61,7 @@ describe("OrderActionEditor", () => {
 
   it("seeds auto caps from the order cost when nothing was saved", () => {
     renderEditor();
-    fireEvent.click(screen.getByText("Auto"));
+    fireEvent.click(screen.getByText("Auto · Arima Wallet"));
     // ceil(0.41 × 10) = 5
     expect(useBuilderStore.getState().doc.limits).toEqual({
       maxNotionalPerOrder: 5,
@@ -75,7 +75,7 @@ describe("OrderActionEditor", () => {
       .getState()
       .setLimits({ maxNotionalPerOrder: 99, maxDailyNotional: 99, maxTotalNotional: 99 });
     renderEditor();
-    fireEvent.click(screen.getByText("Auto"));
+    fireEvent.click(screen.getByText("Auto · Arima Wallet"));
     expect(useBuilderStore.getState().doc.limits?.maxNotionalPerOrder).toBe(99);
   });
 });

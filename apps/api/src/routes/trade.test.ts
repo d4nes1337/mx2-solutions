@@ -59,6 +59,7 @@ const configTradingEnabled = loadConfig({
   APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
   TRADING_ADMIN_SECRET: "test-admin-secret-123",
   FEATURE_LIVE_TRADING: "true",
+  POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
 });
 
 // Server-side signing enabled, using the mock signer (non-production dry-run mode).
@@ -67,6 +68,7 @@ const configPrivy = loadConfig({
   APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
   TRADING_ADMIN_SECRET: "test-admin-secret-123",
   FEATURE_LIVE_TRADING: "true",
+  POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
   FEATURE_PRIVY_SIGNING: "true",
   MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
 });
@@ -76,6 +78,7 @@ const configRelayer = loadConfig({
   APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
   TRADING_ADMIN_SECRET: "test-admin-secret-123",
   FEATURE_LIVE_TRADING: "true",
+  POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
   FEATURE_PRIVY_SIGNING: "true",
   FEATURE_RELAYER: "true",
   MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
@@ -97,6 +100,10 @@ const upstreamErr: PolymarketError = {
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const TRADING_ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const FUNDER = "0xf000000000000000000000000000000000000001";
+// The configured builder code (matches the live-trading test configs); every
+// browser-signed order must carry it or the API rejects ORDER_BUILDER_MISMATCH.
+const BUILDER_CODE = "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0";
+const ZERO_BUILDER = `0x${"0".repeat(64)}`;
 
 // ── Mock stores ───────────────────────────────────────────────────────────────
 
@@ -183,6 +190,7 @@ const mockSessions: SessionStore = {
   create: async (_o) => makeSessRow(),
   findByTokenHash: async () => null,
   revoke: async () => {},
+  revokeAllForWallet: async () => 0,
 };
 
 const mockSessionsAuthed: SessionStore = {
@@ -191,7 +199,9 @@ const mockSessionsAuthed: SessionStore = {
 };
 
 const mockAllowlist: AllowlistStore = {
-  isAllowed: async () => false,
+  // Sessions only exist for allowlisted wallets; request-time enforcement
+  // (enforceAllowlistOnSessions) would 401 every authed call otherwise.
+  isAllowed: async () => true,
   findEntry: async () => null,
   add: async () => {
     throw new Error("not implemented");
@@ -739,7 +749,7 @@ describe("POST /api/trade/orders", () => {
       signatureType: 2,
       timestamp: "1700000000000",
       metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
-      builder: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      builder: BUILDER_CODE,
       expiration: "0",
       signature: "0xsig",
     },
@@ -938,6 +948,35 @@ describe("POST /api/trade/orders", () => {
       side: "BUY",
       timestamp: "1700000000000",
     });
+    await app.close();
+  });
+
+  it("rejects a browser-signed order whose builder code is missing/wrong (ORDER_BUILDER_MISMATCH)", async () => {
+    const events: string[] = [];
+    const app = buildTestApp({
+      cfg: configTradingEnabled,
+      sessions: mockSessionsAuthed,
+      auditStore: {
+        ...mockAuditStore,
+        emit: async (e) => {
+          events.push(e.action);
+          return mockAuditStore.emit(e);
+        },
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      // A client that stripped the builder code to the all-zero (unattributed) value.
+      body: JSON.stringify({
+        ...validOrderBody,
+        order: { ...validOrderBody.order, builder: ZERO_BUILDER },
+      }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe("ORDER_BUILDER_MISMATCH");
+    expect(events).toContain("order.builder_mismatch");
     await app.close();
   });
 });
@@ -1397,10 +1436,19 @@ describe("Trading wallet onboarding", () => {
         };
       },
     };
+    const events: string[] = [];
+    const auditStore: AuditStore = {
+      ...mockAuditStore,
+      emit: async (e) => {
+        events.push(e.action);
+        return mockAuditStore.emit(e);
+      },
+    };
     const app = buildTestApp({
       cfg: configPrivy,
       sessions: mockSessionsAuthed,
       privyWallets: wallets,
+      auditStore,
     });
     const res = await app.inject({
       method: "POST",
@@ -1414,6 +1462,8 @@ describe("Trading wallet onboarding", () => {
     expect(upserted).not.toBeNull();
     expect(body.embeddedAddress).toBe(upserted!.embeddedAddress);
     expect(body.embeddedAddress as string).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    // Explicit opt-in: a fresh provision records the user's Arima Wallet consent.
+    expect(events).toContain("trading_wallet.opt_in");
     await app.close();
   });
 
@@ -2216,6 +2266,7 @@ describe("POST /api/trading-wallet/withdraw", () => {
     APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
     TRADING_ADMIN_SECRET: "test-admin-secret-123",
     FEATURE_LIVE_TRADING: "true",
+    POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
     FEATURE_PRIVY_SIGNING: "true",
     FEATURE_RELAYER: "true",
     FEATURE_WALLET_WITHDRAW: "true",
@@ -2436,6 +2487,7 @@ describe("POST /api/trading-wallet/withdraw", () => {
     APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
     TRADING_ADMIN_SECRET: "test-admin-secret-123",
     FEATURE_LIVE_TRADING: "true",
+    POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
     FEATURE_PRIVY_SIGNING: "true",
     FEATURE_RELAYER: "true",
     FEATURE_WALLET_WITHDRAW: "true",
@@ -2883,7 +2935,7 @@ describe("POST /api/trade/orders (restricted sessions)", () => {
       signatureType: 2,
       timestamp: "1700000000000",
       metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
-      builder: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      builder: BUILDER_CODE,
       expiration: "0",
       signature: "0xsig",
     },

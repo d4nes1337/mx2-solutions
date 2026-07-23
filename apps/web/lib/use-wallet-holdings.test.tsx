@@ -57,10 +57,25 @@ const asset = (o: {
 
 const ASSETS: FundsAsset[] = [
   asset({ chainId: "137", chainName: "Polygon", symbol: "POL", address: NATIVE, decimals: 18 }),
-  asset({ chainId: "137", chainName: "Polygon", symbol: "USDC", address: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" }),
-  asset({ chainId: "137", chainName: "Polygon", symbol: "USDC.e", address: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" }),
+  asset({
+    chainId: "137",
+    chainName: "Polygon",
+    symbol: "USDC",
+    address: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+  }),
+  asset({
+    chainId: "137",
+    chainName: "Polygon",
+    symbol: "USDC.e",
+    address: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+  }),
   asset({ chainId: "8453", chainName: "Base", symbol: "ETH", address: NATIVE, decimals: 18 }),
-  asset({ chainId: "8453", chainName: "Base", symbol: "USDC", address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" }),
+  asset({
+    chainId: "8453",
+    chainName: "Base",
+    symbol: "USDC",
+    address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  }),
 ];
 
 beforeEach(() => {

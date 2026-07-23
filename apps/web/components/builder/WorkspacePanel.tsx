@@ -69,12 +69,12 @@ export function WorkspacePanel({
               aria-selected={active}
               onClick={() => setActiveTab(t.id)}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors",
+                "flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors",
                 active ? "bg-surface text-fg shadow-panel" : "text-muted hover:text-fg",
               )}
             >
-              <Icon size={13} aria-hidden />
-              {t.label}
+              <Icon size={13} className="shrink-0" aria-hidden />
+              <span className="truncate">{t.label}</span>
             </button>
           );
         })}

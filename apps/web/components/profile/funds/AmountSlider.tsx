@@ -52,7 +52,9 @@ export function AmountSlider({
           inputMode="decimal"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? (maxLabel != null ? `Amount (max ${maxLabel}${unit})` : "Amount")}
+          placeholder={
+            placeholder ?? (maxLabel != null ? `Amount (max ${maxLabel}${unit})` : "Amount")
+          }
           min="0"
           step="any"
           disabled={disabled}
@@ -71,7 +73,11 @@ export function AmountSlider({
             max={max}
             disabled={disabled}
             ariaLabel={`Amount${unit}`}
-            valueText={usd != null ? `$${usd.toFixed(2)}` : `${floorTo(hasAmount ? amount : 0, decimals)}${unit}`}
+            valueText={
+              usd != null
+                ? `$${usd.toFixed(2)}`
+                : `${floorTo(hasAmount ? amount : 0, decimals)}${unit}`
+            }
           />
           <div className="flex items-center justify-between text-[10px] text-muted">
             <span>{minUsd != null ? `min $${minUsd}` : " "}</span>
@@ -79,9 +85,7 @@ export function AmountSlider({
               type="button"
               disabled={disabled}
               onClick={() => onChange(String(floorTo(max, decimals)))}
-              className={cn(
-                "tabular font-medium text-accent hover:underline disabled:opacity-50",
-              )}
+              className={cn("tabular font-medium text-accent hover:underline disabled:opacity-50")}
             >
               Max {maxLabel}
               {unit}

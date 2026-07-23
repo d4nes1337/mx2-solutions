@@ -331,12 +331,44 @@ const buildDefinition = (
         { code: "MISSING_FIELD", message: "order action requires a market." },
       ]);
     }
+    const marketRef = resolve(input.action.market);
+    // Current price for this outcome, from the verified candidate (fresh from
+    // the last search). Used to anchor a missing limit price and to convert a
+    // dollar budget to shares — never a static, unrelated default (brief §8.1.1/5).
+    const hit = candidates.find((h) => h.tokenIds.includes(marketRef.tokenId));
+    const currentPrice = hit
+      ? Number(hit.outcomePrices[hit.tokenIds.indexOf(marketRef.tokenId)])
+      : NaN;
+    const clampPrice = (p: number) => Math.min(0.99, Math.max(0.01, Math.round(p * 100) / 100));
+
+    let price: number;
+    if (input.action.price !== null && Number.isFinite(input.action.price)) {
+      price = clampPrice(input.action.price);
+    } else if (Number.isFinite(currentPrice)) {
+      price = clampPrice(currentPrice);
+    } else {
+      price = 0.5;
+      warnings.push("No fresh price for this market — defaulted the limit to 50¢; adjust it.");
+    }
+
+    // Dollars → shares at the fresh price (brief §8.1.1). A budget must NEVER
+    // silently become a share count; the assumption is surfaced with the draft.
+    let size: number;
+    if (input.action.budgetUsd !== null && Number.isFinite(input.action.budgetUsd)) {
+      size = Math.max(1, Math.round(input.action.budgetUsd / price));
+      warnings.push(
+        `Interpreted $${input.action.budgetUsd} as ${size} shares at ${Math.round(price * 100)}¢ — edit the size if you meant a share count.`,
+      );
+    } else {
+      size = input.action.size ?? 100;
+    }
+
     action = {
       kind: "order",
-      market: resolve(input.action.market),
+      market: marketRef,
       side: input.action.side,
-      price: input.action.price ?? 0,
-      size: input.action.size ?? 100,
+      price,
+      size,
       orderType: "GTC",
       execution: "prepare",
     };

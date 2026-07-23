@@ -17,7 +17,6 @@ import { QueueCard } from "@/components/trade/QueuePosition";
 import { OrderTicket } from "@/components/OrderTicket";
 import { RuleBuilder } from "@/components/RuleBuilder";
 import { RuleList } from "@/components/RuleList";
-import { TriggerAlert } from "@/components/TriggerAlert";
 import { StaleBanner } from "@/components/Banners";
 import { AutomateCard } from "@/components/market/AutomateCard";
 import { EventSiblingsPanel } from "@/components/market/EventSiblingsPanel";
@@ -130,8 +129,6 @@ export default function MarketCockpitPage() {
       </div>
 
       {isStale ? <StaleBanner source={live?.orderbookSource} /> : null}
-
-      <TriggerAlert />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Left: chart (overview) or book/tape/queue (advanced) */}

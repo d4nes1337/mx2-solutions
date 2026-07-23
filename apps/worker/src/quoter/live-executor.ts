@@ -32,6 +32,8 @@ export interface LiveExecutorDeps {
   owner: DepositWalletOwner;
   /** On-chain-verified CTF adapter for this market's negRisk flavor (R-028). */
   adapterAddress: string;
+  /** Public bytes32 builder attribution code (brief §7.2). Required; verified at sign time. */
+  builderCode: string;
 }
 
 export const createLiveExecutor = (deps: LiveExecutorDeps): QuoterExecutor => {
@@ -56,6 +58,8 @@ export const createLiveExecutor = (deps: LiveExecutorDeps): QuoterExecutor => {
           orderType: "GTC",
           // Maker-only, always: a crossing quote is a bug, not a trade.
           postOnly: true,
+          // Builder attribution (verified inside build1271SignedOrder).
+          builderCode: deps.builderCode,
         },
         creds: deps.creds,
         idempotencyKey,

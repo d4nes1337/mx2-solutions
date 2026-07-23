@@ -90,7 +90,11 @@ const examplesFrom = (showcases: Showcase[] | undefined): string[] => {
 
 export function Hero() {
   const flags = useFeatureFlags();
-  const aiOn = flags.data?.aiChat === true;
+  // Treat the flags-loading state as AI-on (the beta default) so the FIRST
+  // paint already matches the resolved value — no post-hydration message swap
+  // or layout shift (brief §8.1.2). Only a definitive aiChat=false degrades to
+  // the visual builder hero; that path is not the private-beta configuration.
+  const aiOn = flags.data?.aiChat !== false;
   const sc = useShowcases();
   const reduced = useReducedMotion();
 
@@ -128,7 +132,7 @@ export function Hero() {
 
   return (
     <section className="grid grid-cols-1 items-center gap-8 py-6 lg:grid-cols-2 lg:py-10">
-      <div className="space-y-5" onMouseEnter={pause} onMouseLeave={resume}>
+      <div className="min-w-0 space-y-5" onMouseEnter={pause} onMouseLeave={resume}>
         <h1 className="text-hero font-bold tracking-tight text-fg sm:text-hero-lg">
           {aiOn ? (
             <>
@@ -173,17 +177,15 @@ export function Hero() {
           </div>
         )}
         {aiOn ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              href="/smart-orders/new"
-              className="text-[12px] font-medium text-muted transition-colors hover:text-fg"
-            >
-              or start from a template →
+          // Three clear ways to start (brief §8.1.6): describe it above, or:
+          <div className="flex flex-wrap items-center gap-3 text-[12px] font-medium text-muted">
+            <Link href="/smart-orders/new" className="transition-colors hover:text-fg">
+              start from a template →
             </Link>
-            <Link
-              href="/markets"
-              className="text-[12px] font-medium text-muted transition-colors hover:text-fg"
-            >
+            <Link href="/smart-orders/new?start=blank" className="transition-colors hover:text-fg">
+              start blank →
+            </Link>
+            <Link href="/markets" className="transition-colors hover:text-fg">
               browse markets →
             </Link>
           </div>
@@ -191,7 +193,7 @@ export function Hero() {
           <MarketSearch />
         )}
       </div>
-      <div className="relative" onMouseEnter={pause} onMouseLeave={resume}>
+      <div className="relative min-w-0" onMouseEnter={pause} onMouseLeave={resume}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/brand/logo-mark-gradient.webp"

@@ -53,6 +53,7 @@ export function MarketSearch({
         image: r.image,
         rewardsMinSize: r.rewardsMinSize,
         rewardsMaxSpread: r.rewardsMaxSpread,
+        currentPrice: r.outcomePrices[outcomeIdx] ? Number(r.outcomePrices[outcomeIdx]) : null,
       },
     );
     setQ("");

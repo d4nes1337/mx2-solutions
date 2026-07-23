@@ -261,6 +261,7 @@ const buildSmartOrdersApp = (opts: {
       revokedAt: null,
     }),
     revoke: async () => {},
+    revokeAllForWallet: async () => 0,
   };
   const marketSnapshots: MarketSnapshotStore = {
     upsert: async () => {

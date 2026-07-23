@@ -407,3 +407,33 @@ Source: docs.polymarket.com/trading/fees.
   withdrawal balance checks and transfers use `PUSD_ADDRESS`
   (`packages/polymarket-client/src/chain/usdc.ts`). USDC.e remains relevant only as
   the _inbound_ deposit token and for legacy signer-EOA dust.
+
+## 24. Builder attribution + V2 SDK 1.1.0 (verified 2026-07-23; ADR-0024)
+
+Sources checked: docs.polymarket.com builder pages (overview, api-keys, attribution,
+get-builder-trades), `@polymarket/clob-client-v2@1.1.0` installed types, npm registry, the
+clob-client-v2 GitHub releases.
+
+- **Builder code = public bytes32**, `^0x[a-fA-F0-9]{64}$`, copied from
+  `polymarket.com/settings?tab=builder`. Passed as `builderCode` at order creation; the SDK
+  serializes it into the signed order's `builder` field — part of the ERC-7739 contents hash, so
+  it is cryptographically bound. **No HMAC/API-key/headers** are involved in attribution. Confirmed
+  in the installed SDK: `UserOrderV2.builderCode?: string` (`dist/types/ordersV2.d.ts`) → the
+  signed `NewOrderV2.order.builder` field.
+- **Verification endpoint is PUBLIC:** `GET https://clob.polymarket.com/builder/trades?builder_code=0x…`
+  (`security: []`; filters `market`/`asset_id`/`before`/`after`/`next_cursor`; `data[]` rows carry
+  `builder`, `market`, `sizeUsdc`, `feeUsdc`, `transactionHash`, `matchTime`, `status`). Consumed by
+  the owner diagnostic `apps/api/src/scripts/verify-builder-attribution.ts` — no credentials.
+  **Live-verified 2026-07-23:** the owner's configured code returned a real attributed trade
+  (1 trade, $5.00 USDC, matched 2026-07-01) — end-to-end proof the code is credited.
+- **SDK 1.0.6 → 1.1.0:** 1.0.7 added ExchangeV3 order signing + new tick sizes; 1.1.0 adapted to the
+  CLOB's **async execution** — `POST /order` returns `tradeIDs` and no longer populates
+  `transactionsHashes` directly (client resolution is best-effort, never throws after placement).
+  Our `SubmitOrderResponseSchema` (`{orderID, status?}` + `.passthrough()`) already tolerates this;
+  fills come from open-order/order-sync polling, not the submit response. Docs still document V2 as
+  current; the unified `@polymarket/ts-sdk` is recommended for NEW projects only — we stay on
+  `clob-client-v2`. Relayer client `0.0.10` / `builder-signing-sdk 0.0.8` pins unchanged.
+- **Watch item:** ExchangeV3. We build/verify against the V2 exchange addresses (§12a); the
+  ERC-7739 envelope is pinned in `clob-v2-session.test.ts` (now also asserting a non-zero
+  `builder`), so an envelope/exchange change surfaces on the next SDK bump rather than silently
+  mis-signing (R-050).

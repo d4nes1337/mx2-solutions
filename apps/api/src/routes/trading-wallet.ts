@@ -144,6 +144,25 @@ export const registerTradingWalletRoutes = (
       return { error: result.code, message: result.message };
     }
 
+    // Explicit opt-in marker: hitting this route is a deliberate user action
+    // ("Enable Arima Wallet Beta"). Provisioning no longer happens at login
+    // (brief §5.3.5), so a genuinely new wallet here IS the opt-in moment.
+    // A restore (alreadyProvisioned) re-links an existing wallet and is not a
+    // fresh opt-in. ensureTradingWalletProvisioned already audits the actual
+    // provision/reissue/unarchive.
+    if (!result.alreadyProvisioned) {
+      await deps.auditStore.emit({
+        actor: user.walletAddress,
+        action: "trading_wallet.opt_in",
+        subject: `wallet:${user.walletAddress}`,
+        metadata: {
+          tradingAccountId: result.tradingAccountId,
+          embeddedAddress: result.embeddedAddress,
+          reissued: result.reissued,
+        },
+      });
+    }
+
     return {
       ok: true,
       tradingAccountId: result.tradingAccountId,

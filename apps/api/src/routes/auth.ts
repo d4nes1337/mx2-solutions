@@ -6,14 +6,12 @@ import type {
   SessionStore,
   AllowlistStore,
   AuditStore,
+  InvitationStore,
   NotificationChannelStore,
-  PrivyWalletStore,
   SignLinkTokenStore,
-  TradingAccountStore,
+  WaitlistStore,
 } from "@mx2/db";
 import type { AppConfig } from "@mx2/config";
-import type { TradingSigner } from "@mx2/trading-signer";
-import { ensureTradingWalletProvisioned } from "../trade/provision-wallet.js";
 import {
   createLoginChallenge,
   verifyLoginSignature,
@@ -22,6 +20,7 @@ import {
   CHALLENGE_TTL_MS,
 } from "../auth/eip712.js";
 import { generateSessionToken, hashSessionToken, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { hashInviteCode } from "../auth/invite-code.js";
 import { verifyTelegramInitData } from "../auth/telegram-miniapp.js";
 import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
@@ -35,13 +34,14 @@ export interface AuthRoutesDeps {
   sessions: SessionStore;
   allowlist: AllowlistStore;
   auditStore: AuditStore;
-  tradingSigner: TradingSigner;
-  privyWallets: PrivyWalletStore;
-  tradingAccounts: TradingAccountStore;
   /** Sign-link tokens (FEATURE_NOTIFICATIONS); the exchange route needs it. */
   signTokens?: SignLinkTokenStore;
   /** Channel links (FEATURE_TELEGRAM_MINIAPP); the Mini App login needs it. */
   notificationChannels?: NotificationChannelStore;
+  /** Private-beta invitations; verify accepts an inviteCode when present. */
+  invitations?: InvitationStore;
+  /** Waitlist queue; a redeemed invitation marks its linked entry accepted. */
+  waitlist?: WaitlistStore;
 }
 
 /** Restricted-session lifetime: long enough to open, review, and sign. */
@@ -189,6 +189,43 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       };
     }
 
+    // Private beta: a not-yet-allowlisted wallet may redeem a one-time
+    // invitation code alongside a VALID signature. Redemption is atomic and
+    // binds the code to the signature-verified wallet server-side — a client
+    // can never redeem for a different wallet than the one that signed
+    // (brief §4.3.3). A replay by the SAME wallet is an idempotent success so
+    // a mid-login retry cannot strand the user between "code consumed" and
+    // "allowlisted"; anything else is rejected without detail.
+    const inviteCode = typeof body["inviteCode"] === "string" ? body["inviteCode"].trim() : null;
+    if (!allowed && inviteCode && deps.invitations) {
+      const result = await deps.invitations.redeem(hashInviteCode(inviteCode), address);
+      if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
+        await deps.allowlist.add(address, `invite:${result.invitation.id}`, result.invitation.note);
+        await deps.auditStore.emit({
+          actor: address,
+          action: "invite.redeemed",
+          subject: `invitation:${result.invitation.id}`,
+          metadata: { idempotentReplay: result.outcome === "already_redeemed_by_wallet" },
+        });
+        if (result.invitation.waitlistEntryId && deps.waitlist) {
+          await deps.waitlist.updateStatus(result.invitation.waitlistEntryId, "accepted");
+        }
+        allowed = true;
+      } else {
+        await deps.auditStore.emit({
+          actor: address,
+          action: "invite.redemption_rejected",
+          subject: `wallet:${address}`,
+          metadata: { reason: result.reason },
+        });
+        reply.code(403);
+        return {
+          error: "INVITE_INVALID",
+          message: "This invitation code is invalid, expired, or already used.",
+        };
+      }
+    }
+
     // Open beta: after a VALID signature, auto-allowlist unknown wallets. The
     // allowlist table stays the source of truth (revoking a wallet still works;
     // AllowlistStore.add upserts and re-activates). Behind FEATURE_OPEN_BETA.
@@ -205,7 +242,14 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
 
     if (!allowed) {
       reply.code(403);
-      return { error: "NOT_ALLOWLISTED", message: "this address is not on the beta allowlist" };
+      return {
+        error: "NOT_ALLOWLISTED",
+        message:
+          "Private beta access is required to save, arm, and receive live triggers. " +
+          "Redeem an invitation code or join the waitlist.",
+        inviteRedemptionAvailable: Boolean(deps.invitations),
+        waitlistAvailable: true,
+      };
     }
 
     // Mark nonce used.
@@ -228,34 +272,10 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       metadata: { method: "eip712" },
     });
 
-    // Auto-provision a Privy trading wallet so every user is trade-ready straight
-    // after login. Idempotent and fail-soft: a Privy hiccup must never block login —
-    // the user can still retry via POST /api/trading-wallet/provision.
-    if (deps.config.features.privySigning) {
-      try {
-        const result = await ensureTradingWalletProvisioned(
-          {
-            config: deps.config,
-            auditStore: deps.auditStore,
-            tradingSigner: deps.tradingSigner,
-            privyWallets: deps.privyWallets,
-            tradingAccounts: deps.tradingAccounts,
-          },
-          address,
-        );
-        if (!result.ok) {
-          req.log.warn(
-            { walletAddress: address, code: result.code, message: result.message },
-            "auto-provision of trading wallet failed on login",
-          );
-        }
-      } catch (err) {
-        req.log.error(
-          { err, walletAddress: address },
-          "auto-provision of trading wallet threw on login",
-        );
-      }
-    }
+    // NOTE: signing in deliberately does NOT provision an Arima (Privy) trading
+    // wallet. The main/connected wallet is the default trading path; the Arima
+    // Wallet is an explicit opt-in Beta feature created only via
+    // POST /api/trading-wallet/provision after the user confirms (brief §5.3.5).
 
     // Set httpOnly session cookie.
     void reply.setCookie(SESSION_COOKIE_NAME, token, {

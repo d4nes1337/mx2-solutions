@@ -22,6 +22,8 @@ export const AUDIT_ACTIONS = [
   "order.cancel_failed",
   "order.failed",
   "order.rate_limited",
+  /** A browser-signed order was rejected for a missing/wrong builder code (§7.1). */
+  "order.builder_mismatch",
   "rule.created",
   "rule.state_changed",
   "rule.triggered",
@@ -63,6 +65,8 @@ export const AUDIT_ACTIONS = [
   /** User hid a stuck transfer record from active surfaces (0019). */
   "wallet.bridge.deposit_dismissed",
   "trading_wallet.provisioned",
+  /** User explicitly enabled the opt-in Arima Wallet Beta (brief §5.3.6). */
+  "trading_wallet.opt_in",
   "trading_wallet.ghost_detected",
   "trading_wallet.reissued",
   "trading_wallet.deposit_wallet_activation_started",
@@ -82,6 +86,12 @@ export const AUDIT_ACTIONS = [
   "notification.sent",
   "notification.send_failed",
   "auth.scoped_session_created",
+  // Private-beta access boundary (migration 0021):
+  "waitlist.joined",
+  "invite.created",
+  "invite.redeemed",
+  "invite.redemption_rejected",
+  "invite.revoked",
   "system.startup",
 ] as const;
 

@@ -197,7 +197,6 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                   }
                 />
               ) : null}
-              <Row k="Builder code" v={d.preview.builderCode ?? "—"} mono />
               <p className="mt-1 text-warn">{d.warning}</p>
             </div>
 
@@ -220,6 +219,17 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                 <Row k="Reason codes" v={d.evidence.reasonCodes.join(", ") || "—"} />
                 <Row k="Rule hash" v={d.evidence.ruleDefinitionHash} mono />
                 <Row k="Evaluator" v={d.evidence.evaluatorVersion} mono />
+              </div>
+            </details>
+
+            {/* Builder attribution is not a primary decision field (brief §7.1) —
+                kept available under advanced execution details. */}
+            <details className="rounded-md border border-border bg-surface-2 p-3">
+              <summary className="cursor-pointer font-semibold text-fg">
+                Advanced execution details
+              </summary>
+              <div className="mt-2 space-y-1">
+                <Row k="Builder code" v={d.preview.builderCode ?? "—"} mono />
               </div>
             </details>
 
