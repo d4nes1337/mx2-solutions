@@ -163,3 +163,92 @@ describe("useBuilderStore: editor-only state", () => {
     expect(useBuilderStore.getState().revision).toBe(before);
   });
 });
+
+describe("useBuilderStore.setCardOp: two-level grid logic", () => {
+  const price = (tokenId: string, threshold: number) =>
+    ({
+      kind: "price",
+      market: { conditionId: `c-${tokenId}`, tokenId, outcome: "YES" },
+      source: "ask",
+      comparator: "gte",
+      threshold,
+    }) as const;
+
+  it("materializes a per-market group from flat root rows, preserving node ids", () => {
+    const store = useBuilderStore.getState();
+    const a = store.addCondition(price("tok-1", 0.6));
+    const b = store.addCondition(price("tok-1", 0.4));
+    const other = store.addCondition(price("tok-2", 0.5));
+
+    store.setCardOp("tok-1", "or"); // root op is "and" → differs → group
+
+    const root = useBuilderStore.getState().doc.expr;
+    expect(root.children).toHaveLength(2);
+    const group = root.children.find((n) => n.type === "group");
+    expect(group?.type).toBe("group");
+    if (group?.type !== "group") return;
+    expect(group.op).toBe("or");
+    expect(group.children.map((c) => c.id)).toEqual([a, b]);
+    expect(root.children.some((n) => n.id === other)).toBe(true);
+  });
+
+  it("flips an existing backing group's op in place", () => {
+    const store = useBuilderStore.getState();
+    store.addCondition(price("tok-1", 0.6));
+    store.addCondition(price("tok-1", 0.4));
+    store.setCardOp("tok-1", "or");
+    const groupId = useBuilderStore.getState().doc.expr.children.find(
+      (n) => n.type === "group",
+    )!.id;
+
+    useBuilderStore.getState().setCardOp("tok-1", "and");
+
+    const group = useBuilderStore.getState().doc.expr.children.find((n) => n.type === "group");
+    expect(group?.id).toBe(groupId); // same node, op flipped
+    expect(group?.type === "group" && group.op).toBe("and");
+  });
+
+  it("keeps flat rows flat when the requested op matches the root op", () => {
+    const store = useBuilderStore.getState();
+    store.addCondition(price("tok-1", 0.6));
+    store.addCondition(price("tok-1", 0.4));
+    const before = useBuilderStore.getState().doc.expr;
+
+    useBuilderStore.getState().setCardOp("tok-1", "and"); // root is already "and"
+
+    expect(useBuilderStore.getState().doc.expr).toBe(before);
+  });
+
+  it("ignores single-row cards (nothing to combine)", () => {
+    const store = useBuilderStore.getState();
+    store.addCondition(price("tok-1", 0.6));
+    const before = useBuilderStore.getState().doc.expr;
+
+    useBuilderStore.getState().setCardOp("tok-1", "or");
+
+    expect(useBuilderStore.getState().doc.expr).toBe(before);
+  });
+});
+
+describe("useBuilderStore: AI apply undo", () => {
+  it("markAiApplied + undoAiApply restore the pre-AI doc and clear the flash ids", () => {
+    const store = useBuilderStore.getState();
+    store.addCondition({
+      kind: "price",
+      market: { conditionId: "c", tokenId: "t", outcome: "YES" },
+      source: "ask",
+      comparator: "lte",
+      threshold: 0.4,
+    });
+    const before = useBuilderStore.getState().doc;
+
+    store.reset({ ...before, name: "AI version" });
+    useBuilderStore.getState().markAiApplied(before, ["x1"]);
+    expect(useBuilderStore.getState().lastAiChangedIds).toEqual(["x1"]);
+
+    useBuilderStore.getState().undoAiApply();
+    expect(useBuilderStore.getState().doc.name).toBe(before.name);
+    expect(useBuilderStore.getState().aiUndo).toBeNull();
+    expect(useBuilderStore.getState().lastAiChangedIds).toEqual([]);
+  });
+});

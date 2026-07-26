@@ -32,6 +32,7 @@ import {
   type DraftHistoryEntry,
   type DraftRecord,
 } from "./drafts";
+import { cardKeyForCondition } from "./grid-projection";
 
 /** Tabs of the right-hand workspace panel (editor-only UI state). */
 export type WorkspaceTab = "ai" | "simulate" | "market" | "settings" | "block";
@@ -81,6 +82,10 @@ export interface BuilderState {
   aiMessages: DraftChatMessage[];
   /** Per-draft compact API history (pushed on success only, capped). */
   aiHistory: DraftHistoryEntry[];
+  /** Pre-AI-apply snapshot for one-tap undo (in-place refinements only). */
+  aiUndo: StrategyDoc | null;
+  /** Condition-node ids the last AI apply added or changed — rows flash. */
+  lastAiChangedIds: string[];
 
   reset: (doc?: StrategyDoc) => void;
   /**
@@ -98,12 +103,23 @@ export interface BuilderState {
   clearCanvas: () => void;
   pushAiMessage: (msg: DraftChatMessage) => void;
   pushAiHistory: (turns: DraftHistoryEntry[]) => void;
+  /** Record an in-place AI apply: what to restore on undo + which rows changed. */
+  markAiApplied: (prevDoc: StrategyDoc, changedIds: string[]) => void;
+  /** Restore the pre-AI doc (one level). */
+  undoAiApply: () => void;
   setActiveTab: (tab: WorkspaceTab) => void;
   setAiStatus: (status: AiStatus) => void;
   focusMarket: (tokenId: string | null) => void;
   revealAll: () => void;
   setName: (name: string) => void;
   setRootOp: (op: "and" | "or") => void;
+  /**
+   * Set the combinator among one grid card's conditions (two-level logic).
+   * Flips the backing per-market group's op when one exists; otherwise
+   * materializes a group from the card's flat root rows, preserving node ids.
+   * No-op when the flat rows already combine as `op` via the root.
+   */
+  setCardOp: (cardKey: string, op: "and" | "or") => void;
   /** Append a condition — to the root, or into the group `parentId`. */
   addCondition: (condition: ConditionV2, parentId?: string) => string;
   /** Append an empty AND/OR group to the root (fill via the group editor). */
@@ -176,6 +192,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   dirty: false,
   aiMessages: [],
   aiHistory: [],
+  aiUndo: null,
+  lastAiChangedIds: [],
 
   reset: (doc) =>
     set({ doc: doc ?? emptyDoc(), revision: get().revision + 1, dirty: true, pristine: false }),
@@ -195,6 +213,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       pristine: !opts?.carryChat,
       aiMessages: opts?.carryChat ? s.aiMessages : [],
       aiHistory: opts?.carryChat ? s.aiHistory : [],
+      aiUndo: null,
+      lastAiChangedIds: [],
       focusedMarketToken: null,
       aiStatus: "idle",
     });
@@ -213,6 +233,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       doc: rec.doc,
       aiMessages: rec.aiMessages,
       aiHistory: rec.aiHistory,
+      aiUndo: null,
+      lastAiChangedIds: [],
       revision: s.revision + 1,
       dirty: false,
       pristine: false,
@@ -229,6 +251,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       doc: emptyDoc(),
       aiMessages: [],
       aiHistory: [],
+      aiUndo: null,
+      lastAiChangedIds: [],
       revision: s.revision + 1,
       dirty: false,
       pristine: true,
@@ -243,6 +267,18 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   pushAiHistory: (turns) =>
     set((s) => ({ aiHistory: [...s.aiHistory, ...turns].slice(-MAX_AI_HISTORY) })),
 
+  markAiApplied: (prevDoc, changedIds) => set({ aiUndo: prevDoc, lastAiChangedIds: changedIds }),
+
+  undoAiApply: () =>
+    set((s) => {
+      if (!s.aiUndo) return s;
+      return {
+        ...bump(s.aiUndo, s),
+        aiUndo: null,
+        lastAiChangedIds: [],
+      };
+    }),
+
   // Editor-only (no revision bump — never retriggers evaluation).
   revealAll: () => set((s) => ({ revealTick: s.revealTick + 1 })),
   setActiveTab: (activeTab) =>
@@ -253,6 +289,45 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   setName: (name) => set((s) => bump({ ...s.doc, name }, s)),
 
   setRootOp: (op) => set((s) => bump({ ...s.doc, expr: { ...s.doc.expr, op } }, s)),
+
+  setCardOp: (cardKey, op) =>
+    set((s) => {
+      const root = s.doc.expr;
+      // A backing per-market group (all condition children, one card key) —
+      // flip its op in place.
+      const backing = root.children.find(
+        (n): n is Extract<typeof n, { type: "group" }> =>
+          n.type === "group" &&
+          n.op !== "not" &&
+          n.children.length > 0 &&
+          n.children.every(
+            (c) => c.type === "condition" && cardKeyForCondition(c.condition) === cardKey,
+          ),
+      );
+      if (backing) {
+        if (backing.op === op) return s;
+        return bump(
+          { ...s.doc, expr: replaceNodeInTree(root, backing.id, { ...backing, op }) },
+          s,
+        );
+      }
+      // Flat root rows: materialize a group only when the combinator actually
+      // differs from the root's (same op = same semantics, keep them flat).
+      if (root.op === op) return s;
+      const rows = root.children.filter(
+        (n) => n.type === "condition" && cardKeyForCondition(n.condition) === cardKey,
+      );
+      if (rows.length < 2) return s;
+      const group = { type: "group" as const, id: freshNodeId("g"), op, children: rows };
+      let inserted = false;
+      const children = root.children.flatMap((n) => {
+        if (!rows.includes(n)) return [n];
+        if (inserted) return [];
+        inserted = true;
+        return [group];
+      });
+      return bump({ ...s.doc, expr: { ...root, children } }, s);
+    }),
 
   addCondition: (condition, parentId) => {
     const id = freshNodeId();

@@ -10,7 +10,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
-import { Badge, Button, Skeleton, cn } from "@/components/ui";
+import { Badge, Button, Segmented, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { InviteCodeForm, isAccessError } from "@/components/InviteCodeForm";
 import { useActionCenterUi } from "@/lib/action-center-store";
@@ -39,8 +39,17 @@ import {
   useStrategy,
 } from "@/lib/strategies/queries";
 import { TEMPLATES, templateById } from "@/lib/strategies/templates";
+import {
+  loadBuilderView,
+  saveBuilderView,
+  DEFAULT_BUILDER_VIEW,
+  type BuilderView,
+} from "@/lib/strategies/builder-view";
+import { isComplexDoc } from "@/lib/strategies/grid-projection";
 import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
+import { StrategyGrid } from "@/components/strategies/grid/StrategyGrid";
+import { GridComposer } from "@/components/strategies/grid/GridComposer";
 import { AddPalette } from "./AddPalette";
 import { CanvasToolbar } from "./CanvasToolbar";
 import { DraftSwitcher } from "./DraftSwitcher";
@@ -152,6 +161,22 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const routerRef = useRef(router);
   routerRef.current = router;
   const panel = usePanelWidth();
+
+  // Grid ⇄ Canvas projection toggle. Persisted per device; loaded after mount
+  // so SSR/hydration always render the default.
+  const [view, setViewState] = useState<BuilderView>(DEFAULT_BUILDER_VIEW);
+  const firstViewRef = useRef<BuilderView>(DEFAULT_BUILDER_VIEW);
+  const viewSettledRef = useRef(false);
+  useEffect(() => {
+    const v = loadBuilderView();
+    firstViewRef.current = v;
+    viewSettledRef.current = true;
+    setViewState(v);
+  }, []);
+  const setView = (v: BuilderView) => {
+    setViewState(v);
+    saveBuilderView(v);
+  };
   useDraftAutosave();
   // Pull the account's drafts into localStorage once per mount (fail-soft when
   // signed out) — cross-device drafts then show up in the switcher/resume.
@@ -179,7 +204,12 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   }));
 
   const flags = useFeatureFlags();
-  const aiPrompt = entry.prompt;
+  // The deep-linked AI prompt is consumed by whichever view is active first;
+  // switching views afterwards must not re-fire it (AiPanel remounts).
+  const [aiPrompt, setAiPrompt] = useState(entry.prompt);
+  useEffect(() => {
+    if (viewSettledRef.current && view !== firstViewRef.current) setAiPrompt(null);
+  }, [view]);
   const initialPinned = useMemo(() => parsePinnedParam(entry.pinned), [entry.pinned]);
   const showcaseId = entry.showcase;
   const showcases = useShowcases(Boolean(showcaseId));
@@ -443,6 +473,87 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         ? create.error.message
         : null;
 
+  // The save/arm card — rendered in the WorkspacePanel footer (canvas view)
+  // or under the ACT column (grid view). One JSX source, both views.
+  const saveFooter = (
+    <div
+      className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"
+      data-tour="builder-save"
+    >
+      {signedIn ? (
+        allowlisted ? (
+          <>
+            <Button className="w-full" disabled={!canSave} onClick={save}>
+              <Sparkles size={14} aria-hidden />
+              {create.isPending ? "Saving…" : "Save & start watching"}
+            </Button>
+            {doc.action.kind === "order" && doc.action.execution === "auto" ? (
+              (autoReadiness.data?.blockers.length ?? 0) > 0 ? (
+                <div className="rounded-md border border-warn/30 bg-warn/10 p-2 text-[11px] leading-snug text-warn">
+                  <p className="font-medium">
+                    Auto mode can&apos;t execute unattended yet — triggers will wait for your
+                    confirmation:
+                  </p>
+                  <ul className="mt-1 list-disc pl-4">
+                    {autoReadiness.data!.blockers.slice(0, 3).map((b) => (
+                      <li key={b.code}>{b.detail}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-[11px] leading-snug text-muted">
+                  Auto mode places orders from your{" "}
+                  <Link href="/wallet" className="text-accent hover:underline">
+                    Arima trading wallet
+                  </Link>{" "}
+                  within the limits above. If the wallet isn&apos;t ready, triggers wait for your
+                  signature instead.
+                </p>
+              )
+            ) : null}
+            {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
+          </>
+        ) : (
+          <p className="text-[12px] leading-snug text-muted">
+            Your account isn&apos;t in the beta yet — you can build and simulate freely, and save
+            once you have access.
+          </p>
+        )
+      ) : isAccessError(signIn.error) ? (
+        <InviteCodeForm
+          signIn={signIn}
+          heading="Your draft is ready. Private beta access is required to save, arm, and receive live triggers."
+        />
+      ) : (
+        <>
+          <Button className="w-full" onClick={() => signIn.mutate()} disabled={signIn.isPending}>
+            {signIn.isPending ? "Check your wallet…" : "Sign in to save"}
+          </Button>
+          <p className="text-[11px] leading-snug text-muted">
+            Building and simulating is free — no account needed until you save.
+          </p>
+        </>
+      )}
+    </div>
+  );
+
+  // Validation checklist — shared by both views.
+  const checklist =
+    issues.length > 0 ? (
+      <ul className="space-y-1 rounded-xl border border-border bg-surface-2 px-3.5 py-2.5">
+        {issues.slice(0, 4).map((issue, i) => (
+          <li key={i} className="flex items-center gap-1.5 text-[12px] text-muted">
+            <CircleAlert size={12} className="shrink-0 text-warn" aria-hidden />
+            {issue.message}
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <div className="flex items-center gap-1.5 rounded-xl border border-pos/30 bg-pos/5 px-3.5 py-2.5 text-[12px] text-pos">
+        <CheckCircle2 size={13} aria-hidden /> Ready to save
+      </div>
+    );
+
   return (
     <div className="space-y-3">
       {/* Header row: name, templates, save */}
@@ -455,6 +566,15 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           aria-label="Strategy name"
         />
         <div className="no-scrollbar flex min-w-0 max-w-full items-center gap-2 overflow-x-auto">
+          <Segmented
+            options={[
+              { value: "grid", label: "Grid" },
+              { value: "canvas", label: "Canvas" },
+            ]}
+            value={view}
+            onChange={(v) => setView(v as BuilderView)}
+            size="sm"
+          />
           <DraftSwitcher
             onOpenDraft={(id) => {
               if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
@@ -492,116 +612,72 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         projection={projection}
       />
 
-      <div
-        className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_var(--panel-w)] lg:gap-1"
-        style={{ ["--panel-w" as string]: `${panel.width}px` }}
-      >
-        <div className="min-w-0 space-y-2">
-          <CanvasToolbar />
-          {/* Clip the desktop-first canvas viewport so React Flow nodes pan
-              INSIDE it instead of scrolling the whole page on mobile (§8.1.3). */}
-          <div className={cn("relative overflow-hidden", CANVAS_HEIGHT_CLASS)}>
-            <BuilderCanvas evaluation={evaluation.data} issues={issues} />
-            <AddPalette />
+      {view === "grid" ? (
+        <>
+          {isComplexDoc(doc) ? (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3.5 py-2 text-[12px] text-warn">
+              <span>
+                Part of this strategy uses grouped logic the grid shows read-only — review it on
+                the canvas.
+              </span>
+              <button
+                type="button"
+                onClick={() => setView("canvas")}
+                className="shrink-0 font-semibold text-warn underline-offset-2 hover:underline"
+              >
+                Open canvas
+              </button>
+            </div>
+          ) : null}
+          <StrategyGrid
+            doc={doc}
+            edit
+            evaluation={evaluation.data}
+            onOpenCanvas={() => setView("canvas")}
+            actFooter={
+              <div className="space-y-3">
+                {checklist}
+                {saveFooter}
+              </div>
+            }
+          />
+          {flags.data?.aiChat ? (
+            <GridComposer initialPrompt={aiPrompt} initialPinned={initialPinned} />
+          ) : null}
+        </>
+      ) : (
+        <div
+          className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_var(--panel-w)] lg:gap-1"
+          style={{ ["--panel-w" as string]: `${panel.width}px` }}
+        >
+          <div className="min-w-0 space-y-2">
+            <CanvasToolbar />
+            {/* Clip the desktop-first canvas viewport so React Flow nodes pan
+                INSIDE it instead of scrolling the whole page on mobile (§8.1.3). */}
+            <div className={cn("relative overflow-hidden", CANVAS_HEIGHT_CLASS)}>
+              <BuilderCanvas evaluation={evaluation.data} issues={issues} />
+              <AddPalette />
+            </div>
+            {checklist}
           </div>
 
-          {/* Validation checklist */}
-          {issues.length > 0 ? (
-            <ul className="space-y-1 rounded-xl border border-border bg-surface-2 px-3.5 py-2.5">
-              {issues.slice(0, 4).map((issue, i) => (
-                <li key={i} className="flex items-center gap-1.5 text-[12px] text-muted">
-                  <CircleAlert size={12} className="shrink-0 text-warn" aria-hidden />
-                  {issue.message}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="flex items-center gap-1.5 rounded-xl border border-pos/30 bg-pos/5 px-3.5 py-2.5 text-[12px] text-pos">
-              <CheckCircle2 size={13} aria-hidden /> Ready to save
-            </div>
-          )}
+          <PanelResizeHandle
+            width={panel.width}
+            dragging={panel.dragging}
+            onPointerDown={panel.startDrag}
+            onKeyDown={panel.onKeyDown}
+            className="hidden lg:block"
+          />
+
+          <WorkspacePanel
+            evaluation={evaluation.data}
+            aiChatEnabled={Boolean(flags.data?.aiChat)}
+            aiPrompt={aiPrompt}
+            aiPinned={initialPinned}
+            footer={saveFooter}
+          />
         </div>
-
-        <PanelResizeHandle
-          width={panel.width}
-          dragging={panel.dragging}
-          onPointerDown={panel.startDrag}
-          onKeyDown={panel.onKeyDown}
-          className="hidden lg:block"
-        />
-
-        <WorkspacePanel
-          evaluation={evaluation.data}
-          aiChatEnabled={Boolean(flags.data?.aiChat)}
-          aiPrompt={aiPrompt}
-          aiPinned={initialPinned}
-          footer={
-            <div
-              className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-panel"
-              data-tour="builder-save"
-            >
-              {signedIn ? (
-                allowlisted ? (
-                  <>
-                    <Button className="w-full" disabled={!canSave} onClick={save}>
-                      <Sparkles size={14} aria-hidden />
-                      {create.isPending ? "Saving…" : "Save & start watching"}
-                    </Button>
-                    {doc.action.kind === "order" && doc.action.execution === "auto" ? (
-                      (autoReadiness.data?.blockers.length ?? 0) > 0 ? (
-                        <div className="rounded-md border border-warn/30 bg-warn/10 p-2 text-[11px] leading-snug text-warn">
-                          <p className="font-medium">
-                            Auto mode can&apos;t execute unattended yet — triggers will wait for
-                            your confirmation:
-                          </p>
-                          <ul className="mt-1 list-disc pl-4">
-                            {autoReadiness.data!.blockers.slice(0, 3).map((b) => (
-                              <li key={b.code}>{b.detail}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : (
-                        <p className="text-[11px] leading-snug text-muted">
-                          Auto mode places orders from your{" "}
-                          <Link href="/wallet" className="text-accent hover:underline">
-                            Arima trading wallet
-                          </Link>{" "}
-                          within the limits above. If the wallet isn&apos;t ready, triggers wait for
-                          your signature instead.
-                        </p>
-                      )
-                    ) : null}
-                    {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
-                  </>
-                ) : (
-                  <p className="text-[12px] leading-snug text-muted">
-                    Your account isn&apos;t in the beta yet — you can build and simulate freely, and
-                    save once you have access.
-                  </p>
-                )
-              ) : isAccessError(signIn.error) ? (
-                <InviteCodeForm
-                  signIn={signIn}
-                  heading="Your draft is ready. Private beta access is required to save, arm, and receive live triggers."
-                />
-              ) : (
-                <>
-                  <Button
-                    className="w-full"
-                    onClick={() => signIn.mutate()}
-                    disabled={signIn.isPending}
-                  >
-                    {signIn.isPending ? "Check your wallet…" : "Sign in to save"}
-                  </Button>
-                  <p className="text-[11px] leading-snug text-muted">
-                    Building and simulating is free — no account needed until you save.
-                  </p>
-                </>
-              )}
-            </div>
-          }
-        />
-      </div>
+      )}
     </div>
   );
 }

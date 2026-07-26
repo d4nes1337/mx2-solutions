@@ -55,10 +55,13 @@ export interface GridProjection {
 const TIME_KEY = "time";
 const UNBOUND_KEY = "unbound";
 
-const conditionKey = (c: ConditionV2): string => {
+/** Which grid card a condition belongs to (also used by the store's setCardOp). */
+export const cardKeyForCondition = (c: ConditionV2): string => {
   if (c.kind === "time_window") return TIME_KEY;
   return isBound(c.market) ? c.market.tokenId : UNBOUND_KEY;
 };
+
+const conditionKey = cardKeyForCondition;
 
 const conditionMarket = (c: ConditionV2): MarketRef | null =>
   c.kind === "time_window" ? null : isBound(c.market) ? c.market : null;

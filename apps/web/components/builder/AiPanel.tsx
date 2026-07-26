@@ -113,7 +113,17 @@ export function AiPanel({
     if (s.aiHistory.length === 0 && s.dirty && docHasContent(s.doc)) {
       spawnDraft(next, { origin: "ai", carryChat: true });
     } else {
+      // In-place apply: snapshot for one-tap undo and mark the rows the AI
+      // added or changed so the grid can flash them (edits are never silent).
+      const prevById = new Map(
+        conditionLeavesOf(s.doc.expr).map((l) => [l.id, JSON.stringify(l.condition)]),
+      );
+      const changedIds = conditionLeavesOf(next.expr)
+        .filter((l) => prevById.get(l.id) !== JSON.stringify(l.condition))
+        .map((l) => l.id);
+      const hadContent = docHasContent(s.doc);
       reset(next);
+      if (hadContent) useBuilderStore.getState().markAiApplied(s.doc, changedIds);
     }
     revealAll();
     pushMessage({

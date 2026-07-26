@@ -177,3 +177,22 @@ describe("parsePinnedParam", () => {
     expect(parsePinnedParam(null)).toEqual([]);
   });
 });
+
+describe("BuilderShell grid ⇄ canvas toggle", () => {
+  it("defaults to the grid, switches to the canvas, and persists the choice", async () => {
+    searchParams = new URLSearchParams("start=blank");
+    const { getByText, getByTestId, queryByTestId, findByText } = renderShell();
+
+    // Grid is the default projection: the add-market bar renders, no canvas.
+    await findByText("Add market to watch");
+    expect(queryByTestId("canvas-stub")).toBeNull();
+
+    getByText("Canvas").click();
+    await waitFor(() => expect(getByTestId("canvas-stub")).toBeInTheDocument());
+    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("canvas");
+
+    getByText("Grid").click();
+    await findByText("Add market to watch");
+    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("grid");
+  });
+});
