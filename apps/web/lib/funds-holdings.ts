@@ -141,7 +141,11 @@ export function priceKeyFor(symbol: string): string {
   return base[group] ?? group;
 }
 
-const holdingUsd = (symbol: string, amount: number, prices: Record<string, number>): number | null => {
+const holdingUsd = (
+  symbol: string,
+  amount: number,
+  prices: Record<string, number>,
+): number | null => {
   if (isStableSymbol(symbol)) return amount; // 1 token ≈ $1
   const price = prices[priceKeyFor(symbol)];
   return typeof price === "number" && price > 0 ? amount * price : null;
@@ -176,10 +180,7 @@ const preferHolding = (cand: WalletHolding, existing: WalletHolding): boolean =>
  * unpriced amount) is dropped. Sorted by USD desc (unknown price last), then
  * amount, then chain order.
  */
-export function buildHoldings(
-  scans: ChainScan[],
-  prices: Record<string, number>,
-): WalletHolding[] {
+export function buildHoldings(scans: ChainScan[], prices: Record<string, number>): WalletHolding[] {
   const byKey = new Map<string, WalletHolding>();
   for (const scan of scans) {
     scan.tokens.forEach((token, i) => {

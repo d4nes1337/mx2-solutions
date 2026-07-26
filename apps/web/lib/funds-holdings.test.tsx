@@ -156,7 +156,12 @@ describe("buildHoldings", () => {
       [
         asset({ chainId: "137", symbol: "POL", address: NATIVE, decimals: 18 }),
         // Same Polygon coin via the 0x…1010 predeploy — a duplicate balance.
-        asset({ chainId: "137", symbol: "MATIC", address: "0x0000000000000000000000000000000000001010", decimals: 18 }),
+        asset({
+          chainId: "137",
+          symbol: "MATIC",
+          address: "0x0000000000000000000000000000000000001010",
+          decimals: 18,
+        }),
       ],
       "137",
     );
@@ -183,7 +188,15 @@ describe("buildHoldings", () => {
         {
           chainId: "1",
           tokens: evmTokensForChain(
-            [asset({ chainId: "1", chainName: "Ethereum", symbol: "WETH", address: WETH, decimals: 18 })],
+            [
+              asset({
+                chainId: "1",
+                chainName: "Ethereum",
+                symbol: "WETH",
+                address: WETH,
+                decimals: 18,
+              }),
+            ],
             "1",
           ),
           balances: [2n * 10n ** 18n], // 2 WETH, no price

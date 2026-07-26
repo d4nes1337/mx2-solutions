@@ -9,11 +9,16 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, keccak256, toHex, verifyTypedData, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { build1271SignedOrder, type Eip712Payload } from "./clob-v2-session.js";
+import {
+  assertSignedBuilder,
+  build1271SignedOrder,
+  type Eip712Payload,
+} from "./clob-v2-session.js";
 
 const LOCAL_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
 const account = privateKeyToAccount(LOCAL_KEY);
 const DEPOSIT_WALLET = "0x997c95d8be61d5779edfb49aaf5dd83d85f31434";
+const BUILDER_CODE = "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0";
 // CTF Exchange V2 (Polygon) — from the SDK's getContractConfig(137); NOT the
 // legacy V1 exchange (0x4bFb…) documented in INTEGRATION §10.
 const EXCHANGE_V2 = "0xE111180000d2663C0091e4f400237545B87B996B";
@@ -25,7 +30,7 @@ const ORDER_TYPE_STRING =
 const sign = async (payload: Eip712Payload): Promise<string> =>
   account.signTypedData(payload as never);
 
-const buildOrder = () =>
+const buildOrder = (builderCode?: string) =>
   build1271SignedOrder(
     {
       signerAddress: account.address,
@@ -42,6 +47,7 @@ const buildOrder = () =>
       negRisk: false,
       orderType: "GTC",
       postOnly: true,
+      ...(builderCode ? { builderCode } : {}),
     },
   );
 
@@ -191,6 +197,19 @@ describe("build1271SignedOrder (R-009 contract)", () => {
       signature: innerSig,
     });
     expect(valid).toBe(true);
+  });
+
+  it("serializes a non-zero builderCode into the signed order's builder field", async () => {
+    const withCode = await buildOrder(BUILDER_CODE);
+    // Attribution survives signing: the exact configured code, non-zero.
+    expect((withCode["builder"] as string).toLowerCase()).toBe(BUILDER_CODE.toLowerCase());
+    // The default (no code) build carries the all-zero, UNATTRIBUTED builder —
+    // this is exactly the gap the server paths must never ship.
+    const withoutCode = await buildOrder();
+    expect(withoutCode["builder"]).toBe(`0x${"0".repeat(64)}`);
+    // The post-build guard passes for the matching code and throws otherwise.
+    expect(() => assertSignedBuilder(withCode, BUILDER_CODE)).not.toThrow();
+    expect(() => assertSignedBuilder(withoutCode, BUILDER_CODE)).toThrow(/builder mismatch/);
   });
 
   it("rejects prices outside the tick-size band before signing", async () => {

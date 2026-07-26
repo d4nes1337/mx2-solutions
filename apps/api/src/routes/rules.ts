@@ -15,6 +15,7 @@ import type {
 import {
   bestAsk,
   bestBid,
+  conditionLeaves,
   evaluateExpression,
   evaluatePredicates,
   hashDefinition,
@@ -175,6 +176,44 @@ const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggered
     executionMode: execution === "auto" ? "auto" : "manual",
     timestamp: Math.floor(Date.now() / 1000).toString(),
   };
+};
+
+/** Action Center item state — the honest signing-readiness of a fired trigger. */
+type ActionCenterState = "READY_TO_SIGN" | "PRICE_MOVED" | "WAITING_FOR_FRESH_DATA";
+
+/** Bounds the batch so a pathological wallet can't produce an unbounded response. */
+const ACTION_CENTER_ITEM_CAP = 50;
+
+const centsLabel = (p: number | null | undefined): string | null =>
+  p === null || p === undefined ? null : `${Math.round(p * 100)}c`;
+
+/** The order's own price-condition threshold, for "actual vs threshold" display. */
+const actionPriceThreshold = (def: StrategyDefinition): number | null => {
+  if (def.action.kind !== "order") return null;
+  const action = def.action;
+  for (const { condition } of conditionLeaves(def.expr)) {
+    if (
+      condition.kind === "price" &&
+      condition.market.tokenId === action.market.tokenId &&
+      (action.side === "BUY"
+        ? condition.source === "ask" && condition.comparator === "lte"
+        : condition.source === "bid" && condition.comparator === "gte")
+    ) {
+      return condition.threshold;
+    }
+  }
+  return null;
+};
+
+/** Terse, human "why" line for an order strategy (no market data needed). */
+const conditionSummary = (def: StrategyDefinition): string => {
+  if (def.action.kind !== "order") return def.name;
+  const { outcome } = def.action.market;
+  const threshold = actionPriceThreshold(def);
+  if (threshold !== null) {
+    return `${outcome} ${def.action.side === "BUY" ? "at or below" : "at or above"} ${centsLabel(threshold)}`;
+  }
+  return `${outcome} on ${def.action.market.title ?? "this market"}`;
 };
 
 export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps): void => {
@@ -357,6 +396,117 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
     }
     const triggers = await deps.triggerStore.listAwaiting(user.walletAddress);
     return { triggers };
+  });
+
+  // ── GET /api/action-center ──────────────────────────────────────────────────
+  // The global Action Center batch (brief §6.4): one wallet-scoped, snapshot-only
+  // read of every fired trigger awaiting the user, each resolved to an HONEST
+  // signing state (READY_TO_SIGN / PRICE_MOVED / WAITING_FOR_FRESH_DATA). No
+  // upstream fan-out in the request path; missing/stale data fails closed to
+  // WAITING_FOR_FRESH_DATA. This never signs anything — the single-trigger detail
+  // endpoint remains the final FRESH review before a signature.
+  //
+  // Full sessions only: a restricted sign-link session must not enumerate the
+  // wallet's other orders (the `guard` = requireAuth already rejects scoped
+  // sessions; this is not on the scopedGuard).
+  app.get("/api/action-center", guard, async (req) => {
+    const user = req.user!;
+    const nowMs = Date.now();
+    const awaiting = (await deps.triggerStore.listAwaiting(user.walletAddress)).slice(
+      0,
+      ACTION_CENTER_ITEM_CAP,
+    );
+
+    // One primary-account read for the whole batch (not per item).
+    const primary = deps.tradingAccounts
+      ? await deps.tradingAccounts.getPrimary(user.walletAddress)
+      : null;
+    const account = primary ? { label: primary.label } : null;
+
+    // Snapshot cache so shared tokens across triggers are read once.
+    const viewByToken = new Map<string, MarketDataView | null>();
+    const viewFor = async (tokenId: string): Promise<MarketDataView | null> => {
+      if (viewByToken.has(tokenId)) return viewByToken.get(tokenId)!;
+      const snapshot = await deps.marketSnapshots.findByTokenId(tokenId);
+      const view = snapshot ? snapshotToView(snapshot) : null;
+      viewByToken.set(tokenId, view);
+      return view;
+    };
+
+    const items: unknown[] = [];
+    let actionableCount = 0;
+
+    for (const trigger of awaiting) {
+      const rule = await deps.ruleStore.findById(trigger.ruleId);
+      if (!rule) continue;
+      const def = normalizeDefinition(rule.definition as RuleDefinition | StrategyDefinition);
+      if (def.action.kind !== "order") continue;
+      const action = def.action;
+
+      const views: Record<string, MarketDataView> = {};
+      for (const tokenId of referencedTokenIds(def)) {
+        const view = await viewFor(tokenId);
+        if (view) views[tokenId] = view;
+      }
+      const evaluation = evaluateExpression(
+        def,
+        views,
+        nowMs,
+        (rule.runtimeWatermarks ?? {}) as Parameters<typeof evaluateExpression>[3],
+      );
+
+      // Fail-closed state machine: any stale/missing referenced market → WAITING;
+      // fresh + condition holds → READY; fresh + no longer holds → PRICE_MOVED.
+      const state: ActionCenterState =
+        evaluation.staleTokenIds.length > 0
+          ? "WAITING_FOR_FRESH_DATA"
+          : evaluation.satisfied
+            ? "READY_TO_SIGN"
+            : "PRICE_MOVED";
+      if (state === "READY_TO_SIGN") actionableCount += 1;
+
+      const actionView = views[action.market.tokenId];
+      const priceNow = actionView
+        ? action.side === "BUY"
+          ? bestAsk(actionView)
+          : bestBid(actionView)
+        : null;
+      const dataAgeMs = actionView ? nowMs - actionView.receivedAtMs : null;
+      const threshold = actionPriceThreshold(def);
+
+      items.push({
+        triggerId: trigger.id,
+        ruleId: rule.id,
+        ruleName: def.name,
+        triggeredAt: trigger.triggeredAt.toISOString(),
+        state,
+        market: {
+          conditionId: action.market.conditionId,
+          tokenId: action.market.tokenId,
+          title: action.market.title ?? null,
+          outcome: action.market.outcome,
+        },
+        conditionSummary: conditionSummary(def),
+        actual: centsLabel(priceNow),
+        threshold: centsLabel(threshold),
+        dataAgeMs,
+        account,
+        action: {
+          side: action.side,
+          sizeShares: action.size,
+          price: String(action.price),
+          maxSpendUsd: (action.price * action.size).toFixed(2),
+          orderType: action.orderType,
+        },
+      });
+    }
+
+    return {
+      generatedAt: new Date(nowMs).toISOString(),
+      // Badge counts only items requiring a signature right now (brief §6.5).
+      actionableCount,
+      items,
+    };
   });
 
   // ── GET /api/rules/triggers/:id ─────────────────────────────────────────────

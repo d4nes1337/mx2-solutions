@@ -54,6 +54,7 @@ import type {
   WithdrawResponse,
   TradingWalletStatusResponse,
   TradeStatus,
+  ActionCenterResponse,
   TriggerDetailResponse,
   TriggersResponse,
   UpsertExternalTradingAccountRequest,
@@ -84,6 +85,8 @@ export const POLL = {
   overview: 5_000,
   triggers: 4_000,
   triggerDetail: 3_000,
+  /** Global Action Center batch — retained 4s poll (no SSE for 5–10 users). */
+  actionCenter: 4_000,
   marketTrades: 10_000,
   /** Funds transfers with something in flight — near-live confirmations. */
   transfersActive: 4_000,
@@ -735,7 +738,9 @@ export function useConfirmTrigger() {
         orderIntentId,
       }),
     onSuccess: () => {
+      // Refresh the global count everywhere immediately (brief §6.4).
       void qc.invalidateQueries({ queryKey: ["triggers"] });
+      void qc.invalidateQueries({ queryKey: ["action-center"] });
       void qc.invalidateQueries({ queryKey: ["rules"] });
     },
   });
@@ -745,7 +750,22 @@ export function useDismissTrigger() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<{ ok: boolean }>(`/api/rules/triggers/${id}/dismiss`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["triggers"] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["triggers"] });
+      void qc.invalidateQueries({ queryKey: ["action-center"] });
+    },
+  });
+}
+
+export function useActionCenter(enabled: boolean) {
+  return useQuery({
+    queryKey: ["action-center"],
+    queryFn: () => api.get<ActionCenterResponse>("/api/action-center"),
+    enabled,
+    refetchInterval: POLL.actionCenter,
+    // Refetch when the window regains focus so a returning user sees the truth.
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
   });
 }
 

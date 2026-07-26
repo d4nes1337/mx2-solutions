@@ -7,6 +7,7 @@
  * essentials now fit one screen with zero explanatory paragraphs.
  */
 import { useState } from "react";
+import Link from "next/link";
 import type { OrderActionV2 } from "@mx2/rules";
 import { Segmented } from "@/components/ui";
 import { loadLimitPrefs } from "@/lib/smart-orders/limit-prefs";
@@ -65,8 +66,8 @@ export function OrderActionEditor({ action: a }: { action: OrderActionV2 }) {
         <div className="nodrag">
           <Segmented
             options={[
-              { value: "prepare", label: "Ask to sign" },
-              { value: "auto", label: "Auto" },
+              { value: "prepare", label: "Ask me to sign" },
+              { value: "auto", label: "Auto · Arima Wallet" },
             ]}
             value={a.execution}
             onChange={switchExecution}
@@ -75,6 +76,19 @@ export function OrderActionEditor({ action: a }: { action: OrderActionV2 }) {
           />
         </div>
       </Field>
+      {a.execution === "prepare" ? (
+        <p className="text-[11px] leading-snug text-muted">
+          You sign each triggered order in your connected wallet — the default.
+        </p>
+      ) : (
+        <p className="text-[11px] leading-snug text-muted">
+          Executes automatically from your{" "}
+          <Link href="/wallet" className="text-accent hover:underline">
+            Arima Wallet (Beta)
+          </Link>
+          . Enable and fund it on the Wallet page — until then, triggers wait for your signature.
+        </p>
+      )}
       <MarketBinding
         current={a.market}
         doc={doc}

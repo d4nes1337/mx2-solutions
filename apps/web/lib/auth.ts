@@ -41,7 +41,7 @@ export function useSignIn() {
   const qc = useQueryClient();
 
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts: { inviteCode?: string } | void) => {
       if (!address || !connector) throw new Error("Connect a wallet first.");
       // The login domain is PINNED to Polygon (ADR-0002 / migration 0003) even
       // though wagmi now carries extra chains for bridge-funding sends —
@@ -64,6 +64,9 @@ export function useSignIn() {
         signature,
         issuedAt: challenge.typedData.message.issuedAt,
         signedTypedData: challenge.typedData,
+        // Private beta: a one-time invitation code redeems atomically for the
+        // wallet that signed this exact challenge (server-side binding).
+        ...(opts?.inviteCode ? { inviteCode: opts.inviteCode } : {}),
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),

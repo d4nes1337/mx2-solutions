@@ -985,6 +985,42 @@ export interface TriggersResponse {
   triggers: TriggerRow[];
 }
 
+/** Honest signing-readiness of a fired trigger (brief §3.1/§6.3). */
+export type ActionCenterState = "READY_TO_SIGN" | "PRICE_MOVED" | "WAITING_FOR_FRESH_DATA";
+
+export interface ActionCenterItem {
+  triggerId: string;
+  ruleId: string;
+  ruleName: string;
+  triggeredAt: string;
+  state: ActionCenterState;
+  market: {
+    conditionId: string;
+    tokenId: string;
+    title: string | null;
+    outcome: string;
+  };
+  conditionSummary: string;
+  actual: string | null;
+  threshold: string | null;
+  dataAgeMs: number | null;
+  account: { label: string } | null;
+  action: {
+    side: "BUY" | "SELL";
+    sizeShares: number;
+    price: string;
+    maxSpendUsd: string;
+    orderType: string;
+  };
+}
+
+export interface ActionCenterResponse {
+  generatedAt: string;
+  /** Count of READY_TO_SIGN items — drives the header badge (brief §6.5). */
+  actionableCount: number;
+  items: ActionCenterItem[];
+}
+
 export interface TriggerDetailResponse {
   trigger: TriggerRow;
   evidence: TriggerEvidenceView;

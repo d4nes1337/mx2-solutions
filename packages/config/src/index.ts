@@ -43,8 +43,14 @@ const EnvSchema = z.object({
   POLYMARKET_BRIDGE_BASE_URL: z.string().url().default("https://bridge.polymarket.com"),
   POLYGON_CHAIN_ID: z.coerce.number().int().default(137),
 
-  // Non-secret identifier. Optional until provided by the owner.
-  POLYMARKET_BUILDER_CODE: z.string().optional(),
+  // Non-secret public bytes32 identifier for builder attribution. Optional until
+  // provided by the owner; an empty string is treated as "not set". Format is
+  // validated (and required non-zero when live trading is on) in the post-parse
+  // checks below.
+  POLYMARKET_BUILDER_CODE: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().trim().optional(),
+  ),
   // Builder relayer onboarding credentials (backend-only). Required when
   // FEATURE_RELAYER=true, never exposed to the browser.
   POLYMARKET_RELAYER_URL: z.string().url().optional(),
@@ -318,6 +324,28 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
           "POLYMARKET_RELAYER_URL, " +
           "POLYMARKET_BUILDER_API_KEY, POLYMARKET_BUILDER_SECRET, and " +
           "POLYMARKET_BUILDER_PASSPHRASE.",
+      );
+    }
+  }
+
+  // Builder attribution (release-critical, ADR-0024). The code is a public
+  // bytes32; a malformed value is always a config error, and real-money trading
+  // must carry a NON-ZERO code or matched volume goes unattributed. Kept inline
+  // so @mx2/config stays a leaf (the regex is mirrored in @mx2/core for the
+  // signing/verification paths).
+  const BUILDER_CODE_RE = /^0x[0-9a-fA-F]{64}$/;
+  const ZERO_BUILDER = `0x${"0".repeat(64)}`;
+  if (e.POLYMARKET_BUILDER_CODE !== undefined && !BUILDER_CODE_RE.test(e.POLYMARKET_BUILDER_CODE)) {
+    throw new ConfigError(
+      "POLYMARKET_BUILDER_CODE must be a 0x-prefixed 32-byte hex string (bytes32).",
+    );
+  }
+  if (e.FEATURE_LIVE_TRADING) {
+    const code = e.POLYMARKET_BUILDER_CODE;
+    if (!code || code.toLowerCase() === ZERO_BUILDER) {
+      throw new ConfigError(
+        "FEATURE_LIVE_TRADING=true requires a non-zero POLYMARKET_BUILDER_CODE — every " +
+          "submitted order must carry it for attribution (brief §7.1).",
       );
     }
   }

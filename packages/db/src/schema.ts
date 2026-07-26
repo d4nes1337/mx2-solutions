@@ -912,3 +912,83 @@ export const signLinkTokens = pgTable(
 );
 
 export type SignLinkTokenRow = typeof signLinkTokens.$inferSelect;
+
+/**
+ * Private-beta waitlist (migration 0021). Public submissions; PII is limited to
+ * what the owner needs to pick a cohort and must never be copied into logs or
+ * audit metadata. consent_at records the explicit consent checkbox timestamp.
+ * Joining requires an email OR a wallet address (owner decision 2026-07-23:
+ * the form is just email and/or connected wallet); email is stored lowercased
+ * and deduped (plain UNIQUE — multiple NULLs allowed), wallet-only entries are
+ * deduped in the store.
+ */
+export const waitlistEntries = pgTable(
+  "waitlist_entries",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    email: text("email").unique(),
+    /** X or Telegram handle, freeform (e.g. "@trader"). */
+    socialHandle: text("social_handle"),
+    walletAddress: text("wallet_address"),
+    /** Self-reported Polymarket trading frequency (freeform select value). */
+    tradingFrequency: text("trading_frequency"),
+    /** Short intended use case, capped at the route boundary. */
+    useCase: text("use_case"),
+    /** Referral / how they heard about Arima. */
+    referral: text("referral"),
+    consentAt: timestamp("consent_at", { withTimezone: true }).notNull(),
+    /** waiting | invited | accepted | rejected | withdrawn */
+    status: text("status").notNull().default("waiting"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("waitlist_entries_status_idx").on(t.status),
+    index("waitlist_entries_wallet_idx").on(t.walletAddress),
+  ],
+);
+
+export type WaitlistEntryRow = typeof waitlistEntries.$inferSelect;
+
+export const WAITLIST_STATUSES = [
+  "waiting",
+  "invited",
+  "accepted",
+  "rejected",
+  "withdrawn",
+] as const;
+export type WaitlistStatus = (typeof WAITLIST_STATUSES)[number];
+
+/**
+ * One-time private-beta invitation codes (migration 0021). The raw code only
+ * ever exists in the owner's out-of-band message to the invitee; the DB stores
+ * SHA256(code) — mirroring channel_link_codes / sign_link_tokens. Redemption is
+ * a single atomic UPDATE ... WHERE redeemed_at IS NULL AND revoked_at IS NULL
+ * AND expires_at > now(), binding the code to the signature-verified wallet
+ * that redeemed it. Revocation keeps the row (audit history is never deleted).
+ */
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    codeHash: text("code_hash").notNull().unique(),
+    /** Issuing actor: "admin:<name>" (endpoint) or "mint-script". */
+    issuedBy: text("issued_by").notNull(),
+    note: text("note"),
+    /** Optional link back to the waitlist queue entry this invite serves. */
+    waitlistEntryId: uuid("waitlist_entry_id"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedBy: text("redeemed_by"),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("invitations_redeemed_by_idx").on(t.redeemedBy)],
+);
+
+export type InvitationRow = typeof invitations.$inferSelect;

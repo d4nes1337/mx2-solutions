@@ -12,6 +12,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import { Badge, Button, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
+import { InviteCodeForm, isAccessError } from "@/components/InviteCodeForm";
+import { useActionCenterUi } from "@/lib/action-center-store";
+import { useNotificationPrefs } from "@/lib/notification-prefs";
 import { ApiError } from "@/lib/api";
 import {
   useFeatureFlags,
@@ -162,6 +165,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const [entry] = useState(() => ({
     draft: params.get("draft"),
     template: params.get("template"),
+    start: params.get("start"),
     prompt: params.get("prompt"),
     pinned: params.get("pinned"),
     showcase: params.get("showcase"),
@@ -271,6 +275,13 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         return;
       }
       // Flag off → fall through to the template path (graceful degradation).
+    }
+    if (entry.start === "blank") {
+      // Start blank (brief §8.1.6/7): an empty canvas the user builds up
+      // market → condition → action → execution via the Add-a-block palette,
+      // rather than a pre-filled template.
+      finish(spawnDraft(undefined, { origin: "blank" }));
+      return;
     }
     const explicitTemplate = Boolean(entry.template || (entry.tokenId && entry.conditionId));
     if (!explicitTemplate) {
@@ -412,6 +423,14 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
             void markDraftConsumedOnServer(consumedId, created.id);
           }
           router.push("/smart-orders");
+          // Prime browser alerts right after arming (owner refinement): so the
+          // user is asked to turn them on the first time it matters. Opens the
+          // Action Center, whose footer offers "Enable browser alerts" (the
+          // permission gesture) plus an optional "connect Telegram" link. Only
+          // nudges once — after that browserAlerts is set and it stays quiet.
+          if (!useNotificationPrefs.getState().browserAlerts) {
+            useActionCenterUi.getState().openDrawer();
+          }
         },
       },
     );
@@ -435,7 +454,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           className="min-w-[220px] flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-semibold tracking-tight text-fg outline-none transition-colors placeholder:text-faint hover:border-border focus:border-brand"
           aria-label="Strategy name"
         />
-        <div className="flex items-center gap-2">
+        <div className="no-scrollbar flex min-w-0 max-w-full items-center gap-2 overflow-x-auto">
           <DraftSwitcher
             onOpenDraft={(id) => {
               if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
@@ -451,7 +470,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
                 if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
               }}
               className={cn(
-                "rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
+                "shrink-0 rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
                 doc.templateId === t.id
                   ? "border-brand/50 bg-brand-soft text-accent"
                   : "border-border bg-surface text-muted hover:text-fg",
@@ -479,7 +498,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       >
         <div className="min-w-0 space-y-2">
           <CanvasToolbar />
-          <div className={cn("relative", CANVAS_HEIGHT_CLASS)}>
+          {/* Clip the desktop-first canvas viewport so React Flow nodes pan
+              INSIDE it instead of scrolling the whole page on mobile (§8.1.3). */}
+          <div className={cn("relative overflow-hidden", CANVAS_HEIGHT_CLASS)}>
             <BuilderCanvas evaluation={evaluation.data} issues={issues} />
             <AddPalette />
           </div>
@@ -558,6 +579,11 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
                     save once you have access.
                   </p>
                 )
+              ) : isAccessError(signIn.error) ? (
+                <InviteCodeForm
+                  signIn={signIn}
+                  heading="Your draft is ready. Private beta access is required to save, arm, and receive live triggers."
+                />
               ) : (
                 <>
                   <Button

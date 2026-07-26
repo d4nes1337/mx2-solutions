@@ -24,6 +24,7 @@ const configLive = loadConfig({
   FEATURE_MAKER_LOOP: "true",
   FEATURE_MAKER_LOOP_LIVE: "true",
   FEATURE_LIVE_TRADING: "true",
+  POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
   FEATURE_PRIVY_SIGNING: "true",
   FEATURE_RELAYER: "true",
   MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
@@ -50,6 +51,7 @@ const sessionsAuthed: SessionStore = {
   create: async () => sessRow(),
   findByTokenHash: async () => sessRow(),
   revoke: async () => {},
+  revokeAllForWallet: async () => 0,
 };
 
 const makeSession = (over: Partial<QuoteSessionRow> = {}): QuoteSessionRow =>

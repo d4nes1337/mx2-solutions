@@ -1,4 +1,4 @@
-import { decryptCredentials } from "@mx2/core";
+import { decryptCredentials, isNonZeroBuilderCode } from "@mx2/core";
 import type { AppConfig } from "@mx2/config";
 import type {
   PrivyWalletStore,
@@ -81,6 +81,12 @@ export const createLiveCapableProvider = (
       : deps.config.ctf.adapterAddress;
     if (!adapterAddress) return { unavailable: "ctf_adapter_unverified" };
 
+    // Attribution is release-critical (brief §7.2): a live maker order must
+    // carry the configured non-zero builder code. Config fail-closes at startup
+    // when maker-loop-live is on without one; this is a defensive guard.
+    const builderCode = deps.config.polymarket.builderCode;
+    if (!isNonZeroBuilderCode(builderCode)) return { unavailable: "builder_code_unconfigured" };
+
     const walletRef = { walletId: account.privyWalletId, address: account.signerAddress };
     return {
       executor: createLiveExecutor({
@@ -97,6 +103,7 @@ export const createLiveCapableProvider = (
         relayer: deps.depositWalletRelayer,
         owner: { ownerAddress: pw.embeddedAddress, ownerWalletId: pw.privyWalletId },
         adapterAddress,
+        builderCode,
       }),
     };
   };

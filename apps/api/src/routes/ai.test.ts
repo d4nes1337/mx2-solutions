@@ -220,6 +220,7 @@ const buildAiApp = (opts: {
     },
     findByTokenHash: async () => null,
     revoke: async () => {},
+    revokeAllForWallet: async () => 0,
   };
   const marketSnapshots: MarketSnapshotStore = {
     upsert: async () => {
@@ -414,6 +415,64 @@ describe("POST /api/ai/generate-strategy", () => {
     const secondCallMessages = JSON.stringify(aiCalls[1]!.messages);
     expect(secondCallMessages).not.toContain(TOKEN_YES);
     expect(secondCallMessages).not.toContain("cond-btc");
+    await app.close();
+  });
+
+  it("converts a dollar budget to shares at the fresh price and surfaces the assumption", async () => {
+    const { app } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("search_markets", { query: "btc 150k" }, "t1")]),
+        modelTurn([
+          toolUse(
+            "create_strategy",
+            // "$200 of YES" → budgetUsd, not a 200-share order.
+            createInput({
+              action: {
+                kind: "order",
+                market: selector(),
+                side: "BUY",
+                price: 0.44,
+                size: null,
+                budgetUsd: 200,
+              },
+            }),
+            "t2",
+          ),
+        ]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy $200 of yes on btc 150k" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    // YES current price 0.48 → 200 / 0.44 (the model's own limit) rounds; the
+    // server converts at the ACTION price it will submit at.
+    expect(body.definition.action.size).toBe(Math.round(200 / 0.44));
+    expect(body.definition.action.size).not.toBe(200); // never a silent 200 shares
+    expect(
+      (body.warnings as string[]).some((w) => w.includes("$200") && w.includes("shares")),
+    ).toBe(true);
+    await app.close();
+  });
+
+  it("anchors a missing order price to the candidate's current price (never 0)", async () => {
+    const { app } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("search_markets", { query: "btc 150k" }, "t1")]),
+        modelTurn([
+          toolUse(
+            "create_strategy",
+            createInput({
+              action: { kind: "order", market: selector(), side: "BUY", price: null, size: 50 },
+            }),
+            "t2",
+          ),
+        ]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy yes on btc 150k" });
+    const body = res.json();
+    // Anchored to YES current price 0.48, not the old `?? 0` fallback.
+    expect(body.definition.action.price).toBe(0.48);
     await app.close();
   });
 

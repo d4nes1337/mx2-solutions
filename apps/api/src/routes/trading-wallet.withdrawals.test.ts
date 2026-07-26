@@ -34,6 +34,7 @@ const sessions: SessionStore = {
     revokedAt: null,
   }),
   revoke: async () => {},
+  revokeAllForWallet: async () => 0,
 };
 
 const geoblockClient: GeoblockClient = {

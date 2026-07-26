@@ -8,47 +8,6 @@ import type { TradingAccount } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "@/components/ui";
 import { FundsSheet } from "@/components/profile/FundsSheet";
 
-/** Secondary explanation of the two signing modes, in user language. */
-export function TradingModeCards() {
-  return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label="Trading modes">
-      <div className="rounded-md border border-border bg-surface p-4">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-surface-3 text-fg">
-            <Wallet size={17} aria-hidden />
-          </span>
-          <div>
-            <div className="text-[15px] font-semibold text-fg">Your wallet</div>
-            <div className="text-[12px] text-muted">Sign each trade yourself</div>
-          </div>
-        </div>
-        <ul className="mt-3 space-y-1.5 text-[13px] text-muted">
-          <li>Connect the wallet you already use on Polymarket.</li>
-          <li>Every order is confirmed in your wallet — you keep full control.</li>
-          <li>Best for manual trading and “ask to sign” Smart Orders.</li>
-        </ul>
-      </div>
-
-      <div className="rounded-md border border-brand/40 bg-surface p-4">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand-soft text-accent">
-            <Zap size={17} aria-hidden />
-          </span>
-          <div>
-            <div className="text-[15px] font-semibold text-fg">Arima trading wallet</div>
-            <div className="text-[12px] text-muted">No-popup trading, built for Smart Orders</div>
-          </div>
-        </div>
-        <ul className="mt-3 space-y-1.5 text-[13px] text-muted">
-          <li>A separate wallet you top up with only what you want to trade.</li>
-          <li>Smart Orders can execute without interrupting you to sign.</li>
-          <li>We never ask for your seed phrase or your main wallet’s keys.</li>
-        </ul>
-      </div>
-    </div>
-  );
-}
-
 const STEPS = ["Create", "Activate", "Fund", "Authorize", "Trade"] as const;
 
 /** Maps the internal trading-account state onto the user-facing readiness steps. */

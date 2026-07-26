@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { Header } from "@/components/Header";
 import { TerminalDock } from "@/components/terminal/TerminalDock";
 import { FundsHost } from "@/components/profile/funds/FundsHost";
+import { WaitlistModal } from "@/components/WaitlistModal";
+import { ActionCenterHost } from "@/components/action-center/ActionCenterHost";
 
 /**
  * Global chrome switch. Routes under /m/* are the mobile companion surface
@@ -36,6 +38,10 @@ export function AppChrome({ children }: { children: ReactNode }) {
       </footer>
       <TerminalDock />
       <FundsHost />
+      <WaitlistModal />
+      {/* Global Action Center — one host for the whole signed-in app, never on
+          /m/* restricted routes (this branch already excludes them). */}
+      <ActionCenterHost />
     </>
   );
 }

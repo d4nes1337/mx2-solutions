@@ -253,7 +253,15 @@ export const CREATE_STRATEGY_TOOL = {
           size: {
             anyOf: [{ type: "number" }, { type: "null" }],
             description:
-              "Order size in SHARES (not USD). Default 100 when unspecified. null for alert.",
+              "Order size in SHARES (NOT dollars). Use this when the user gives a share count. " +
+              "For a DOLLAR amount use budgetUsd instead — never put dollars here. null for alert.",
+          },
+          budgetUsd: {
+            anyOf: [{ type: "number" }, { type: "null" }],
+            description:
+              "Dollar budget for the order (e.g. the user says '$200' → 200). The server converts " +
+              "it to shares at the current price and shows the assumption. Set EITHER size OR " +
+              "budgetUsd, not both. null when the user gave a share count or for alerts.",
           },
         },
       },
@@ -361,6 +369,9 @@ export const CreateStrategyInputZ = z.object({
     side: z.enum(["BUY", "SELL"]),
     price: z.number().nullable(),
     size: z.number().nullable(),
+    // Dollar budget alternative to size; defaulted so older few-shots/repair
+    // rounds (which never emit it) stay parseable.
+    budgetUsd: z.number().nullable().default(null),
   }),
   recurrence: z.object({
     kind: z.enum(["once", "repeat"]),

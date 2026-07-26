@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Loader2, Plus, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Loader2, Plus, RefreshCcw, Zap } from "lucide-react";
 import { useAccount } from "wagmi";
 import {
   useProvisionTradingWallet,
@@ -14,16 +14,24 @@ import {
 import type { TradingAccount } from "@/lib/types";
 import { signClobAuth } from "@/lib/clob-auth";
 import type { Eip1193Provider } from "@/lib/order-sign";
-import { Button, Card, CardHeader, ErrorNote, Spinner } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, ErrorNote, Spinner } from "@/components/ui";
 import { WalletCard } from "./WalletCard";
 
 export function WalletsSection({
   signedIn,
   autoOpenTopUp = false,
+  onEnableArima,
 }: {
   signedIn: boolean;
   /** Deep link (/wallet?topup=1): open the primary wallet's top-up sheet. */
   autoOpenTopUp?: boolean;
+  /**
+   * Opt-in gate for a FRESH Arima Wallet (brief §5.3.6): the create button
+   * opens the explicit confirmation instead of provisioning directly. A
+   * restore (the wallet already exists at the provider) stays direct — the
+   * user already consented once.
+   */
+  onEnableArima?: () => void;
 }) {
   const { address, connector } = useAccount();
   const tradingAccounts = useTradingAccounts(signedIn);
@@ -163,24 +171,29 @@ export function WalletsSection({
             wallet (same address, same funds) — say so. */}
         {signedIn && privyEnabled && !hasPrivyWallet && (
           <div className="space-y-2 rounded-md border border-dashed border-border bg-surface-2/50 px-3 py-3">
-            <p className="text-[13px] font-medium text-fg">No Arima trading wallet yet</p>
+            <p className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
+              {hasWalletMapping ? "Restore your Arima Wallet" : "Arima Wallet"}
+              <Badge tone="neutral">Beta</Badge>
+            </p>
             <p className="text-[12px] leading-snug text-muted">
               {hasWalletMapping
-                ? "You removed your trading wallet earlier — it still exists safely at the provider. Creating brings the same wallet (and any funds on it) right back."
-                : "Create a server-managed trading wallet to unlock no-popup Smart Orders. You stay in control: it can only trade on Polymarket, never withdraw elsewhere."}
+                ? "You removed your trading wallet earlier — it still exists safely at the provider. Restoring brings the same wallet (and any funds on it) right back."
+                : "Optional: a separate, ring-fenced balance so Smart Orders can execute automatically within strict limits. Your main wallet stays the default — you keep signing each trade yourself until you turn this on."}
             </p>
             <Button
               size="sm"
-              variant="primary"
+              variant={hasWalletMapping ? "primary" : "outline"}
               disabled={provisionWallet.isPending}
-              onClick={() => provisionWallet.mutate()}
+              onClick={() => (hasWalletMapping ? provisionWallet.mutate() : onEnableArima?.())}
             >
               {provisionWallet.isPending ? (
                 <Loader2 size={12} className="animate-spin" />
-              ) : (
+              ) : hasWalletMapping ? (
                 <Plus size={12} />
+              ) : (
+                <Zap size={12} />
               )}
-              {hasWalletMapping ? "Restore Arima trading wallet" : "Create Arima trading wallet"}
+              {hasWalletMapping ? "Restore Arima trading wallet" : "Enable Arima Wallet Beta"}
             </Button>
             {provisionWallet.error && (
               <p className="mt-1 text-[12px] text-neg">

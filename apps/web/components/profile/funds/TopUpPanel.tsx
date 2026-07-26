@@ -319,7 +319,9 @@ export function TopUpPanel({
 
               {chains.length > 1 ? (
                 <div>
-                  <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">Network</div>
+                  <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted">
+                    Network
+                  </div>
                   <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                     {chains.map((chain) => {
                       const active = selectedChain?.chainId === chain.chainId;

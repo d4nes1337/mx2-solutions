@@ -6,9 +6,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MarketRef } from "@mx2/rules";
 import { useBuilderStore } from "./store";
-import { emptyDoc } from "./doc";
+import { emptyDoc, UNBOUND } from "./doc";
 
 const market: MarketRef = { conditionId: "cond-1", tokenId: "tok-1", outcome: "YES" };
+
+const orderAction = () =>
+  ({
+    kind: "order",
+    market: UNBOUND,
+    side: "BUY",
+    price: 0.5,
+    size: 10,
+    orderType: "GTC",
+    execution: "prepare",
+  }) as const;
 
 const priceCondition = {
   kind: "price",
@@ -20,6 +31,36 @@ const priceCondition = {
 
 beforeEach(() => {
   useBuilderStore.getState().reset(emptyDoc());
+});
+
+describe("useBuilderStore: order price anchors to fresh market context (§8.1.5)", () => {
+  it("snaps a new order's limit price to the picked outcome's current price on bind", () => {
+    const store = useBuilderStore.getState();
+    store.setAction(orderAction());
+    store.bindMarket("action", market, { title: "T", currentPrice: 0.37 });
+    const a = useBuilderStore.getState().doc.action;
+    expect(a.kind).toBe("order");
+    if (a.kind === "order") {
+      expect(a.price).toBe(0.37);
+      expect(a.market.tokenId).toBe("tok-1");
+    }
+  });
+
+  it("clamps an extreme current price into the valid tick band", () => {
+    const store = useBuilderStore.getState();
+    store.setAction(orderAction());
+    store.bindMarket("action", market, { title: "T", currentPrice: 0.997 });
+    const a = useBuilderStore.getState().doc.action;
+    if (a.kind === "order") expect(a.price).toBe(0.99);
+  });
+
+  it("leaves the price unchanged when the market has no current price", () => {
+    const store = useBuilderStore.getState();
+    store.setAction(orderAction());
+    store.bindMarket("action", market, { title: "T" });
+    const a = useBuilderStore.getState().doc.action;
+    if (a.kind === "order") expect(a.price).toBe(0.5);
+  });
 });
 
 describe("useBuilderStore: groups and nesting", () => {

@@ -29,6 +29,7 @@ const config = loadConfig({
   DATABASE_URL: "postgresql://u:p@localhost:5432/db",
   APP_ENCRYPTION_MASTER_KEY: KEY,
   FEATURE_LIVE_TRADING: "true",
+  POLYMARKET_BUILDER_CODE: "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
   FEATURE_PRIVY_SIGNING: "true",
   FEATURE_CONDITIONAL_LIVE_EXECUTION: "true",
   MOCK_SIGNER_PRIVATE_KEY: `0x${"1".repeat(64)}`,

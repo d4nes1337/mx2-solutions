@@ -31,14 +31,28 @@ describe("AmountSlider", () => {
 
   it("Max sets the floored maximum", () => {
     const onChange = vi.fn();
-    render(<AmountSlider value="" onChange={onChange} maxAmount={1.23456} decimals={4} unitLabel="ETH" />);
+    render(
+      <AmountSlider
+        value=""
+        onChange={onChange}
+        maxAmount={1.23456}
+        decimals={4}
+        unitLabel="ETH"
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /Max/ }));
     expect(onChange).toHaveBeenCalledWith("1.2345");
   });
 
   it("shows a live USD readout from the per-unit price", () => {
     render(
-      <AmountSlider value="2" onChange={() => {}} maxAmount={5} usdPerUnit={3000} unitLabel="ETH" />,
+      <AmountSlider
+        value="2"
+        onChange={() => {}}
+        maxAmount={5}
+        usdPerUnit={3000}
+        unitLabel="ETH"
+      />,
     );
     expect(screen.getByText("≈ $6000.00")).toBeTruthy();
   });

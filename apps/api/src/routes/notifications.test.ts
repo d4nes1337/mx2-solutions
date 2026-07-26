@@ -31,6 +31,7 @@ const makeSessions = (scope: unknown = null): SessionStore => ({
     revokedAt: null,
   }),
   revoke: async () => {},
+  revokeAllForWallet: async () => 0,
 });
 
 const makeAuditStore = (): AuditStore & { actions: string[] } => {

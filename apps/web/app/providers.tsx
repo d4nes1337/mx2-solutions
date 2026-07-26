@@ -1,13 +1,11 @@
 "use client";
 
 import "@rainbow-me/rainbowkit/styles.css";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { WagmiProvider } from "wagmi";
 import { RainbowKitProvider, darkTheme, lightTheme } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { wagmiConfig } from "@/lib/wagmi";
-import { useSession } from "@/lib/auth";
-import { useFeatureFlags, useProvisionTradingWallet } from "@/lib/queries";
 import { ThemeProvider, useTheme, type Theme } from "@/lib/theme";
 import { MotionProvider } from "@/components/motion/MotionProvider";
 
@@ -47,10 +45,7 @@ export function Providers({ children }: { children: ReactNode }) {
       <WagmiProvider config={wagmiConfig}>
         <QueryClientProvider client={queryClient}>
           <ThemedRainbowKit>
-            <MotionProvider>
-              <AutoProvisionTradingWallet />
-              {children}
-            </MotionProvider>
+            <MotionProvider>{children}</MotionProvider>
           </ThemedRainbowKit>
         </QueryClientProvider>
       </WagmiProvider>
@@ -61,19 +56,4 @@ export function Providers({ children }: { children: ReactNode }) {
 function ThemedRainbowKit({ children }: { children: ReactNode }) {
   const { theme } = useTheme();
   return <RainbowKitProvider theme={RK_THEMES[theme]}>{children}</RainbowKitProvider>;
-}
-
-function AutoProvisionTradingWallet() {
-  const session = useSession();
-  const flags = useFeatureFlags();
-  const provision = useProvisionTradingWallet();
-  const { mutate, isError, isPending, isSuccess } = provision;
-
-  useEffect(() => {
-    if (!session.data?.address || !flags.data?.privySigning || isPending) return;
-    if (isSuccess || isError) return;
-    mutate();
-  }, [flags.data?.privySigning, isError, isPending, isSuccess, mutate, session.data?.address]);
-
-  return null;
 }

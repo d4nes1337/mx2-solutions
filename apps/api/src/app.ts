@@ -10,6 +10,8 @@ import type {
   UserStore,
   SessionStore,
   AllowlistStore,
+  InvitationStore,
+  WaitlistStore,
   ClobCredentialStore,
   TradingAccountStore,
   TradingAccountClobCredentialStore,
@@ -51,6 +53,9 @@ import { registerTradeRoutes } from "./routes/trade.js";
 import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerAdminInvitesRoutes } from "./routes/admin-invites.js";
+import { registerWaitlistRoutes } from "./routes/waitlist.js";
+import { enforceAllowlistOnSessions } from "./auth/allowlist-sessions.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
 import { registerShowcasesRoutes } from "./routes/showcases.js";
@@ -98,6 +103,10 @@ export interface AppDeps {
   linkCodes?: LinkCodeStore;
   /** Sign-link tokens; enables the scoped sign-link exchange when present. */
   signTokens?: SignLinkTokenStore;
+  /** Private-beta invitations; enables invite redemption + admin management. */
+  invitations?: InvitationStore;
+  /** Public waitlist; enables POST /api/waitlist + the admin queue view. */
+  waitlistStore?: WaitlistStore;
   /** Discord OAuth linking client (FEATURE_DISCORD_BOT). */
   discordOauth?: DiscordOauthClient;
   gammaClient: GammaClient;
@@ -120,6 +129,11 @@ export interface AppDeps {
  */
 export const buildApp = (deps: AppDeps) => {
   const app = Fastify({ loggerInstance: deps.logger, disableRequestLogging: false });
+  // Private-beta enforcement: every route module below authenticates through
+  // this wrapped session store, so a session is only valid while its wallet
+  // keeps an active allowlist row. Revoking access cuts live sessions on the
+  // next request — hiding buttons is not access control (brief §4.2).
+  const sessions = enforceAllowlistOnSessions(deps.sessions, deps.allowlist);
   const tradingAccounts =
     deps.tradingAccounts ??
     ({
@@ -214,18 +228,33 @@ export const buildApp = (deps: AppDeps) => {
     config: deps.config,
     challenges: deps.challenges,
     users: deps.users,
-    sessions: deps.sessions,
+    sessions,
     allowlist: deps.allowlist,
     auditStore: deps.auditStore,
-    tradingSigner: deps.tradingSigner,
-    privyWallets: deps.privyWallets,
-    tradingAccounts,
     ...(deps.signTokens ? { signTokens: deps.signTokens } : {}),
     ...(deps.notificationChannels ? { notificationChannels: deps.notificationChannels } : {}),
+    ...(deps.invitations ? { invitations: deps.invitations } : {}),
+    ...(deps.waitlistStore ? { waitlist: deps.waitlistStore } : {}),
   });
+  if (deps.waitlistStore) {
+    registerWaitlistRoutes(fastifyApp, {
+      auditStore: deps.auditStore,
+      waitlist: deps.waitlistStore,
+    });
+  }
+  if (deps.invitations && deps.waitlistStore) {
+    registerAdminInvitesRoutes(fastifyApp, {
+      config: deps.config,
+      auditStore: deps.auditStore,
+      invitations: deps.invitations,
+      waitlist: deps.waitlistStore,
+      allowlist: deps.allowlist,
+      sessions,
+    });
+  }
   registerProfileRoutes(fastifyApp, {
     dataClient: deps.dataClient,
-    sessions: deps.sessions,
+    sessions,
     clobCredentials: deps.clobCredentials,
     tradingClobClient: deps.tradingClobClient,
     config: deps.config,
@@ -257,7 +286,7 @@ export const buildApp = (deps: AppDeps) => {
     } satisfies BridgeStore);
   registerFundsRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     tradingAccounts,
     privyWallets: deps.privyWallets,
@@ -268,14 +297,14 @@ export const buildApp = (deps: AppDeps) => {
   if (deps.draftStore) {
     registerDraftsRoutes(fastifyApp, {
       config: deps.config,
-      sessions: deps.sessions,
+      sessions,
       draftStore: deps.draftStore,
     });
   }
   if (deps.notificationChannels && deps.linkCodes) {
     registerNotificationsRoutes(fastifyApp, {
       config: deps.config,
-      sessions: deps.sessions,
+      sessions,
       auditStore: deps.auditStore,
       notificationChannels: deps.notificationChannels,
       linkCodes: deps.linkCodes,
@@ -284,7 +313,7 @@ export const buildApp = (deps: AppDeps) => {
   }
   registerTradeRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     tradingAccounts,
     accountClobCredentials,
@@ -308,7 +337,7 @@ export const buildApp = (deps: AppDeps) => {
     } satisfies WithdrawalStore);
   registerTradingWalletRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     tradingSigner: deps.tradingSigner,
     privyWallets: deps.privyWallets,
@@ -323,7 +352,7 @@ export const buildApp = (deps: AppDeps) => {
   });
   registerTradingAccountsRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     tradingAccounts,
     accountClobCredentials,
@@ -336,7 +365,7 @@ export const buildApp = (deps: AppDeps) => {
   });
   registerRulesRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     ruleStore: deps.ruleStore,
     triggerStore: deps.triggerStore,
@@ -347,7 +376,7 @@ export const buildApp = (deps: AppDeps) => {
   });
   registerSmartOrdersRoutes(fastifyApp, {
     config: deps.config,
-    sessions: deps.sessions,
+    sessions,
     auditStore: deps.auditStore,
     ruleStore: deps.ruleStore,
     triggerStore: deps.triggerStore,
@@ -366,7 +395,7 @@ export const buildApp = (deps: AppDeps) => {
   if (deps.quoterStore) {
     registerQuoterRoutes(fastifyApp, {
       config: deps.config,
-      sessions: deps.sessions,
+      sessions,
       ruleStore: deps.ruleStore,
       quoterStore: deps.quoterStore,
       auditStore: deps.auditStore,
