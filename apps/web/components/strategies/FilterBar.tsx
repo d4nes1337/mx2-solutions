@@ -8,7 +8,7 @@
  */
 import { Archive, Search, Star, X } from "lucide-react";
 import { cn } from "@/components/ui";
-import { SECTION_TITLES, type SectionId } from "@/lib/smart-orders/sections";
+import { SECTION_TITLES, type SectionId } from "@/lib/strategies/sections";
 
 export interface StrategyFilters {
   query: string;

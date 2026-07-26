@@ -11,7 +11,7 @@ import type { StrategyDefinition } from "@mx2/rules";
 import { Badge, Button } from "@/components/ui";
 import { useSession } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { useCreateStrategy } from "@/lib/smart-orders/queries";
+import { useCreateStrategy } from "@/lib/strategies/queries";
 import type { ScannerMarket } from "@/lib/farming/queries";
 
 const money = (n: number) => `$${n.toFixed(2)}`;

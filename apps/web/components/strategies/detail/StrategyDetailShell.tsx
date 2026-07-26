@@ -23,10 +23,10 @@ import {
 } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
-import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/smart-orders/doc";
-import { conditionSummary, formatActual, cents } from "@/lib/smart-orders/summaries";
-import { strategySentence, humanDuration } from "@/lib/smart-orders/sentence";
-import { userStatus } from "@/lib/smart-orders/status";
+import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/strategies/doc";
+import { conditionSummary, formatActual, cents } from "@/lib/strategies/summaries";
+import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
+import { userStatus } from "@/lib/strategies/status";
 import {
   useStrategy,
   useStrategyControl,
@@ -36,12 +36,12 @@ import {
   type StrategyEvaluation,
   type StrategyRow,
   type StrategyTimeline,
-} from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/queries";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { LinkedOrders } from "./LinkedOrders";
 import { QuickEditSheet } from "../QuickEditSheet";
 
-import { useNow } from "@/lib/smart-orders/use-now";
+import { useNow } from "@/lib/strategies/use-now";
 import { ConditionCharts } from "./ConditionCharts";
 
 function DwellProgress({ evaluation, now }: { evaluation: StrategyEvaluation; now: number }) {
@@ -178,7 +178,7 @@ export function StrategyDetailShell() {
     return (
       <Empty>
         Smart Order not found.{" "}
-        <Link href="/smart-orders" className="text-accent underline">
+        <Link href="/strategies" className="text-accent underline">
           Back to Smart Orders
         </Link>
       </Empty>
@@ -199,7 +199,7 @@ export function StrategyDetailShell() {
   return (
     <div className="space-y-4">
       <Link
-        href="/smart-orders"
+        href="/strategies"
         className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-fg"
       >
         <ArrowLeft size={13} aria-hidden /> Smart Orders
@@ -297,7 +297,7 @@ export function StrategyDetailShell() {
                   onClick={() =>
                     control.mutate(
                       { id: row.id, action: "cancel" },
-                      { onSuccess: () => router.push("/smart-orders") },
+                      { onSuccess: () => router.push("/strategies") },
                     )
                   }
                 >
@@ -337,7 +337,7 @@ export function StrategyDetailShell() {
             <>
               Edited version of an earlier strategy —{" "}
               <Link
-                href={`/smart-orders/${row.supersedes}`}
+                href={`/strategies/${row.supersedes}`}
                 className="text-accent hover:underline"
               >
                 view previous version
@@ -349,7 +349,7 @@ export function StrategyDetailShell() {
             <>
               This strategy was replaced by an edit —{" "}
               <Link
-                href={`/smart-orders/${row.supersededBy}`}
+                href={`/strategies/${row.supersededBy}`}
                 className="text-accent hover:underline"
               >
                 view current version
@@ -364,7 +364,7 @@ export function StrategyDetailShell() {
         row={row}
         open={quickEdit}
         onClose={() => setQuickEdit(false)}
-        onApplied={(newId) => router.push(`/smart-orders/${newId}`)}
+        onApplied={(newId) => router.push(`/strategies/${newId}`)}
       />
     </div>
   );

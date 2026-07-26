@@ -16,7 +16,7 @@ import { MarketCard } from "@/components/MarketCard";
 import { GroupedResultCard } from "@/components/market/GroupedResultCard";
 import { Empty, ErrorNote, LiveDot, Segmented, Skeleton } from "@/components/ui";
 import { useHomeFeed, useShowcases } from "@/lib/queries";
-import { useGroupedMarketSearch } from "@/lib/smart-orders/queries";
+import { useGroupedMarketSearch } from "@/lib/strategies/queries";
 import { primaryMarket } from "@/lib/feeds";
 import type { GammaEvent } from "@/lib/types";
 

@@ -114,7 +114,7 @@ describe("ProvenPlays", () => {
     expect(screen.getByText(/past performance doesn/i)).toBeInTheDocument();
     expect(screen.getByText(/Open this strategy/)).toHaveAttribute(
       "href",
-      `/smart-orders/new?showcase=${encodeURIComponent("cond-btc:5")}`,
+      `/strategies/new?showcase=${encodeURIComponent("cond-btc:5")}`,
     );
   });
 
@@ -133,7 +133,7 @@ describe("ProvenPlays", () => {
 
     // Sample cards deep-link their prompt (sample ids don't resolve).
     expect(String(screen.getByText(/Open this strategy/).getAttribute("href"))).toContain(
-      "/smart-orders/new?prompt=",
+      "/strategies/new?prompt=",
     );
 
     // All three curated samples are reachable via the dots.

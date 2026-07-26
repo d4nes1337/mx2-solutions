@@ -10,8 +10,8 @@
 import { Activity, CandlestickChart, PencilRuler, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
-import type { DraftEvaluation } from "@/lib/smart-orders/queries";
-import { useBuilderStore, type WorkspaceTab } from "@/lib/smart-orders/store";
+import type { DraftEvaluation } from "@/lib/strategies/queries";
+import { useBuilderStore, type WorkspaceTab } from "@/lib/strategies/store";
 import { PANEL_HEIGHT_CLASS } from "./layout-constants";
 import { AiPanel } from "./AiPanel";
 import { MakerEstimator } from "./MakerEstimator";

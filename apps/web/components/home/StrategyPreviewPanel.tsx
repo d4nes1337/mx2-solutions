@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge, LiveDot } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { api } from "@/lib/api";
-import type { MarketSearchResult } from "@/lib/smart-orders/queries";
+import type { MarketSearchResult } from "@/lib/strategies/queries";
 import type { ScenarioBinding } from "@/lib/home/use-scenario-binding";
 import {
   makeSyntheticSeries,
@@ -94,7 +94,7 @@ export function StrategyPreviewPanel({
   const slotText = scenario.prompt.find((seg) => seg.isMarketSlot)?.text ?? scenario.title;
   const marketName = binding.status === "live" ? binding.title : slotText.replace(/^@/, "");
   const href =
-    `/smart-orders/new?prompt=${encodeURIComponent(scenario.buildPrompt)}` +
+    `/strategies/new?prompt=${encodeURIComponent(scenario.buildPrompt)}` +
     (binding.status === "live" && bound
       ? `&pinned=${bound.conditionId}~${encodeURIComponent(binding.title.slice(0, 60))}`
       : "");

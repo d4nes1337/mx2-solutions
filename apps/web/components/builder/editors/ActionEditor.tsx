@@ -14,11 +14,11 @@
 import { useState } from "react";
 import type { ActionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
-import { UNBOUND } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { UNBOUND } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import { useStrategies } from "@/lib/smart-orders/queries";
+import { useStrategies } from "@/lib/strategies/queries";
 import { CONDITION_KIND_OPTIONS, defaultCondition } from "./ConditionEditor";
 import { Field } from "./fields";
 import { OrderActionEditor } from "./OrderActionEditor";

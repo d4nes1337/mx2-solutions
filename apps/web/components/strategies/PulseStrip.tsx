@@ -7,8 +7,8 @@
  */
 import { cn } from "@/components/ui";
 import { cents } from "@/lib/format";
-import type { Section } from "@/lib/smart-orders/sections";
-import type { StrategyOverviewItem } from "@/lib/smart-orders/queries";
+import type { Section } from "@/lib/strategies/sections";
+import type { StrategyOverviewItem } from "@/lib/strategies/queries";
 
 const CHIP_TONES: Record<string, string> = {
   failed: "border-neg/40 bg-neg/10 text-neg",

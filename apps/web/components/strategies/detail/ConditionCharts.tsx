@@ -12,10 +12,10 @@ import { useState, type ReactNode } from "react";
 import { Card, CardHeader, Segmented, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
-import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/smart-orders/doc";
-import { cents } from "@/lib/smart-orders/summaries";
-import { humanDuration } from "@/lib/smart-orders/sentence";
-import type { StrategyRow, StrategyTimeline } from "@/lib/smart-orders/queries";
+import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/strategies/doc";
+import { cents } from "@/lib/strategies/summaries";
+import { humanDuration } from "@/lib/strategies/sentence";
+import type { StrategyRow, StrategyTimeline } from "@/lib/strategies/queries";
 import type { ConditionV2 } from "@mx2/rules";
 
 /** Engine events → chart markers so the price line explains itself. */

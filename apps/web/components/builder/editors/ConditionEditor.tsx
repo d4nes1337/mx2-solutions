@@ -8,8 +8,8 @@
 import { Trash2 } from "lucide-react";
 import type { ConditionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
-import { findNode, UNBOUND } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { findNode, UNBOUND } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
 
 export const CONDITION_KIND_OPTIONS = [

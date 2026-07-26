@@ -12,7 +12,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Sparkles, X } from "lucide-react";
 import { MentionDropdown } from "@/components/builder/MentionDropdown";
 import { useReducedMotion } from "@/components/motion";
-import { useMarketMention } from "@/lib/smart-orders/use-mention";
+import { useMarketMention } from "@/lib/strategies/use-mention";
 import { useAutogrowTextarea } from "@/lib/use-autogrow";
 
 export function HeroChat({
@@ -63,7 +63,7 @@ export function HeroChat({
             .map((p) => `${p.conditionId}~${encodeURIComponent(p.title.slice(0, 60))}`)
             .join(",")}`
         : "";
-    router.push(`/smart-orders/new?prompt=${encodeURIComponent(v)}${pinnedParam}`);
+    router.push(`/strategies/new?prompt=${encodeURIComponent(v)}${pinnedParam}`);
   };
 
   return (

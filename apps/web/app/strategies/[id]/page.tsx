@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { StrategyDetailShell } from "@/components/smart-orders/detail/StrategyDetailShell";
+import { StrategyDetailShell } from "@/components/strategies/detail/StrategyDetailShell";
 import { Skeleton } from "@/components/ui";
 
 export default function SmartOrderDetailPage() {

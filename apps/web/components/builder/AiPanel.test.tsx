@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { StrategyDefinition } from "@mx2/rules";
 import { AiPanel } from "./AiPanel";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { loadDraftLocal } from "@/lib/smart-orders/drafts";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { loadDraftLocal } from "@/lib/strategies/drafts";
 
 const definition: StrategyDefinition = {
   version: 2,

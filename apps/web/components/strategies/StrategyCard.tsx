@@ -31,14 +31,14 @@ import {
   docFromDefinition,
   marketLabel,
   docMarketRefs,
-} from "@/lib/smart-orders/doc";
-import { layoutDoc } from "@/lib/smart-orders/layout";
-import { strategySentence, humanDuration } from "@/lib/smart-orders/sentence";
-import { cents } from "@/lib/smart-orders/summaries";
-import { sectionOf } from "@/lib/smart-orders/sections";
-import { userStatus } from "@/lib/smart-orders/status";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { useNow } from "@/lib/smart-orders/use-now";
+} from "@/lib/strategies/doc";
+import { layoutDoc } from "@/lib/strategies/layout";
+import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
+import { cents } from "@/lib/strategies/summaries";
+import { sectionOf } from "@/lib/strategies/sections";
+import { userStatus } from "@/lib/strategies/status";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { useNow } from "@/lib/strategies/use-now";
 import { QuickEditSheet } from "./QuickEditSheet";
 import {
   useCreateStrategy,
@@ -48,7 +48,7 @@ import {
   type OverviewResponse,
   type StrategyOverviewItem,
   type StrategyRow,
-} from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/queries";
 
 const timeAgo = (iso: string | null): string => {
   if (!iso) return "—";
@@ -343,7 +343,7 @@ export function StrategyCard({
   // before arming (tweak the price, swap the market, then Save & arm).
   const duplicateToCanvas = () => {
     const id = spawnDraft(layoutDoc(docFromDefinition(def)), { origin: "clone" });
-    router.push(`/smart-orders/new?draft=${id}`);
+    router.push(`/strategies/new?draft=${id}`);
   };
 
   const triggerId = overview?.actionability?.triggerId ?? null;
@@ -410,7 +410,7 @@ export function StrategyCard({
               </button>
             ) : (
               <Link
-                href={`/smart-orders/${row.id}`}
+                href={`/strategies/${row.id}`}
                 className="text-[14px] font-semibold text-fg transition-colors hover:text-accent"
               >
                 {row.name || def.name || "Smart Order"}
@@ -586,7 +586,7 @@ export function StrategyCard({
               </Button>
             ) : null}
             <Link
-              href={`/smart-orders/${row.id}`}
+              href={`/strategies/${row.id}`}
               className="inline-flex items-center gap-0.5 rounded-md p-1 text-[12px] font-medium text-muted transition-colors hover:text-fg"
               aria-label="Open strategy details"
             >

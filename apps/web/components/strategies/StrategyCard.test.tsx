@@ -19,11 +19,11 @@ vi.mock("@/lib/queries", () => ({
     mutate: (id: string) => calls.dismissed.push(id),
   }),
 }));
-vi.mock("@/lib/smart-orders/store", () => ({
+vi.mock("@/lib/strategies/store", () => ({
   useBuilderStore: (sel: (s: { spawnDraft: () => string }) => unknown) =>
     sel({ spawnDraft: () => "draft-1" }),
 }));
-vi.mock("@/lib/smart-orders/queries", () => ({
+vi.mock("@/lib/strategies/queries", () => ({
   useCreateStrategy: () => ({ isPending: false, error: null, mutate: vi.fn() }),
   useSetStrategyTags: () => ({ mutate: vi.fn() }),
   useStrategyControl: () => ({ isPending: false, mutate: vi.fn() }),
@@ -40,7 +40,7 @@ vi.mock("@/components/charts/AreaChart", () => ({
 }));
 
 import { StrategyCard } from "./StrategyCard";
-import type { StrategyOverviewItem, StrategyRow } from "@/lib/smart-orders/queries";
+import type { StrategyOverviewItem, StrategyRow } from "@/lib/strategies/queries";
 import type { StrategyDefinition } from "@mx2/rules";
 
 const def: StrategyDefinition = {

@@ -498,7 +498,7 @@ const actionPriceLeaf = (def: StrategyDefinition): { threshold: number } | null 
   return null;
 };
 
-export const registerSmartOrdersRoutes = (
+export const registerStrategiesRoutes = (
   app: FastifyInstance,
   deps: SmartOrdersRoutesDeps,
 ): void => {
@@ -518,10 +518,10 @@ export const registerSmartOrdersRoutes = (
     preHandler: [requireEnabled, makeRateLimit({ scope, limit, windowMs: 60_000 })],
   });
 
-  // ── GET /api/smart-orders/auto-readiness — why auto wouldn't execute ──────
+  // ── GET /api/strategies/auto-readiness — why auto wouldn't execute ──────
   // Surfaces every blocker between an armed auto strategy and an unattended
   // order, so "AUTO" can never silently mean "waiting for you to click".
-  app.get("/api/smart-orders/auto-readiness", guard, async (req) => {
+  app.get("/api/strategies/auto-readiness", guard, async (req) => {
     const user = req.user!;
     const blockers: { code: string; detail: string }[] = [];
     const f = deps.config.features;
@@ -574,13 +574,13 @@ export const registerSmartOrdersRoutes = (
     return { autoExecutionEnabled: f.conditionalLiveExecution, blockers };
   });
 
-  // ── GET /api/smart-orders/overview — batch dashboard state ────────────────
+  // ── GET /api/strategies/overview — batch dashboard state ────────────────
   // One call per poll for the whole Smart Orders page: proximity ranking for
   // waiting strategies, ready/missed classification for triggered ones, and a
   // shared per-token sparkline + book map. Reads worker snapshots + a 60s-TTL
   // history cache only — never fans out to upstream per strategy (fail-closed:
   // a token without a fresh snapshot ranks/classifies as stale).
-  app.get("/api/smart-orders/overview", guard, async (req) => {
+  app.get("/api/strategies/overview", guard, async (req) => {
     const user = req.user!;
     const nowMs = Date.now();
     const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100);
@@ -737,8 +737,8 @@ export const registerSmartOrdersRoutes = (
     return response;
   });
 
-  // ── POST /api/smart-orders — create + arm ─────────────────────────────────
-  app.post("/api/smart-orders", guard, async (req, reply) => {
+  // ── POST /api/strategies — create + arm ─────────────────────────────────
+  app.post("/api/strategies", guard, async (req, reply) => {
     const user = req.user!;
     const parsed = CreateSmartOrderSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -934,9 +934,9 @@ export const registerSmartOrdersRoutes = (
     return serializeStrategy(rule, deps.config.features.conditionalLiveExecution);
   });
 
-  // ── GET /api/smart-orders — every strategy incl. v1 rules (normalized) ─────
+  // ── GET /api/strategies — every strategy incl. v1 rules (normalized) ─────
   // Archived rows are hidden unless ?includeArchived=1 (reversible soft-hide).
-  app.get("/api/smart-orders", guard, async (req) => {
+  app.get("/api/strategies", guard, async (req) => {
     const user = req.user!;
     const includeArchived = (req.query as Record<string, string>)["includeArchived"] === "1";
     const rows = await deps.ruleStore.listByWallet(user.walletAddress, 100, { includeArchived });
@@ -947,7 +947,7 @@ export const registerSmartOrdersRoutes = (
     };
   });
 
-  app.get("/api/smart-orders/:id", guard, async (req, reply) => {
+  app.get("/api/strategies/:id", guard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
     const row = await deps.ruleStore.findByIdForWallet(id, user.walletAddress);
@@ -968,7 +968,7 @@ export const registerSmartOrdersRoutes = (
     action: "pause" | "resume" | "cancel",
     fn: (id: string, wallet: string) => Promise<ConditionalRuleRow | null>,
   ) =>
-    app.post(`/api/smart-orders/:id/${action}`, guard, async (req, reply) => {
+    app.post(`/api/strategies/:id/${action}`, guard, async (req, reply) => {
       const user = req.user!;
       const { id } = req.params as { id: string };
       const row = await fn(id, user.walletAddress);
@@ -993,7 +993,7 @@ export const registerSmartOrdersRoutes = (
   control("cancel", (id, w) => deps.ruleStore.cancel(id, w));
 
   // ── Organization: tags + reversible archive ────────────────────────────────
-  app.patch("/api/smart-orders/:id/tags", guard, async (req, reply) => {
+  app.patch("/api/strategies/:id/tags", guard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
     const parsed = TagsSchema.safeParse(req.body);
@@ -1023,7 +1023,7 @@ export const registerSmartOrdersRoutes = (
   });
 
   // Starred strategies float to the top of their dashboard section.
-  app.patch("/api/smart-orders/:id/star", guard, async (req, reply) => {
+  app.patch("/api/strategies/:id/star", guard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
     const parsed = z.object({ starred: z.boolean() }).strict().safeParse(req.body);
@@ -1049,7 +1049,7 @@ export const registerSmartOrdersRoutes = (
   });
 
   const archiveControl = (label: "archive" | "unarchive") =>
-    app.post(`/api/smart-orders/:id/${label}`, guard, async (req, reply) => {
+    app.post(`/api/strategies/:id/${label}`, guard, async (req, reply) => {
       const user = req.user!;
       const { id } = req.params as { id: string };
       const row =
@@ -1083,7 +1083,7 @@ export const registerSmartOrdersRoutes = (
   // itself stays immutable (evidence hash), and triggers degrade to
   // ask-to-sign while disarmed.
   const setAutoDisabled = (disabled: boolean, label: "disarm" | "rearm") =>
-    app.post(`/api/smart-orders/:id/${label}`, guard, async (req, reply) => {
+    app.post(`/api/strategies/:id/${label}`, guard, async (req, reply) => {
       const user = req.user!;
       const { id } = req.params as { id: string };
       const row = await deps.ruleStore.findByIdForWallet(id, user.walletAddress);
@@ -1116,8 +1116,8 @@ export const registerSmartOrdersRoutes = (
   setAutoDisabled(true, "disarm");
   setAutoDisabled(false, "rearm");
 
-  // ── GET /api/smart-orders/:id/evaluate-now — live "would trigger?" ────────
-  app.get("/api/smart-orders/:id/evaluate-now", guard, async (req, reply) => {
+  // ── GET /api/strategies/:id/evaluate-now — live "would trigger?" ────────
+  app.get("/api/strategies/:id/evaluate-now", guard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
     const row = await deps.ruleStore.findByIdForWallet(id, user.walletAddress);
@@ -1153,10 +1153,10 @@ export const registerSmartOrdersRoutes = (
     };
   });
 
-  // ── GET /api/smart-orders/:id/timeline — activity feed for one strategy ───
+  // ── GET /api/strategies/:id/timeline — activity feed for one strategy ───
   // What the engine actually did: state churn (window started / stale resets /
   // restarts), triggers, and the orders they produced with live fill state.
-  app.get("/api/smart-orders/:id/timeline", guard, async (req, reply) => {
+  app.get("/api/strategies/:id/timeline", guard, async (req, reply) => {
     const user = req.user!;
     const { id } = req.params as { id: string };
     const query = req.query as Record<string, string | undefined>;
@@ -1222,9 +1222,9 @@ export const registerSmartOrdersRoutes = (
     };
   });
 
-  // ── POST /api/smart-orders/evaluate-draft — PUBLIC (builder playground) ───
+  // ── POST /api/strategies/evaluate-draft — PUBLIC (builder playground) ───
   app.post(
-    "/api/smart-orders/evaluate-draft",
+    "/api/strategies/evaluate-draft",
     publicGuard("draft-eval", 60),
     async (req, reply) => {
       const parsed = EvaluateDraftSchema.safeParse(req.body);

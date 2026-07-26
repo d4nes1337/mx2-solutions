@@ -75,7 +75,7 @@ function ScenarioCard({
 }) {
   const { Icon, tone } = KIND_META[scenario.kind];
   const pnl = scenario.stats.hypotheticalPnlUsd;
-  const href = `/smart-orders/new?scenarioMarket=${encodeURIComponent(marketId)}&scenario=${encodeURIComponent(scenario.id)}&outcome=${outcomeIdx}`;
+  const href = `/strategies/new?scenarioMarket=${encodeURIComponent(marketId)}&scenario=${encodeURIComponent(scenario.id)}&outcome=${outcomeIdx}`;
 
   return (
     <div className="flex flex-col justify-between gap-2 rounded-lg border border-border bg-surface-2/50 p-3">

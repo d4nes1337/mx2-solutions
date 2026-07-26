@@ -10,7 +10,7 @@ import { POLL } from "../queries";
 import { useDebouncedValue } from "../use-debounced-value";
 import type { ExprNode, ExprResultNode, StrategyDefinition } from "@mx2/rules";
 
-// ── Response shapes (mirror apps/api/src/routes/smart-orders.ts) ────────────
+// ── Response shapes (mirror apps/api/src/routes/strategies.ts) ────────────
 
 export interface StrategyRow {
   id: string;
@@ -56,7 +56,7 @@ export interface AutoReadiness {
   blockers: { code: string; detail: string }[];
 }
 
-// ── Dashboard overview (GET /api/smart-orders/overview) ─────────────────────
+// ── Dashboard overview (GET /api/strategies/overview) ─────────────────────
 
 export interface OverviewLeaf {
   nodeId: string;
@@ -130,7 +130,7 @@ export interface StrategyEvaluation extends Omit<DraftEvaluation, "evaluatedAt">
   cooldownUntil: string | null;
 }
 
-// ── Timeline (GET /api/smart-orders/:id/timeline) ───────────────────────────
+// ── Timeline (GET /api/strategies/:id/timeline) ───────────────────────────
 
 export interface TimelineEvent {
   id: string;
@@ -210,10 +210,10 @@ export interface EventSearchResult {
 
 export function useStrategies(signedIn: boolean, includeArchived = false) {
   return useQuery({
-    queryKey: ["smart-orders", { includeArchived }],
+    queryKey: ["strategies", { includeArchived }],
     queryFn: () =>
       api.get<{ strategies: StrategyRow[] }>(
-        `/api/smart-orders${includeArchived ? "?includeArchived=1" : ""}`,
+        `/api/strategies${includeArchived ? "?includeArchived=1" : ""}`,
       ),
     enabled: signedIn,
     refetchInterval: POLL.rules,
@@ -222,8 +222,8 @@ export function useStrategies(signedIn: boolean, includeArchived = false) {
 
 export function useStrategy(id: string | null) {
   return useQuery({
-    queryKey: ["smart-orders", id],
-    queryFn: () => api.get<StrategyRow>(`/api/smart-orders/${id}`),
+    queryKey: ["strategies", id],
+    queryFn: () => api.get<StrategyRow>(`/api/strategies/${id}`),
     enabled: Boolean(id),
   });
 }
@@ -231,8 +231,8 @@ export function useStrategy(id: string | null) {
 /** Batch dashboard state: proximity ranks, ready/missed, sparklines, books. */
 export function useStrategiesOverview(signedIn: boolean) {
   return useQuery({
-    queryKey: ["smart-orders", "overview"],
-    queryFn: () => api.get<OverviewResponse>("/api/smart-orders/overview"),
+    queryKey: ["strategies", "overview"],
+    queryFn: () => api.get<OverviewResponse>("/api/strategies/overview"),
     enabled: signedIn,
     refetchInterval: POLL.overview,
     placeholderData: (prev) => prev,
@@ -247,11 +247,11 @@ export function useStarStrategy() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, starred }: { id: string; starred: boolean }) =>
-      api.patch<StrategyRow>(`/api/smart-orders/${id}/star`, { starred }),
+      api.patch<StrategyRow>(`/api/strategies/${id}/star`, { starred }),
     onMutate: async ({ id, starred }) => {
-      await qc.cancelQueries({ queryKey: ["smart-orders"] });
+      await qc.cancelQueries({ queryKey: ["strategies"] });
       const patched = qc.getQueriesData<{ strategies: StrategyRow[] }>({
-        queryKey: ["smart-orders"],
+        queryKey: ["strategies"],
       });
       for (const [key, data] of patched) {
         if (!data || !Array.isArray(data.strategies)) continue;
@@ -267,15 +267,15 @@ export function useStarStrategy() {
     onError: (_err, _vars, ctx) => {
       for (const [key, data] of ctx?.patched ?? []) qc.setQueryData(key, data);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
   });
 }
 
 /** Why auto wouldn't execute right now (server flags + account setup). */
 export function useAutoReadiness(signedIn: boolean) {
   return useQuery({
-    queryKey: ["smart-orders", "auto-readiness"],
-    queryFn: () => api.get<AutoReadiness>("/api/smart-orders/auto-readiness"),
+    queryKey: ["strategies", "auto-readiness"],
+    queryFn: () => api.get<AutoReadiness>("/api/strategies/auto-readiness"),
     enabled: signedIn,
     refetchInterval: 60_000,
     staleTime: 30_000,
@@ -284,8 +284,8 @@ export function useAutoReadiness(signedIn: boolean) {
 
 export function useStrategyEvaluation(id: string | null) {
   return useQuery({
-    queryKey: ["smart-orders", id, "eval"],
-    queryFn: () => api.get<StrategyEvaluation>(`/api/smart-orders/${id}/evaluate-now`),
+    queryKey: ["strategies", id, "eval"],
+    queryFn: () => api.get<StrategyEvaluation>(`/api/strategies/${id}/evaluate-now`),
     enabled: Boolean(id),
     refetchInterval: POLL.ruleEval,
   });
@@ -294,8 +294,8 @@ export function useStrategyEvaluation(id: string | null) {
 /** Activity feed: engine state churn + triggers + linked orders with fills. */
 export function useStrategyTimeline(id: string | null) {
   return useQuery({
-    queryKey: ["smart-orders", id, "timeline"],
-    queryFn: () => api.get<StrategyTimeline>(`/api/smart-orders/${id}/timeline`),
+    queryKey: ["strategies", id, "timeline"],
+    queryFn: () => api.get<StrategyTimeline>(`/api/strategies/${id}/timeline`),
     enabled: Boolean(id),
     refetchInterval: POLL.ruleTimeline,
     placeholderData: (prev) => prev,
@@ -307,8 +307,8 @@ export function useStrategyDisarm() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, action }: { id: string; action: "disarm" | "rearm" }) =>
-      api.post<{ ok: boolean; autoDisabled: boolean }>(`/api/smart-orders/${id}/${action}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+      api.post<{ ok: boolean; autoDisabled: boolean }>(`/api/strategies/${id}/${action}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
   });
 }
 
@@ -318,12 +318,12 @@ export function useCreateStrategy() {
     mutationFn: (def: StrategyDefinition & { expiresAt?: string | null; supersedes?: string }) => {
       const { expiresAtMs, version, ...rest } = def;
       void version;
-      return api.post<StrategyRow>("/api/smart-orders", {
+      return api.post<StrategyRow>("/api/strategies", {
         ...rest,
         expiresAt: expiresAtMs === null ? null : new Date(expiresAtMs).toISOString(),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
   });
 }
 
@@ -336,8 +336,8 @@ export function useStrategyControl() {
     }: {
       id: string;
       action: "pause" | "resume" | "cancel" | "archive" | "unarchive";
-    }) => api.post<StrategyRow>(`/api/smart-orders/${id}/${action}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+    }) => api.post<StrategyRow>(`/api/strategies/${id}/${action}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
   });
 }
 
@@ -346,8 +346,8 @@ export function useSetStrategyTags() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, tags }: { id: string; tags: string[] }) =>
-      api.patch<StrategyRow>(`/api/smart-orders/${id}/tags`, { tags }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["smart-orders"] }),
+      api.patch<StrategyRow>(`/api/strategies/${id}/tags`, { tags }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
   });
 }
 
@@ -367,7 +367,7 @@ export function useDraftEvaluation(
   return useQuery({
     queryKey: ["draft-eval", revision, extraTokenIds.join(",")],
     queryFn: () =>
-      api.post<DraftEvaluation>("/api/smart-orders/evaluate-draft", {
+      api.post<DraftEvaluation>("/api/strategies/evaluate-draft", {
         expr,
         maxDataAgeMs,
         extraTokenIds,

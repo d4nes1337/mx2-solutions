@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { OrderActionV2 } from "@mx2/rules";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { loadLimitPrefs, saveLimitPrefs } from "@/lib/smart-orders/limit-prefs";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { loadLimitPrefs, saveLimitPrefs } from "@/lib/strategies/limit-prefs";
 
 vi.mock("../MarketSearch", () => ({
   MarketSearch: () => <div>MARKET_SEARCH</div>,

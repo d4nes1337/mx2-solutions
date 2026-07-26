@@ -2,7 +2,7 @@
  * Best-fit strategy suggestion for a live feed event (Slice 6, AutomateNow).
  * Pure heuristics over the primary market's mid/volume; the prompt is a
  * plain-language sentence a user could have typed — it goes straight into
- * /smart-orders/new?prompt= (Slices 1+2 make one-click drafting reliable).
+ * /strategies/new?prompt= (Slices 1+2 make one-click drafting reliable).
  */
 import type { GammaEvent } from "../types";
 import { primaryMarket, yesProbability } from "../feeds";

@@ -6,8 +6,8 @@
  * filled?".
  */
 import { Badge, Card, CardHeader, cn } from "@/components/ui";
-import type { StrategyDoc } from "@/lib/smart-orders/doc";
-import type { TimelineOrder } from "@/lib/smart-orders/queries";
+import type { StrategyDoc } from "@/lib/strategies/doc";
+import type { TimelineOrder } from "@/lib/strategies/queries";
 
 const STATUS_TONE: Record<string, "neutral" | "pos" | "neg" | "warn" | "accent" | "brand"> = {
   pending: "neutral",

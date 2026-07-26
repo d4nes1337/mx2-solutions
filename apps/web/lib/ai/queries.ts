@@ -8,7 +8,7 @@
 import { useMutation } from "@tanstack/react-query";
 import type { StrategyDefinition } from "@mx2/rules";
 import { api } from "../api";
-import type { StrategyDefinitionInput } from "../smart-orders/doc";
+import type { StrategyDefinitionInput } from "../strategies/doc";
 
 export interface AiHistoryEntry {
   role: "user" | "assistant";

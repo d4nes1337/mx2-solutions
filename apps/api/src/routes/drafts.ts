@@ -8,7 +8,7 @@ import { makeRequireAuth } from "../middleware/require-auth.js";
  * Server-synced builder drafts (ADR-0019). The doc is FREE-FORM StrategyDoc
  * JSON — validated only for shape/size, never compiled: drafts may reference
  * dead markets or be half-built, that's their job. The worker never sees this
- * table; arming goes through POST /api/smart-orders with full validation.
+ * table; arming goes through POST /api/strategies with full validation.
  */
 
 export interface DraftsRoutesDeps {

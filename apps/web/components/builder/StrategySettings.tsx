@@ -6,7 +6,7 @@
  * canvas nodes.
  */
 import { Segmented } from "@/components/ui";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, NumberInput } from "./editors/fields";
 
 const HOLD_OPTIONS = [

@@ -93,7 +93,7 @@ export function BacktestTeaser({
         </p>
       </div>
       <Link
-        href={`/smart-orders/new?${params.toString()}`}
+        href={`/strategies/new?${params.toString()}`}
         className="shrink-0 text-[12px] font-semibold text-accent transition-colors hover:text-brand-strong"
       >
         Automate it →

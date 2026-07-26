@@ -2,8 +2,8 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { PulseStrip } from "./PulseStrip";
-import type { Section } from "@/lib/smart-orders/sections";
-import type { StrategyOverviewItem, StrategyRow } from "@/lib/smart-orders/queries";
+import type { Section } from "@/lib/strategies/sections";
+import type { StrategyOverviewItem, StrategyRow } from "@/lib/strategies/queries";
 
 const stub = (id: string): StrategyRow => ({ id }) as StrategyRow;
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ActivityTimeline } from "./ActivityTimeline";
-import type { StrategyTimeline } from "@/lib/smart-orders/queries";
+import type { StrategyTimeline } from "@/lib/strategies/queries";
 
 const timeline: StrategyTimeline = {
   strategyId: "rule-1",

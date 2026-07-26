@@ -166,7 +166,7 @@ export function AccountMenu() {
                   <div className="space-y-0.5">
                     <MenuLink href="/portfolio">Portfolio &amp; analytics</MenuLink>
                     <MenuLink href="/wallet">Wallet settings</MenuLink>
-                    <MenuLink href="/smart-orders">My Smart Orders</MenuLink>
+                    <MenuLink href="/strategies">My Smart Orders</MenuLink>
                   </div>
                 ) : (
                   <p className="px-2 py-1 text-[12px] leading-relaxed text-muted">

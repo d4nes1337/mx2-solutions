@@ -23,22 +23,22 @@ import {
   useShowcases,
 } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
-import { conditionLeavesOf, docFromDefinition, docMarketRefs } from "@/lib/smart-orders/doc";
-import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/smart-orders/drafts";
-import { saveLimitPrefs } from "@/lib/smart-orders/limit-prefs";
-import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/smart-orders/drafts-sync";
-import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
-import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
-import { layoutDoc } from "@/lib/smart-orders/layout";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { useDraftAutosave } from "@/lib/smart-orders/use-draft-autosave";
+import { conditionLeavesOf, docFromDefinition, docMarketRefs } from "@/lib/strategies/doc";
+import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/strategies/drafts";
+import { saveLimitPrefs } from "@/lib/strategies/limit-prefs";
+import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/strategies/drafts-sync";
+import { computePayoff, payoffInputFromDoc } from "@/lib/strategies/projection";
+import { compileDoc, validateDoc } from "@/lib/strategies/compile";
+import { layoutDoc } from "@/lib/strategies/layout";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { useDraftAutosave } from "@/lib/strategies/use-draft-autosave";
 import {
   useAutoReadiness,
   useCreateStrategy,
   useDraftEvaluation,
   useStrategy,
-} from "@/lib/smart-orders/queries";
-import { TEMPLATES, templateById } from "@/lib/smart-orders/templates";
+} from "@/lib/strategies/queries";
+import { TEMPLATES, templateById } from "@/lib/strategies/templates";
 import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
 import { AddPalette } from "./AddPalette";
@@ -208,7 +208,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       initializedRef.current = true;
       setInitialized(true);
       if (draftId && !editOf) {
-        routerRef.current.replace(`/smart-orders/new?draft=${draftId}`, { scroll: false });
+        routerRef.current.replace(`/strategies/new?draft=${draftId}`, { scroll: false });
       }
     };
     if (entry.draft && !editOf) {
@@ -285,7 +285,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
     }
     const explicitTemplate = Boolean(entry.template || (entry.tokenId && entry.conditionId));
     if (!explicitTemplate) {
-      // Bare /smart-orders/new: keep this session's live canvas, else resume
+      // Bare /strategies/new: keep this session's live canvas, else resume
       // the most recent draft. A first-ever visit falls through to the
       // default template scaffold.
       const live = useBuilderStore.getState().draftId;
@@ -422,7 +422,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
             markDraftConsumedLocal(consumedId, created.id);
             void markDraftConsumedOnServer(consumedId, created.id);
           }
-          router.push("/smart-orders");
+          router.push("/strategies");
           // Prime browser alerts right after arming (owner refinement): so the
           // user is asked to turn them on the first time it matters. Opens the
           // Action Center, whose footer offers "Enable browser alerts" (the
@@ -457,7 +457,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         <div className="no-scrollbar flex min-w-0 max-w-full items-center gap-2 overflow-x-auto">
           <DraftSwitcher
             onOpenDraft={(id) => {
-              if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
+              if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
             }}
           />
           {TEMPLATES.map((t) => (
@@ -467,7 +467,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
               onClick={() => {
                 // Spawn (not reset): edited work survives as its own draft.
                 const id = spawnDraft(t.build(), { origin: `template:${t.id}` });
-                if (!editOf) router.replace(`/smart-orders/new?draft=${id}`, { scroll: false });
+                if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
               }}
               className={cn(
                 "shrink-0 rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",

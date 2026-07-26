@@ -13,14 +13,14 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { Button, ErrorNote } from "@/components/ui";
 import { SheetShell } from "@/components/motion/primitives";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
-import { layoutDoc } from "@/lib/smart-orders/layout";
-import { compileDoc, validateDoc } from "@/lib/smart-orders/compile";
-import { strategySentence } from "@/lib/smart-orders/sentence";
-import { markDraftConsumedLocal } from "@/lib/smart-orders/drafts";
-import { markDraftConsumedOnServer } from "@/lib/smart-orders/drafts-sync";
-import { useCreateStrategy, type StrategyRow } from "@/lib/smart-orders/queries";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { conditionLeavesOf, docFromDefinition } from "@/lib/strategies/doc";
+import { layoutDoc } from "@/lib/strategies/layout";
+import { compileDoc, validateDoc } from "@/lib/strategies/compile";
+import { strategySentence } from "@/lib/strategies/sentence";
+import { markDraftConsumedLocal } from "@/lib/strategies/drafts";
+import { markDraftConsumedOnServer } from "@/lib/strategies/drafts-sync";
+import { useCreateStrategy, type StrategyRow } from "@/lib/strategies/queries";
 import { ApiError } from "@/lib/api";
 import { StrategySettings } from "@/components/builder/StrategySettings";
 import { ConditionEditor } from "@/components/builder/editors/ConditionEditor";
@@ -146,7 +146,7 @@ export function QuickEditSheet({
                 {create.isPending ? "Applying…" : "Apply changes"}
               </Button>
               <Link
-                href={`/smart-orders/${row.id}/edit`}
+                href={`/strategies/${row.id}/edit`}
                 className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs font-medium text-fg transition-colors hover:border-border-strong"
                 onClick={onClose}
               >

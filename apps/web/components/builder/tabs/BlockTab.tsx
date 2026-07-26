@@ -7,8 +7,8 @@
  * inside expanded canvas nodes — one editing implementation, two surfaces.
  */
 import { MousePointerClick } from "lucide-react";
-import { findNode } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { findNode } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { ConditionEditor } from "../editors/ConditionEditor";
 import { ActionEditor, GroupEditor, RootLogicEditor } from "../editors/ActionEditor";
 

@@ -8,21 +8,21 @@ import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
 import { cn, Empty, Skeleton, ErrorNote } from "@/components/ui";
 import { useActionCenterUi } from "@/lib/action-center-store";
-import { DraftsSection } from "@/components/smart-orders/DraftsSection";
-import { EMPTY_FILTERS, FilterBar } from "@/components/smart-orders/FilterBar";
-import { NotifyUpsell } from "@/components/smart-orders/NotifyUpsell";
-import { PulseStrip } from "@/components/smart-orders/PulseStrip";
-import { StrategyCard } from "@/components/smart-orders/StrategyCard";
-import { StrategyPanel } from "@/components/smart-orders/panel/StrategyPanel";
+import { DraftsSection } from "@/components/strategies/DraftsSection";
+import { EMPTY_FILTERS, FilterBar } from "@/components/strategies/FilterBar";
+import { NotifyUpsell } from "@/components/strategies/NotifyUpsell";
+import { PulseStrip } from "@/components/strategies/PulseStrip";
+import { StrategyCard } from "@/components/strategies/StrategyCard";
+import { StrategyPanel } from "@/components/strategies/panel/StrategyPanel";
 import { SheetShell } from "@/components/motion/primitives";
-import { useAutoReadiness, useStrategies, useStrategiesOverview } from "@/lib/smart-orders/queries";
+import { useAutoReadiness, useStrategies, useStrategiesOverview } from "@/lib/strategies/queries";
 import {
   partitionSections,
   sectionOf,
   SECTION_ORDER,
   SECTION_TITLES,
-} from "@/lib/smart-orders/sections";
-import type { StrategyOverviewItem, StrategyRow } from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/sections";
+import type { StrategyOverviewItem, StrategyRow } from "@/lib/strategies/queries";
 
 const matchesQuery = (row: StrategyRow, q: string): boolean => {
   const needle = q.toLowerCase();
@@ -86,11 +86,11 @@ function SmartOrdersDashboard() {
   // reloads; replace (not push) keeps card-to-card browsing off the history.
   const openPanel = useCallback(
     (id: string) =>
-      router.replace(`/smart-orders?focus=${encodeURIComponent(id)}`, { scroll: false }),
+      router.replace(`/strategies?focus=${encodeURIComponent(id)}`, { scroll: false }),
     [router],
   );
   const closePanel = useCallback(
-    () => router.replace("/smart-orders", { scroll: false }),
+    () => router.replace("/strategies", { scroll: false }),
     [router],
   );
 
@@ -132,7 +132,7 @@ function SmartOrdersDashboard() {
             </p>
           </div>
           <Link
-            href="/smart-orders/new"
+            href="/strategies/new"
             className="inline-flex items-center gap-1.5 rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-brand-strong hover:bg-brand-strong"
           >
             <Sparkles size={14} aria-hidden />
@@ -170,7 +170,7 @@ function SmartOrdersDashboard() {
         ) : !signedIn ? (
           <Empty>
             Sign in to see your Smart Orders — or{" "}
-            <Link href="/smart-orders/new" className="text-accent hover:underline">
+            <Link href="/strategies/new" className="text-accent hover:underline">
               try the builder
             </Link>{" "}
             without an account.
@@ -186,7 +186,7 @@ function SmartOrdersDashboard() {
         ) : allRows.length === 0 ? (
           <Empty>
             No Smart Orders yet.{" "}
-            <Link href="/smart-orders/new" className="text-accent hover:underline">
+            <Link href="/strategies/new" className="text-accent hover:underline">
               Create your first one
             </Link>{" "}
             from a template in under a minute.

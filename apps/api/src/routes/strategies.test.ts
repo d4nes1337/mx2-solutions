@@ -36,7 +36,7 @@ import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer
 import { buildApp, type DbProbe } from "../app.js";
 import { resetRateLimits } from "../middleware/rate-limit.js";
 import { resetSmartSearchCache } from "../lib/market-search.js";
-import { clearOverviewCacheForTests, type OverviewResponse } from "./smart-orders.js";
+import { clearOverviewCacheForTests, type OverviewResponse } from "./strategies.js";
 
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const COOKIE = "mx2_session=tok";
@@ -478,12 +478,12 @@ beforeEach(() => {
   clearOverviewCacheForTests();
 });
 
-describe("POST /api/smart-orders", () => {
+describe("POST /api/strategies", () => {
   it("fails closed when the v2 flag is off", async () => {
     const { app } = buildSmartOrdersApp({ smartOrdersV2: false });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -496,7 +496,7 @@ describe("POST /api/smart-orders", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json" },
       payload: validBody,
     });
@@ -508,7 +508,7 @@ describe("POST /api/smart-orders", () => {
     const { app, ruleStore, audits } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -545,7 +545,7 @@ describe("POST /api/smart-orders", () => {
     const { app } = buildSmartOrdersApp({});
     const ok = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: bodyWith(0.08),
     });
@@ -555,7 +555,7 @@ describe("POST /api/smart-orders", () => {
     // Out-of-range offset dies at the zod layer (mirrors validate-v2 bounds).
     const bad = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: bodyWith(0.6),
     });
@@ -567,7 +567,7 @@ describe("POST /api/smart-orders", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: {
         ...validBody,
@@ -585,7 +585,7 @@ describe("POST /api/smart-orders", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: {
         ...validBody,
@@ -617,7 +617,7 @@ describe("POST /api/smart-orders", () => {
     });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -630,7 +630,7 @@ describe("POST /api/smart-orders", () => {
     const { app } = buildSmartOrdersApp({ findMarket: async () => err(upstreamErr) });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -640,7 +640,7 @@ describe("POST /api/smart-orders", () => {
   });
 });
 
-describe("GET /api/smart-orders (+ v1 normalization)", () => {
+describe("GET /api/strategies (+ v1 normalization)", () => {
   it("lists v1 rules alongside v2 with a normalized definitionV2", async () => {
     const ruleStore = makeRuleStore();
     await ruleStore.create({
@@ -666,7 +666,7 @@ describe("GET /api/smart-orders (+ v1 normalization)", () => {
     const { app } = buildSmartOrdersApp({ ruleStore });
     const res = await app.inject({
       method: "GET",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);
@@ -675,6 +675,31 @@ describe("GET /api/smart-orders (+ v1 normalization)", () => {
     expect(strategies[0].version).toBe(1);
     expect(strategies[0].definitionV2.version).toBe(2);
     expect(strategies[0].definitionV2.expr.op).toBe("and");
+    await app.close();
+  });
+
+  it("serves the legacy /api/smart-orders alias via pre-routing rewrite", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/smart-orders",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: validBody,
+    });
+    expect(create.statusCode).toBe(201);
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/smart-orders/${create.json().id}`,
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    // Guard against greedy rewrites: only the exact /api/smart-orders prefix maps.
+    const miss = await app.inject({
+      method: "GET",
+      url: "/api/smart-orders-x",
+      headers: { cookie: COOKIE },
+    });
+    expect(miss.statusCode).toBe(404);
     await app.close();
   });
 });
@@ -686,7 +711,7 @@ describe("tags + archive (organization)", () => {
   }): Promise<string> => {
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -699,7 +724,7 @@ describe("tags + archive (organization)", () => {
     const id = await createOne(app);
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/tags`,
+      url: `/api/strategies/${id}/tags`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { tags: ["Election", "  hedge ", "election"] },
     });
@@ -717,14 +742,14 @@ describe("tags + archive (organization)", () => {
     const id = await createOne(app);
     const tooMany = await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/tags`,
+      url: `/api/strategies/${id}/tags`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { tags: Array.from({ length: 11 }, (_, i) => `t${i}`) },
     });
     expect(tooMany.statusCode).toBe(400);
     const tooLong = await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/tags`,
+      url: `/api/strategies/${id}/tags`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { tags: ["x".repeat(25)] },
     });
@@ -739,7 +764,7 @@ describe("tags + archive (organization)", () => {
 
     const active = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/archive`,
+      url: `/api/strategies/${id}/archive`,
       headers: { cookie: COOKIE },
     });
     expect(active.statusCode).toBe(409); // monitoring must stay visible
@@ -747,7 +772,7 @@ describe("tags + archive (organization)", () => {
     ruleStore.rows[0]!.status = "CANCELLED";
     const archived = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/archive`,
+      url: `/api/strategies/${id}/archive`,
       headers: { cookie: COOKIE },
     });
     expect(archived.statusCode).toBe(200);
@@ -755,21 +780,21 @@ describe("tags + archive (organization)", () => {
 
     const hidden = await app.inject({
       method: "GET",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { cookie: COOKIE },
     });
     expect(hidden.json().strategies).toHaveLength(0);
 
     const shown = await app.inject({
       method: "GET",
-      url: "/api/smart-orders?includeArchived=1",
+      url: "/api/strategies?includeArchived=1",
       headers: { cookie: COOKIE },
     });
     expect(shown.json().strategies).toHaveLength(1);
 
     const restored = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/unarchive`,
+      url: `/api/strategies/${id}/unarchive`,
       headers: { cookie: COOKIE },
     });
     expect(restored.statusCode).toBe(200);
@@ -778,7 +803,7 @@ describe("tags + archive (organization)", () => {
   });
 });
 
-describe("POST /api/smart-orders/evaluate-draft (public)", () => {
+describe("POST /api/strategies/evaluate-draft (public)", () => {
   const draft = {
     expr: {
       type: "group",
@@ -793,7 +818,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     const { app } = buildSmartOrdersApp({ snapshots: { "tok-1": snapshotFor("tok-1") } });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders/evaluate-draft",
+      url: "/api/strategies/evaluate-draft",
       headers: { "content-type": "application/json" },
       payload: draft,
     });
@@ -809,7 +834,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders/evaluate-draft",
+      url: "/api/strategies/evaluate-draft",
       headers: { "content-type": "application/json" },
       payload: draft,
     });
@@ -828,7 +853,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders/evaluate-draft",
+      url: "/api/strategies/evaluate-draft",
       headers: { "content-type": "application/json" },
       payload: { ...draft, extraTokenIds: ["tok-2"] },
     });
@@ -845,7 +870,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     const { app } = buildSmartOrdersApp({ snapshots: { "tok-2": snapshotFor("tok-2") } });
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders/evaluate-draft",
+      url: "/api/strategies/evaluate-draft",
       headers: { "content-type": "application/json" },
       payload: { expr: null, extraTokenIds: ["tok-2"] },
     });
@@ -863,7 +888,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders/evaluate-draft",
+      url: "/api/strategies/evaluate-draft",
       headers: { "content-type": "application/json" },
       payload: {
         expr: {
@@ -887,7 +912,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
     for (let i = 0; i < 61; i++) {
       const res = await app.inject({
         method: "POST",
-        url: "/api/smart-orders/evaluate-draft",
+        url: "/api/strategies/evaluate-draft",
         headers: { "content-type": "application/json" },
         payload: draft,
       });
@@ -898,7 +923,7 @@ describe("POST /api/smart-orders/evaluate-draft (public)", () => {
   });
 });
 
-describe("GET /api/smart-orders/:id/timeline", () => {
+describe("GET /api/strategies/:id/timeline", () => {
   const trigger = (ruleId: string, over: Partial<RuleTriggerRow> = {}): RuleTriggerRow => ({
     id: "trig-1",
     ruleId,
@@ -943,7 +968,7 @@ describe("GET /api/smart-orders/:id/timeline", () => {
   const createStrategy = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -960,7 +985,7 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     const id = await createStrategy(app); // "rule-1"
     const res = await app.inject({
       method: "GET",
-      url: `/api/smart-orders/${id}/timeline`,
+      url: `/api/strategies/${id}/timeline`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);
@@ -984,7 +1009,7 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     const id = await createStrategy(app);
     const res = await app.inject({
       method: "GET",
-      url: `/api/smart-orders/${id}/timeline`,
+      url: `/api/strategies/${id}/timeline`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);
@@ -996,7 +1021,7 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     const { app } = buildSmartOrdersApp({});
     const res = await app.inject({
       method: "GET",
-      url: "/api/smart-orders/rule-unknown/timeline",
+      url: "/api/strategies/rule-unknown/timeline",
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(404);
@@ -1008,7 +1033,7 @@ describe("GET /api/smart-orders/:id/timeline", () => {
     const id = await createStrategy(app);
     const res = await app.inject({
       method: "GET",
-      url: `/api/smart-orders/${id}/timeline?before=not-a-date`,
+      url: `/api/strategies/${id}/timeline?before=not-a-date`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(400);
@@ -1043,11 +1068,11 @@ describe("GET /api/markets/search (public)", () => {
   });
 });
 
-describe("POST /api/smart-orders/:id/disarm (per-strategy kill, W8)", () => {
+describe("POST /api/strategies/:id/disarm (per-strategy kill, W8)", () => {
   const createAuto = (app: ReturnType<typeof buildSmartOrdersApp>["app"]) =>
     app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: {
         ...validBody,
@@ -1064,7 +1089,7 @@ describe("POST /api/smart-orders/:id/disarm (per-strategy kill, W8)", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/disarm`,
+      url: `/api/strategies/${id}/disarm`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);
@@ -1073,7 +1098,7 @@ describe("POST /api/smart-orders/:id/disarm (per-strategy kill, W8)", () => {
 
     const rearm = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/rearm`,
+      url: `/api/strategies/${id}/rearm`,
       headers: { cookie: COOKIE },
     });
     expect(rearm.statusCode).toBe(200);
@@ -1085,14 +1110,14 @@ describe("POST /api/smart-orders/:id/disarm (per-strategy kill, W8)", () => {
     const { app } = buildSmartOrdersApp({});
     const created = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody, // prepare execution
     });
     const id = created.json().id;
     const res = await app.inject({
       method: "POST",
-      url: `/api/smart-orders/${id}/disarm`,
+      url: `/api/strategies/${id}/disarm`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(409);
@@ -1101,7 +1126,7 @@ describe("POST /api/smart-orders/:id/disarm (per-strategy kill, W8)", () => {
   });
 });
 
-describe("GET /api/smart-orders/:id/evaluate-now", () => {
+describe("GET /api/strategies/:id/evaluate-now", () => {
   it("evaluates a v2 strategy across every referenced market", async () => {
     const ruleStore = makeRuleStore();
     const { app } = buildSmartOrdersApp({
@@ -1110,7 +1135,7 @@ describe("GET /api/smart-orders/:id/evaluate-now", () => {
     });
     const create = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: {
         ...validBody,
@@ -1127,7 +1152,7 @@ describe("GET /api/smart-orders/:id/evaluate-now", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/smart-orders/${id}/evaluate-now`,
+      url: `/api/strategies/${id}/evaluate-now`,
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);
@@ -1144,11 +1169,11 @@ describe("GET /api/smart-orders/:id/evaluate-now", () => {
 
 // ── Dashboard: star pin + batch overview ─────────────────────────────────────
 
-describe("PATCH /api/smart-orders/:id/star", () => {
+describe("PATCH /api/strategies/:id/star", () => {
   const createStrategy = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: validBody,
     });
@@ -1162,7 +1187,7 @@ describe("PATCH /api/smart-orders/:id/star", () => {
 
     const star = await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/star`,
+      url: `/api/strategies/${id}/star`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { starred: true },
     });
@@ -1174,7 +1199,7 @@ describe("PATCH /api/smart-orders/:id/star", () => {
 
     const unstar = await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/star`,
+      url: `/api/strategies/${id}/star`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { starred: false },
     });
@@ -1187,14 +1212,14 @@ describe("PATCH /api/smart-orders/:id/star", () => {
     const { app } = buildSmartOrdersApp({});
     const missing = await app.inject({
       method: "PATCH",
-      url: "/api/smart-orders/nope/star",
+      url: "/api/strategies/nope/star",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { starred: true },
     });
     expect(missing.statusCode).toBe(404);
     const smuggled = await app.inject({
       method: "PATCH",
-      url: "/api/smart-orders/nope/star",
+      url: "/api/strategies/nope/star",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { starred: true, walletAddress: "0xevil" },
     });
@@ -1210,14 +1235,14 @@ describe("PATCH /api/smart-orders/:id/star", () => {
     ruleStore.rows[0]!.id = id;
     await app.inject({
       method: "PATCH",
-      url: `/api/smart-orders/${id}/star`,
+      url: `/api/strategies/${id}/star`,
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { starred: true },
     });
 
     const edited = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: { ...validBody, supersedes: id },
     });
@@ -1231,14 +1256,14 @@ describe("PATCH /api/smart-orders/:id/star", () => {
   });
 });
 
-describe("GET /api/smart-orders/overview", () => {
+describe("GET /api/strategies/overview", () => {
   const createStrategy = async (
     app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"],
     body: Record<string, unknown> = validBody,
   ) => {
     const res = await app.inject({
       method: "POST",
-      url: "/api/smart-orders",
+      url: "/api/strategies",
       headers: { "content-type": "application/json", cookie: COOKIE },
       payload: body,
     });
@@ -1249,7 +1274,7 @@ describe("GET /api/smart-orders/overview", () => {
   const getOverview = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {
     const res = await app.inject({
       method: "GET",
-      url: "/api/smart-orders/overview",
+      url: "/api/strategies/overview",
       headers: { cookie: COOKIE },
     });
     expect(res.statusCode).toBe(200);

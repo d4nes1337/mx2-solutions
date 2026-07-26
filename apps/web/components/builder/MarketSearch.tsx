@@ -14,8 +14,8 @@ import {
   useGroupedMarketSearch,
   type EventSearchResult,
   type MarketSearchResult,
-} from "@/lib/smart-orders/queries";
-import type { MarketMeta } from "@/lib/smart-orders/doc";
+} from "@/lib/strategies/queries";
+import type { MarketMeta } from "@/lib/strategies/doc";
 
 export function MarketSearch({
   onPick,

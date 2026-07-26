@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardHeader, Skeleton, cn } from "@/components/ui";
-import type { StrategyTimeline, TimelineEvent, TimelineOrder } from "@/lib/smart-orders/queries";
+import type { StrategyTimeline, TimelineEvent, TimelineOrder } from "@/lib/strategies/queries";
 
 interface Entry {
   key: string;

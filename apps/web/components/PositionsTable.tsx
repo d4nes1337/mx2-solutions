@@ -20,7 +20,7 @@ const protectHref = (p: Position): string => {
     size: String(Math.max(1, Math.floor(toNum(p.size)))),
   });
   if (p.title) q.set("title", p.title);
-  return `/smart-orders/new?${q.toString()}`;
+  return `/strategies/new?${q.toString()}`;
 };
 
 function useMarketLinks(positions: Position[]) {

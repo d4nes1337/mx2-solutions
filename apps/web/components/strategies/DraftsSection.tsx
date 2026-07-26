@@ -10,8 +10,8 @@ import Link from "next/link";
 import { PenLine, Trash2 } from "lucide-react";
 import { cn } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
-import { deleteDraftLocal, listDraftsLocal, type DraftMeta } from "@/lib/smart-orders/drafts";
-import { importServerDrafts } from "@/lib/smart-orders/drafts-sync";
+import { deleteDraftLocal, listDraftsLocal, type DraftMeta } from "@/lib/strategies/drafts";
+import { importServerDrafts } from "@/lib/strategies/drafts-sync";
 
 export function DraftsSection() {
   // Read after mount only: localStorage isn't available during SSR/hydration.
@@ -43,7 +43,7 @@ export function DraftsSection() {
             className="group flex items-center gap-2 rounded-xl border border-border bg-surface px-3.5 py-3 shadow-panel transition-colors hover:border-border-strong"
           >
             <Link
-              href={`/smart-orders/new?draft=${d.id}`}
+              href={`/strategies/new?draft=${d.id}`}
               className="flex min-w-0 flex-1 items-center gap-2.5"
             >
               <PenLine size={14} aria-hidden className="shrink-0 text-accent" />

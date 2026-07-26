@@ -6,8 +6,8 @@
  */
 import { useMemo } from "react";
 import { cn } from "@/components/ui";
-import { describeStrategy } from "@/lib/smart-orders/sentence";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { describeStrategy } from "@/lib/strategies/sentence";
+import { useBuilderStore } from "@/lib/strategies/store";
 
 const TONE_STYLES: Record<string, string> = {
   brand: "border-brand/40 bg-brand-soft text-accent",

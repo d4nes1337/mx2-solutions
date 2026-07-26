@@ -24,7 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/components/ui";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { ConditionEditor } from "./editors/ConditionEditor";
 import { ActionEditor, GroupEditor, RootLogicEditor } from "./editors/ActionEditor";
 

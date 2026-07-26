@@ -8,10 +8,10 @@
  */
 import { Badge } from "@/components/ui";
 import { useMarketEconomics } from "@/lib/queries";
-import { estimateMakerQuote } from "@/lib/smart-orders/maker-estimate";
-import { isBound } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import type { DraftEvaluation } from "@/lib/smart-orders/queries";
+import { estimateMakerQuote } from "@/lib/strategies/maker-estimate";
+import { isBound } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
+import type { DraftEvaluation } from "@/lib/strategies/queries";
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 

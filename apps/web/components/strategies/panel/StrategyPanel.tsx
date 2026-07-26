@@ -16,12 +16,12 @@ import { Badge, Button, Card, CardHeader, LiveDot, Skeleton, cn } from "@/compon
 import { fromCents, toCents } from "@/components/builder/editors/fields";
 import { InlineNumber } from "./InlineNumber";
 import { ConditionCharts } from "../detail/ConditionCharts";
-import { conditionLeavesOf, docFromDefinition } from "@/lib/smart-orders/doc";
-import { applyDefinitionEdits, type DefinitionEdits } from "@/lib/smart-orders/edit-definition";
-import { conditionSummary, formatActual, cents } from "@/lib/smart-orders/summaries";
-import { strategySentence, humanDuration } from "@/lib/smart-orders/sentence";
-import { userStatus } from "@/lib/smart-orders/status";
-import { useNow } from "@/lib/smart-orders/use-now";
+import { conditionLeavesOf, docFromDefinition } from "@/lib/strategies/doc";
+import { applyDefinitionEdits, type DefinitionEdits } from "@/lib/strategies/edit-definition";
+import { conditionSummary, formatActual, cents } from "@/lib/strategies/summaries";
+import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
+import { userStatus } from "@/lib/strategies/status";
+import { useNow } from "@/lib/strategies/use-now";
 import {
   useCreateStrategy,
   useStarStrategy,
@@ -31,7 +31,7 @@ import {
   useStrategyTimeline,
   type StrategyEvaluation,
   type StrategyRow,
-} from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/queries";
 import type { ConditionV2 } from "@mx2/rules";
 
 const EDITABLE_STATUSES = ["ACTIVE_WAITING", "ACTIVE_ACCUMULATING", "PAUSED"];
@@ -238,7 +238,7 @@ export function StrategyPanel({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Link
-            href={`/smart-orders/${row.id}`}
+            href={`/strategies/${row.id}`}
             title="Open the full page (timeline, orders, history)"
             className="rounded-md p-1 text-muted transition-colors hover:text-fg"
           >

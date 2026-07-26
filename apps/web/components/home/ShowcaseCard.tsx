@@ -45,8 +45,8 @@ export function ShowcaseCard({
   // Sample ids don't resolve server-side — deep-link the prompt instead.
   const href =
     sample && showcase.prompt
-      ? `/smart-orders/new?prompt=${encodeURIComponent(showcase.prompt)}`
-      : `/smart-orders/new?showcase=${encodeURIComponent(showcase.id)}`;
+      ? `/strategies/new?prompt=${encodeURIComponent(showcase.prompt)}`
+      : `/strategies/new?showcase=${encodeURIComponent(showcase.id)}`;
 
   return (
     <div className="glass rounded-xl p-5 shadow-elev">

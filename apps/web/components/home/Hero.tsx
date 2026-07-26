@@ -10,7 +10,7 @@ import { useFeatureFlags, useShowcases } from "@/lib/queries";
 import { DEMO_SCENARIOS } from "@/lib/home/demo-scenarios";
 import { useDemoPlayer } from "@/lib/home/use-demo-player";
 import { useScenarioBinding } from "@/lib/home/use-scenario-binding";
-import { TEMPLATES } from "@/lib/smart-orders/templates";
+import { TEMPLATES } from "@/lib/strategies/templates";
 import type { Showcase } from "@/lib/types";
 import { Chip } from "./ShowcaseCard";
 import { DemoTyper } from "./DemoTyper";
@@ -162,7 +162,7 @@ export function Hero() {
         ) : (
           <div className="flex flex-wrap items-center gap-3">
             <Link
-              href="/smart-orders/new"
+              href="/strategies/new"
               className="inline-flex items-center gap-2 rounded-lg border border-brand bg-brand px-5 py-2.5 text-[15px] font-semibold text-white shadow-[0_0_18px_-6px_rgba(var(--brand-rgb),0.35)] transition-colors hover:border-brand-strong hover:bg-brand-strong"
             >
               <Sparkles size={16} aria-hidden />
@@ -179,10 +179,10 @@ export function Hero() {
         {aiOn ? (
           // Three clear ways to start (brief §8.1.6): describe it above, or:
           <div className="flex flex-wrap items-center gap-3 text-[12px] font-medium text-muted">
-            <Link href="/smart-orders/new" className="transition-colors hover:text-fg">
+            <Link href="/strategies/new" className="transition-colors hover:text-fg">
               start from a template →
             </Link>
-            <Link href="/smart-orders/new?start=blank" className="transition-colors hover:text-fg">
+            <Link href="/strategies/new?start=blank" className="transition-colors hover:text-fg">
               start blank →
             </Link>
             <Link href="/markets" className="transition-colors hover:text-fg">

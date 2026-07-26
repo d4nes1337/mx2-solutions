@@ -136,7 +136,7 @@ describe("Hero", () => {
     fireEvent.click(button);
 
     expect(push).toHaveBeenCalledWith(
-      `/smart-orders/new?prompt=${encodeURIComponent("buy YES on fed cuts below 40¢")}`,
+      `/strategies/new?prompt=${encodeURIComponent("buy YES on fed cuts below 40¢")}`,
     );
   });
 
@@ -164,7 +164,7 @@ describe("Hero", () => {
     fireEvent.click(screen.getByText("Build it"));
     expect(push).toHaveBeenCalledTimes(1);
     const url = String(push.mock.calls[0]![0]);
-    expect(url).toContain("/smart-orders/new?prompt=");
+    expect(url).toContain("/strategies/new?prompt=");
     expect(url).toContain(
       `&pinned=cond-france~${encodeURIComponent("Will France win the World Cup?")}`,
     );

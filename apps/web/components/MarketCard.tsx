@@ -31,7 +31,7 @@ const automateHref = (event: GammaEvent, market: GammaMarket, title: string): st
     params.set("outcome", outcome);
     params.set("title", title.slice(0, 120));
   }
-  return `/smart-orders/new?${params.toString()}`;
+  return `/strategies/new?${params.toString()}`;
 };
 
 export function MarketCard({ event, teaser }: { event: GammaEvent; teaser?: Showcase | null }) {
@@ -104,7 +104,7 @@ export function MarketCard({ event, teaser }: { event: GammaEvent; teaser?: Show
           </Link>
           {teaser ? (
             <Link
-              href={`/smart-orders/new?showcase=${encodeURIComponent(teaser.id)}`}
+              href={`/strategies/new?showcase=${encodeURIComponent(teaser.id)}`}
               className="tabular rounded-full bg-pos/10 px-2 py-0.5 text-[10px] font-semibold text-pos transition-colors hover:bg-pos/20"
               title="Hypothetical 30-day backtest — past prices don't predict future prices"
             >

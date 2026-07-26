@@ -38,12 +38,12 @@ import {
   isTokenReferenced,
   marketLabel,
   type StrategyDoc,
-} from "@/lib/smart-orders/doc";
-import { cents, conditionSummary, formatActual } from "@/lib/smart-orders/summaries";
-import { dropTargetFor, validateConnection } from "@/lib/smart-orders/connection-rules";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import type { BuilderIssue } from "@/lib/smart-orders/compile";
-import type { DraftEvaluation } from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/doc";
+import { cents, conditionSummary, formatActual } from "@/lib/strategies/summaries";
+import { dropTargetFor, validateConnection } from "@/lib/strategies/connection-rules";
+import { useBuilderStore } from "@/lib/strategies/store";
+import type { BuilderIssue } from "@/lib/strategies/compile";
+import type { DraftEvaluation } from "@/lib/strategies/queries";
 import { NODE_TYPES, type ConditionNodeData } from "./nodes";
 
 /** Flatten the evaluation result tree into per-node lookups. */

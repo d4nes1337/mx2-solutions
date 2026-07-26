@@ -19,7 +19,7 @@ const state = {
 vi.mock("@/lib/queries", () => ({
   useTokenPricesHistory: () => ({ data: { history: [] }, isLoading: false }),
 }));
-vi.mock("@/lib/smart-orders/queries", () => ({
+vi.mock("@/lib/strategies/queries", () => ({
   useStrategy: () => ({ data: state.row }),
   useStrategyEvaluation: () => ({ data: undefined }),
   useStrategyTimeline: () => ({ data: undefined }),
@@ -40,7 +40,7 @@ vi.mock("@/lib/smart-orders/queries", () => ({
 }));
 
 import { StrategyPanel } from "./StrategyPanel";
-import type { StrategyRow } from "@/lib/smart-orders/queries";
+import type { StrategyRow } from "@/lib/strategies/queries";
 import type { StrategyDefinition } from "@mx2/rules";
 
 const def: StrategyDefinition = {
