@@ -59,9 +59,7 @@ const projectedLeafCount = (d: StrategyDoc): number => {
       n.type === "condition" ? 1 : n.children.reduce((a, c) => a + walk(c), 0);
     return acc + walk(node);
   }, 0);
-  return (
-    p.watch.reduce((acc, c) => acc + c.rows.length, 0) + p.guards.length + inComplex
-  );
+  return p.watch.reduce((acc, c) => acc + c.rows.length, 0) + p.guards.length + inComplex;
 };
 
 describe("docToGrid — classification", () => {
@@ -126,10 +124,7 @@ describe("docToGrid — classification", () => {
 
   it("routes time-window conditions to the time pseudo-card and unbound to the placeholder card", () => {
     const p = docToGrid(
-      doc([
-        cond(timeWindow()),
-        cond(price({ conditionId: "", tokenId: "", outcome: "YES" })),
-      ]),
+      doc([cond(timeWindow()), cond(price({ conditionId: "", tokenId: "", outcome: "YES" }))]),
     );
     expect(p.watch.map((c) => c.key).sort()).toEqual(["time", "unbound"]);
     expect(p.watch.every((c) => c.market === null)).toBe(true);

@@ -591,8 +591,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           {isComplexDoc(doc) ? (
             <div className="flex items-center justify-between gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3.5 py-2 text-[12px] text-warn">
               <span>
-                Part of this strategy uses grouped logic the grid shows read-only — review it on
-                the canvas.
+                Part of this strategy uses grouped logic the grid shows read-only — review it on the
+                canvas.
               </span>
               <button
                 type="button"

@@ -259,10 +259,7 @@ export function StrategyDetailShell() {
           {row.supersedes ? (
             <>
               Edited version of an earlier strategy —{" "}
-              <Link
-                href={`/strategies/${row.supersedes}`}
-                className="text-accent hover:underline"
-              >
+              <Link href={`/strategies/${row.supersedes}`} className="text-accent hover:underline">
                 view previous version
               </Link>
               . Spend caps carried over.

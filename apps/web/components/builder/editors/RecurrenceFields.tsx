@@ -79,17 +79,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function ExpiryField() {
   const doc = useBuilderStore((s) => s.doc);
   const setExpiresAt = useBuilderStore((s) => s.setExpiresAt);
-  const remainingDays =
-    doc.expiresAtMs === null ? null : (doc.expiresAtMs - Date.now()) / DAY_MS;
+  const remainingDays = doc.expiresAtMs === null ? null : (doc.expiresAtMs - Date.now()) / DAY_MS;
   // Snap the stored timestamp back onto the nearest option for display.
   const value =
-    remainingDays === null
-      ? "never"
-      : remainingDays <= 2
-        ? "1"
-        : remainingDays <= 10
-          ? "7"
-          : "30";
+    remainingDays === null ? "never" : remainingDays <= 2 ? "1" : remainingDays <= 10 ? "7" : "30";
   return (
     <Field label="Stop watching after">
       <Segmented

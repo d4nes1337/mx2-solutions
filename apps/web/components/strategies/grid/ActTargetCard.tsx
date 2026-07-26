@@ -119,7 +119,8 @@ function OrderTarget({
       <div className="space-y-1 px-3 py-2.5">
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-[14px] font-semibold text-fg">
-            {action.side === "BUY" ? "Buy" : "Sell"} {action.market.outcome} · {usd2(payoff.costUsd)}
+            {action.side === "BUY" ? "Buy" : "Sell"} {action.market.outcome} ·{" "}
+            {usd2(payoff.costUsd)}
           </span>
           <span className="tabular text-[13px] font-medium text-pos">
             +{usd2(payoff.payoffIfWinUsd)} if right

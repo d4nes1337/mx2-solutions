@@ -1,20 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
-import type {
-  ConditionV2,
-  ExprNode,
-  ExprResultNode,
-  GroupNode,
-  MarketRef,
-} from "@mx2/rules";
+import type { ConditionV2, ExprNode, ExprResultNode, GroupNode, MarketRef } from "@mx2/rules";
 import { emptyDoc, type StrategyDoc } from "@/lib/strategies/doc";
 import type { StrategyEvaluation } from "@/lib/strategies/queries";
 import { StrategyGrid } from "./StrategyGrid";
 
-const m1: MarketRef = { conditionId: "c1", tokenId: "tok-1", outcome: "YES", title: "Fed cuts in March" };
-const m2: MarketRef = { conditionId: "c2", tokenId: "tok-2", outcome: "YES", title: "BTC above 100k" };
-const target: MarketRef = { conditionId: "c9", tokenId: "tok-9", outcome: "YES", title: "Recession in 2026" };
+const m1: MarketRef = {
+  conditionId: "c1",
+  tokenId: "tok-1",
+  outcome: "YES",
+  title: "Fed cuts in March",
+};
+const m2: MarketRef = {
+  conditionId: "c2",
+  tokenId: "tok-2",
+  outcome: "YES",
+  title: "BTC above 100k",
+};
+const target: MarketRef = {
+  conditionId: "c9",
+  tokenId: "tok-9",
+  outcome: "YES",
+  title: "Recession in 2026",
+};
 
 const price = (market: MarketRef, threshold: number): ConditionV2 => ({
   kind: "price",
@@ -126,7 +135,10 @@ const mockApis = () =>
         return json({ tokenId, history });
       }
       if (url.includes("/economics")) {
-        return json({ feeSchedule: null, rewards: { minSize: null, maxSpread: null, ratePerDayUsd: null } });
+        return json({
+          feeSchedule: null,
+          rewards: { minSize: null, maxSpread: null, ratePerDayUsd: null },
+        });
       }
       return json({ error: "NOT_FOUND" }, 404);
     }),

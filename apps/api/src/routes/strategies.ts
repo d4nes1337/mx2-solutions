@@ -1223,73 +1223,69 @@ export const registerStrategiesRoutes = (
   });
 
   // ── POST /api/strategies/evaluate-draft — PUBLIC (builder playground) ───
-  app.post(
-    "/api/strategies/evaluate-draft",
-    publicGuard("draft-eval", 60),
-    async (req, reply) => {
-      const parsed = EvaluateDraftSchema.safeParse(req.body);
-      if (!parsed.success) {
-        reply.code(400);
-        return {
-          error: "INVALID_REQUEST",
-          message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
-        };
-      }
-      // Wrap the draft expression in a minimal definition so the shared
-      // validator enforces the same structural caps as arm-time. A null expr
-      // is a freshness-only probe: the canvas still needs live prices for
-      // markets no condition references yet (order-action / watched markets).
-      const draftDef: StrategyDefinition | null =
-        parsed.data.expr === null
-          ? null
-          : {
-              version: 2,
-              name: "draft",
-              templateId: null,
-              expr: parsed.data.expr,
-              holdsForMs: 0,
-              maxDataAgeMs: parsed.data.maxDataAgeMs,
-              action: { kind: "alert" },
-              recurrence: { kind: "once" },
-              limits: null,
-              expiresAtMs: null,
-            };
-      if (draftDef !== null) {
-        const structural = validateStrategyDefinition(draftDef).filter((i) =>
-          i.code.startsWith("EXPR_"),
-        );
-        if (structural.length > 0) {
-          reply.code(400);
-          return { error: "INVALID_STRATEGY", issues: structural };
-        }
-      }
-
-      // Cap the total live-lookup fan-out: this endpoint is public, and each
-      // snapshot-miss token costs one upstream CLOB call. 8 total keeps the
-      // worst case at the pre-existing ceiling (4 expr markets × book+history).
-      const tokens = [
-        ...new Set([
-          ...(draftDef !== null ? referencedTokenIds(draftDef) : []),
-          ...parsed.data.extraTokenIds,
-        ]),
-      ].slice(0, 8);
-      const nowMs = Date.now();
-      const views = await loadViews(
-        deps,
-        tokens,
-        nowMs,
-        draftDef !== null ? priceMoveTokens(draftDef) : undefined,
-      );
-      const evaluation = draftDef !== null ? evaluateExpression(draftDef, views, nowMs) : null;
+  app.post("/api/strategies/evaluate-draft", publicGuard("draft-eval", 60), async (req, reply) => {
+    const parsed = EvaluateDraftSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
       return {
-        satisfied: evaluation?.satisfied ?? false,
-        root: evaluation?.root ?? null,
-        staleTokenIds: evaluation?.staleTokenIds ?? [],
-        markets: marketFreshness(views, tokens, nowMs),
-        evaluatedAt: new Date(nowMs).toISOString(),
+        error: "INVALID_REQUEST",
+        message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
       };
-    },
-  );
+    }
+    // Wrap the draft expression in a minimal definition so the shared
+    // validator enforces the same structural caps as arm-time. A null expr
+    // is a freshness-only probe: the canvas still needs live prices for
+    // markets no condition references yet (order-action / watched markets).
+    const draftDef: StrategyDefinition | null =
+      parsed.data.expr === null
+        ? null
+        : {
+            version: 2,
+            name: "draft",
+            templateId: null,
+            expr: parsed.data.expr,
+            holdsForMs: 0,
+            maxDataAgeMs: parsed.data.maxDataAgeMs,
+            action: { kind: "alert" },
+            recurrence: { kind: "once" },
+            limits: null,
+            expiresAtMs: null,
+          };
+    if (draftDef !== null) {
+      const structural = validateStrategyDefinition(draftDef).filter((i) =>
+        i.code.startsWith("EXPR_"),
+      );
+      if (structural.length > 0) {
+        reply.code(400);
+        return { error: "INVALID_STRATEGY", issues: structural };
+      }
+    }
+
+    // Cap the total live-lookup fan-out: this endpoint is public, and each
+    // snapshot-miss token costs one upstream CLOB call. 8 total keeps the
+    // worst case at the pre-existing ceiling (4 expr markets × book+history).
+    const tokens = [
+      ...new Set([
+        ...(draftDef !== null ? referencedTokenIds(draftDef) : []),
+        ...parsed.data.extraTokenIds,
+      ]),
+    ].slice(0, 8);
+    const nowMs = Date.now();
+    const views = await loadViews(
+      deps,
+      tokens,
+      nowMs,
+      draftDef !== null ? priceMoveTokens(draftDef) : undefined,
+    );
+    const evaluation = draftDef !== null ? evaluateExpression(draftDef, views, nowMs) : null;
+    return {
+      satisfied: evaluation?.satisfied ?? false,
+      root: evaluation?.root ?? null,
+      staleTokenIds: evaluation?.staleTokenIds ?? [],
+      markets: marketFreshness(views, tokens, nowMs),
+      evaluatedAt: new Date(nowMs).toISOString(),
+    };
+  });
 
   // ── GET /api/markets/search — PUBLIC (@market mentions) ───────────────────
   app.get("/api/markets/search", publicGuard("market-search", 120), async (req, reply) => {

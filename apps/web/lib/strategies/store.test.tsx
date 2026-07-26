@@ -197,9 +197,9 @@ describe("useBuilderStore.setCardOp: two-level grid logic", () => {
     store.addCondition(price("tok-1", 0.6));
     store.addCondition(price("tok-1", 0.4));
     store.setCardOp("tok-1", "or");
-    const groupId = useBuilderStore.getState().doc.expr.children.find(
-      (n) => n.type === "group",
-    )!.id;
+    const groupId = useBuilderStore
+      .getState()
+      .doc.expr.children.find((n) => n.type === "group")!.id;
 
     useBuilderStore.getState().setCardOp("tok-1", "and");
 

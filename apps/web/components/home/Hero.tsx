@@ -137,11 +137,7 @@ export function Hero() {
           <span className="font-medium text-fg">Nothing trades without your signature.</span>
         </p>
 
-        {aiOn ? (
-          <HeroComposer onInteract={noteInteraction} />
-        ) : (
-          <MarketSearch />
-        )}
+        {aiOn ? <HeroComposer onInteract={noteInteraction} /> : <MarketSearch />}
 
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Link

@@ -89,10 +89,7 @@ function SmartOrdersDashboard() {
       router.replace(`/strategies?focus=${encodeURIComponent(id)}`, { scroll: false }),
     [router],
   );
-  const closePanel = useCallback(
-    () => router.replace("/strategies", { scroll: false }),
-    [router],
-  );
+  const closePanel = useCallback(() => router.replace("/strategies", { scroll: false }), [router]);
 
   const renderCard = (row: StrategyRow) => (
     <StrategyCard

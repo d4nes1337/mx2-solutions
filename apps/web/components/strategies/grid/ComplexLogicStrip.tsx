@@ -44,8 +44,8 @@ export function ComplexLogicStrip({
       </CardHeader>
       <div className="space-y-2 px-3 pb-3">
         <p className="text-[11px] text-faint">
-          This part of the logic is grouped beyond what the grid can edit — shown exactly as
-          built. Use the canvas to change it.
+          This part of the logic is grouped beyond what the grid can edit — shown exactly as built.
+          Use the canvas to change it.
         </p>
         {complex.map(({ node }) => (
           <div key={node.id} className="flex flex-wrap items-center gap-1.5 opacity-80">

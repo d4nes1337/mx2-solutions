@@ -58,7 +58,11 @@ export function HeroComposer({ onInteract }: { onInteract?: () => void }) {
         const hit = res.results[0];
         if (hit) {
           seedPins([
-            { conditionId: hit.conditionId, title: hit.title, ...(hit.image ? { image: hit.image } : {}) },
+            {
+              conditionId: hit.conditionId,
+              title: hit.title,
+              ...(hit.image ? { image: hit.image } : {}),
+            },
           ]);
         }
       })

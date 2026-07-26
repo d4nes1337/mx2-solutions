@@ -127,7 +127,9 @@ export function WatchMarketCard({
       <CardHeader
         right={
           <span className="flex items-center gap-2">
-            {last !== null ? <span className="tabular text-[12px] text-muted">{cents(last)}</span> : null}
+            {last !== null ? (
+              <span className="tabular text-[12px] text-muted">{cents(last)}</span>
+            ) : null}
             {opControl}
             {edit?.onRemove ? (
               <button

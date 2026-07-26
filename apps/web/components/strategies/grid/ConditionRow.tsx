@@ -38,16 +38,16 @@ export function ConditionRow({
       <div className="min-w-0 flex-1 text-left">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-[13px] text-fg">{summary}</span>
-          {onClick ? (
-            <Pencil size={11} aria-hidden className="shrink-0 text-faint" />
-          ) : null}
+          {onClick ? <Pencil size={11} aria-hidden className="shrink-0 text-faint" /> : null}
         </div>
         {showMarketDetail && detail ? (
           <div className="truncate text-[11px] text-faint">{detail}</div>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {actual !== null ? <span className="tabular text-[12px] text-muted">now {actual}</span> : null}
+        {actual !== null ? (
+          <span className="tabular text-[12px] text-muted">now {actual}</span>
+        ) : null}
         {!result ? (
           <Badge tone="neutral">—</Badge>
         ) : result.stale ? (
@@ -66,7 +66,11 @@ export function ConditionRow({
   );
   if (onClick) {
     return (
-      <button type="button" onClick={onClick} className={cn(rowClass, "transition-colors hover:bg-surface-2")}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(rowClass, "transition-colors hover:bg-surface-2")}
+      >
         {body}
       </button>
     );

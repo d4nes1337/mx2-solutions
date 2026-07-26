@@ -194,7 +194,11 @@ export function StrategyGrid({
       {edit ? (
         <>
           <RowEditorSheet nodeId={editingNode} onClose={() => setEditingNode(null)} />
-          <EditorSheet open={actionOpen} onClose={() => setActionOpen(false)} title="Edit the action">
+          <EditorSheet
+            open={actionOpen}
+            onClose={() => setActionOpen(false)}
+            title="Edit the action"
+          >
             <ActionEditor />
           </EditorSheet>
           <EditorSheet

@@ -306,10 +306,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       );
       if (backing) {
         if (backing.op === op) return s;
-        return bump(
-          { ...s.doc, expr: replaceNodeInTree(root, backing.id, { ...backing, op }) },
-          s,
-        );
+        return bump({ ...s.doc, expr: replaceNodeInTree(root, backing.id, { ...backing, op }) }, s);
       }
       // Flat root rows: materialize a group only when the combinator actually
       // differs from the root's (same op = same semantics, keep them flat).
