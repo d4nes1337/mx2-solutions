@@ -1,35 +1,36 @@
 "use client";
 
 /**
- * The hero's big AI chat window (Slice 4): the message area plays the
- * auto-typing demo (or rotates example thoughts when no demo is supplied),
- * the composer is a real chat input with @market mentions and pinned chips.
- * Submit deep-links into the cockpit (?prompt= + ?pinned=) where
- * BuilderShell seeds the pins and auto-fires the AI.
+ * The homepage's one big input — a clean composer (the auto-typing demo lives
+ * in the preview panel below, never inside the input the user is meant to
+ * own). @-mentions pin markets, a pasted Polymarket URL resolves to a pin,
+ * and the capability chips underneath double as documentation: they show
+ * what the engine can watch and insert a teaching phrase on tap. Submit
+ * deep-links into the builder (?prompt= + ?pinned=) which auto-fires the AI.
  */
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, X } from "lucide-react";
 import { MentionDropdown } from "@/components/builder/MentionDropdown";
-import { useReducedMotion } from "@/components/motion";
 import { useMarketMention } from "@/lib/strategies/use-mention";
 import { useAutogrowTextarea } from "@/lib/use-autogrow";
+import { api } from "@/lib/api";
+import type { MarketSearchResult } from "@/lib/strategies/queries";
 
-export function HeroChat({
-  demo,
-  examples,
-  onInteract,
-}: {
-  /** The typing-demo bubble; when absent the message area rotates examples. */
-  demo?: ReactNode;
-  examples: string[];
-  /** Fired on composer focus/typing — Hero pauses the demo and owns the resume timer. */
-  onInteract?: () => void;
-}) {
+/** What the engine can watch — chips are documentation that types for you. */
+const CAPABILITY_CHIPS: { label: string; insert: string }[] = [
+  { label: "price level", insert: "if @ dips below 40¢, " },
+  { label: "price move", insert: "if it drops 5¢ within 10 minutes, " },
+  { label: "volume & liquidity", insert: "only if there's at least $2k of liquidity, " },
+  { label: "schedule", insert: "only before Friday noon, " },
+  { label: "trailing", insert: "buy the rebound 5¢ off the low, " },
+];
+
+const POLYMARKET_URL = /https?:\/\/(?:www\.)?polymarket\.com\/(?:event|market)\/([\w-]+)/i;
+
+export function HeroComposer({ onInteract }: { onInteract?: () => void }) {
   const router = useRouter();
-  const reduced = useReducedMotion();
   const [value, setValue] = useState("");
-  const [phIdx, setPhIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useAutogrowTextarea(textareaRef, value);
 
@@ -41,54 +42,59 @@ export function HeroChat({
     syncFromCaret,
     pinned,
     unpin,
+    seedPins,
   } = useMarketMention({ value, setValue, textareaRef });
-  /** Keyboard cursor in the mention dropdown (arrows move, Enter picks). */
   const [mentionIndex, setMentionIndex] = useState(0);
-
-  useEffect(() => {
-    if (reduced || demo || examples.length === 0) return;
-    const t = setInterval(() => setPhIdx((i) => (i + 1) % examples.length), 3_500);
-    return () => clearInterval(t);
-  }, [reduced, demo, examples.length]);
-
-  // A new mention query restarts keyboard navigation at the top row.
   useEffect(() => setMentionIndex(0), [mention?.query]);
+
+  /** A pasted Polymarket link becomes a pinned market, not URL noise. */
+  const tryPinFromUrl = (text: string): boolean => {
+    const match = POLYMARKET_URL.exec(text);
+    if (!match) return false;
+    const slug = match[1]!.replace(/-/g, " ");
+    void api
+      .get<{ results: MarketSearchResult[] }>(`/api/markets/search?q=${encodeURIComponent(slug)}`)
+      .then((res) => {
+        const hit = res.results[0];
+        if (hit) {
+          seedPins([
+            { conditionId: hit.conditionId, title: hit.title, ...(hit.image ? { image: hit.image } : {}) },
+          ]);
+        }
+      })
+      .catch(() => {
+        /* search down — the paste just does nothing */
+      });
+    return true;
+  };
 
   const go = (raw: string) => {
     const v = raw.trim().slice(0, 500);
-    if (v.length < 3) return;
+    if (v.length < 3 && pinned.length === 0) return;
     const pinnedParam =
       pinned.length > 0
         ? `&pinned=${pinned
             .map((p) => `${p.conditionId}~${encodeURIComponent(p.title.slice(0, 60))}`)
             .join(",")}`
         : "";
-    router.push(`/strategies/new?prompt=${encodeURIComponent(v)}${pinnedParam}`);
+    const prompt = v.length >= 3 ? v : "build a strategy on this market";
+    router.push(`/strategies/new?prompt=${encodeURIComponent(prompt)}${pinnedParam}`);
+  };
+
+  const insertChip = (text: string) => {
+    onInteract?.();
+    setValue((cur) => (cur.length > 0 && !cur.endsWith(" ") ? `${cur} ${text}` : cur + text));
+    textareaRef.current?.focus();
   };
 
   return (
-    <div className="flex min-h-[340px] flex-col rounded-xl border border-brand/40 bg-surface shadow-[0_0_24px_-8px_rgba(var(--brand-rgb),0.35)]">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <span className="h-2 w-2 rounded-full bg-brand" aria-hidden />
-        <span className="text-[12px] font-semibold text-fg">arima AI</span>
-        <span className="ml-auto text-[10px] font-medium uppercase tracking-wide text-faint">
-          Describe it — it builds it
-        </span>
-      </div>
-
-      <div className="flex flex-1 flex-col justify-end space-y-2 overflow-hidden px-3 py-3">
-        {demo ?? (
-          <div className="flex justify-end">
-            <div className="w-fit max-w-[92%] rounded-lg rounded-br-sm border border-border bg-surface-2 px-3.5 py-2.5 text-[14px] italic leading-relaxed text-muted">
-              {examples[phIdx % Math.max(1, examples.length)]}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-2 border-t border-border px-3 py-3" data-tour="hero-prompt">
+    <div className="space-y-2.5">
+      <div
+        className="rounded-xl border border-brand/40 bg-surface p-3 shadow-[0_0_24px_-8px_rgba(var(--brand-rgb),0.35)]"
+        data-tour="hero-prompt"
+      >
         {pinned.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="mb-2 flex flex-wrap gap-1.5">
             {pinned.map((p) => (
               <span
                 key={p.conditionId}
@@ -125,6 +131,10 @@ export function HeroChat({
             ref={textareaRef}
             value={value}
             onFocus={() => onInteract?.()}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData("text");
+              if (tryPinFromUrl(text)) e.preventDefault();
+            }}
             onChange={(e) => {
               setValue(e.target.value);
               syncFromCaret(e.target.value);
@@ -148,7 +158,6 @@ export function HeroChat({
               }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                // Enter while the @-dropdown is open picks the active match.
                 if (mentionResults.length > 0) {
                   pickMention(mentionResults[Math.min(mentionIndex, mentionResults.length - 1)]!);
                   return;
@@ -157,13 +166,13 @@ export function HeroChat({
               }
             }}
             maxLength={500}
-            placeholder="e.g. buy YES if @market dips below 40¢ — type @ to pin a market"
-            aria-label="Describe your trading idea"
-            className="min-h-[52px] w-full resize-none rounded-lg border border-border bg-surface-2 px-2.5 py-2 text-[14px] text-fg outline-none transition-colors placeholder:text-faint focus:border-brand"
+            placeholder="if @fed-cuts-march goes above 67¢ and volume doubles in 5m, buy $50 of @recession-2026 — or paste a Polymarket link"
+            aria-label="Describe your strategy"
+            className="min-h-[56px] w-full resize-none bg-transparent text-[15px] text-fg outline-none placeholder:text-faint"
           />
           <button
             type="submit"
-            disabled={value.trim().length < 3}
+            disabled={value.trim().length < 3 && pinned.length === 0}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-brand bg-brand px-4 py-2.5 text-[14px] font-semibold text-white transition-colors hover:border-brand-strong hover:bg-brand-strong disabled:opacity-40"
           >
             <Sparkles size={14} aria-hidden />
@@ -176,10 +185,20 @@ export function HeroChat({
             onPick={pickMention}
           />
         </form>
+      </div>
 
-        <p className="text-[10px] leading-snug text-faint">
-          Free — no account needed to build &amp; simulate.
-        </p>
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        <span className="text-[11px] text-faint">it can watch:</span>
+        {CAPABILITY_CHIPS.map((chip) => (
+          <button
+            key={chip.label}
+            type="button"
+            onClick={() => insertChip(chip.insert)}
+            className="rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-muted transition-colors hover:border-brand/50 hover:text-fg"
+          >
+            {chip.label}
+          </button>
+        ))}
       </div>
     </div>
   );

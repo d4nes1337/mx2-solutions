@@ -116,22 +116,30 @@ afterEach(() => {
   push.mockReset();
 });
 
-describe("Hero", () => {
-  it("keeps the classic hero when the AI flag is off", async () => {
-    mockApis({ aiChat: false, showcases: "error" });
+describe("Hero (centered, identity-first)", () => {
+  it("always leads with the identity line and trust copy", async () => {
+    mockApis({ aiChat: true, showcases: "error" });
     renderHero();
-    expect(await screen.findByText("Create Smart Order")).toBeInTheDocument();
-    expect(screen.queryByText("Build it")).not.toBeInTheDocument();
-    // The static marketing preview replaces the demo panel.
-    expect(screen.getByText("Smart Order · Re-entry")).toBeInTheDocument();
+    expect(await screen.findByText(/If this,/)).toBeInTheDocument();
+    expect(screen.getByText(/conditional strategies engine for Polymarket/)).toBeInTheDocument();
+    expect(screen.getByText("Nothing trades without your signature.")).toBeInTheDocument();
+    expect(screen.getByText("Build manually")).toBeInTheDocument();
   });
 
-  it("renders the chat window and deep-links the prompt on submit", async () => {
+  it("degrades to market search + static preview when the AI flag is off", async () => {
+    mockApis({ aiChat: false, showcases: "error" });
+    renderHero();
+    expect(await screen.findByLabelText("Search markets")).toBeInTheDocument();
+    expect(screen.queryByText("Build it")).not.toBeInTheDocument();
+    expect(screen.getByText("Strategy · Re-entry")).toBeInTheDocument();
+  });
+
+  it("deep-links the prompt on submit", async () => {
     mockApis({ aiChat: true, showcases: "error" });
     renderHero();
 
     const button = await screen.findByText("Build it");
-    const box = screen.getByLabelText("Describe your trading idea");
+    const box = screen.getByLabelText("Describe your strategy");
     fireEvent.change(box, { target: { value: "buy YES on fed cuts below 40¢" } });
     fireEvent.click(button);
 
@@ -147,11 +155,19 @@ describe("Hero", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("capability chips insert a teaching phrase into the composer", async () => {
+    mockApis({ aiChat: true, showcases: "error" });
+    renderHero();
+    const box = await screen.findByLabelText("Describe your strategy");
+    fireEvent.click(screen.getByText("volume & liquidity"));
+    expect((box as HTMLTextAreaElement).value).toContain("at least $2k of liquidity");
+  });
+
   it("@-mention: picking a market pins a chip and rides along in ?pinned=", async () => {
     mockApis({ aiChat: true, showcases: "error" });
     renderHero();
 
-    const box = await screen.findByLabelText("Describe your trading idea");
+    const box = await screen.findByLabelText("Describe your strategy");
     fireEvent.change(box, { target: { value: "buy the dip on @fra" } });
 
     // Dropdown row appears from the mocked search (debounced 250ms).
@@ -170,7 +186,20 @@ describe("Hero", () => {
     );
   });
 
-  it("plays the demo: typed sentence on the left, chips + dots on the right", async () => {
+  it("a pasted Polymarket link resolves to a pinned market instead of URL noise", async () => {
+    mockApis({ aiChat: true, showcases: "error" });
+    renderHero();
+    const box = await screen.findByLabelText("Describe your strategy");
+    fireEvent.paste(box, {
+      clipboardData: {
+        getData: () => "https://polymarket.com/event/will-france-win-the-world-cup",
+      },
+    });
+    expect(await screen.findByLabelText(/Unpin Will France win/)).toBeInTheDocument();
+    expect((box as HTMLTextAreaElement).value).not.toContain("polymarket.com");
+  });
+
+  it("plays the demo in the preview block: typed bubble + chips + dots", async () => {
     mockApis({ aiChat: true, showcases: "error" });
     renderHero();
 
@@ -184,7 +213,7 @@ describe("Hero", () => {
     // Synthetic binding (empty history) is captioned honestly.
     expect(screen.getByText(/Illustrative price path/)).toBeInTheDocument();
 
-    // Manual dots swap the scenario on both sides.
+    // Manual dots swap the scenario.
     fireEvent.click(screen.getByLabelText("Show demo 2 of 5"));
     expect(await screen.findByText("Demo · Maker range farming")).toBeInTheDocument();
     expect(screen.getAllByText(/Spain wins the World Cup/).length).toBeGreaterThanOrEqual(2);

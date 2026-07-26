@@ -91,7 +91,7 @@ describe("DiscoverySection", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByText("Proven plays")).toBeInTheDocument();
+    expect(screen.getByText("Plays that would have paid")).toBeInTheDocument();
     expect(screen.getByText("Automate these markets now")).toBeInTheDocument();
 
     // Mid 0.50 → the dip-buy heuristic, with a one-click Build deep link.
