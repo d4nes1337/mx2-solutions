@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useSession } from "@/lib/auth";
 import { useCancelOrder, useOpenOrders, usePortfolioOverview, useTradeStatus } from "@/lib/queries";
-import { useStrategies } from "@/lib/smart-orders/queries";
+import { useStrategies } from "@/lib/strategies/queries";
 import { ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
 import { PositionsTable } from "@/components/PositionsTable";
 import { OpenOrdersTable } from "@/components/portfolio/OpenOrdersTable";
@@ -31,8 +31,8 @@ const LIVE_STATUSES = new Set([
   "PAUSED",
 ]);
 
-const SHOWN_PREFIXES = ["/markets", "/events", "/smart-orders", "/portfolio", "/profile"];
-const HIDDEN_PREFIXES = ["/smart-orders/new"];
+const SHOWN_PREFIXES = ["/markets", "/events", "/strategies", "/portfolio", "/profile"];
+const HIDDEN_PREFIXES = ["/strategies/new"];
 const HIDDEN_SUFFIXES = ["/edit"];
 
 const dockVisible = (pathname: string): boolean =>

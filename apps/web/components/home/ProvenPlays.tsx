@@ -44,7 +44,7 @@ export function ProvenPlays() {
       onMouseLeave={() => setPaused(false)}
     >
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-fg">Proven plays</h2>
+        <h2 className="text-lg font-semibold tracking-tight text-fg">Plays that would have paid</h2>
         <p className="text-[12px] text-muted">
           {sample
             ? "Sample plays — live backtests refresh every 15 min"

@@ -12,14 +12,14 @@ import { useMemo } from "react";
 import { Badge } from "@/components/ui";
 import { AnimatedNumber } from "@/components/motion";
 import { AreaChart } from "@/components/charts/AreaChart";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { computePayoff, payoffInputFromDoc } from "@/lib/smart-orders/projection";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { computePayoff, payoffInputFromDoc } from "@/lib/strategies/projection";
 import { backtestTokenId, simulateTriggers } from "@mx2/rules";
-import { docMarketRefs, marketLabel, type StrategyDoc } from "@/lib/smart-orders/doc";
+import { docMarketRefs, marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
 import { cents, signedUsd, usd } from "@/lib/format";
 import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import type { DraftEvaluation } from "@/lib/smart-orders/queries";
+import type { DraftEvaluation } from "@/lib/strategies/queries";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (

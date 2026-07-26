@@ -12,9 +12,9 @@ import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { OrderbookTable } from "@/components/OrderbookTable";
 import { useOrderbookByToken, useTokenPricesHistory } from "@/lib/queries";
 import { cents } from "@/lib/format";
-import { docMarketRefs, marketLabel } from "@/lib/smart-orders/doc";
-import { useMarketSiblings } from "@/lib/smart-orders/queries";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { docMarketRefs, marketLabel } from "@/lib/strategies/doc";
+import { useMarketSiblings } from "@/lib/strategies/queries";
+import { useBuilderStore } from "@/lib/strategies/store";
 
 const RANGES: { value: string; label: string }[] = [
   { value: "6h", label: "6H" },

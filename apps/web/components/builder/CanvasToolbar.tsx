@@ -9,8 +9,8 @@
 import { useEffect, useState } from "react";
 import { Eraser, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui";
-import { docHasContent } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { docHasContent } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { useOutsideClick } from "@/lib/use-outside-click";
 import { MarketSearch } from "./MarketSearch";
 

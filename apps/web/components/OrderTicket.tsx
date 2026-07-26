@@ -14,7 +14,7 @@ import { ApiError } from "@/lib/api";
 import { signedUsd } from "@/lib/format";
 import { buildPreviewRequest } from "@/lib/orders";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
-import { computePayoff } from "@/lib/smart-orders/projection";
+import { computePayoff } from "@/lib/strategies/projection";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
 

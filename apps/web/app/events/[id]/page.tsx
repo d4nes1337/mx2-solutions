@@ -10,7 +10,7 @@ import { useParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { ErrorNote, Skeleton } from "@/components/ui";
 import { GroupedResultCard } from "@/components/market/GroupedResultCard";
-import { useEventMarkets } from "@/lib/smart-orders/queries";
+import { useEventMarkets } from "@/lib/strategies/queries";
 
 export default function EventPage() {
   const params = useParams<{ id: string }>();

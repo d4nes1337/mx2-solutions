@@ -13,7 +13,7 @@ import { cn } from "./ui";
 const NAV = [
   { href: "/", label: "Home", tour: null },
   { href: "/markets", label: "Markets", tour: "nav-markets" },
-  { href: "/smart-orders", label: "Smart Orders", tour: "nav-smart-orders" },
+  { href: "/strategies", label: "Strategies", tour: "nav-strategies" },
   { href: "/portfolio", label: "Portfolio", tour: null },
   { href: "/wallet", label: "Wallet", tour: "nav-wallet" },
 ];

@@ -178,7 +178,7 @@ export function WalletsSection({
             <p className="text-[12px] leading-snug text-muted">
               {hasWalletMapping
                 ? "You removed your trading wallet earlier — it still exists safely at the provider. Restoring brings the same wallet (and any funds on it) right back."
-                : "Optional: a separate, ring-fenced balance so Smart Orders can execute automatically within strict limits. Your main wallet stays the default — you keep signing each trade yourself until you turn this on."}
+                : "Optional: a separate, ring-fenced balance so strategies can execute automatically within strict limits. Your main wallet stays the default — you keep signing each trade yourself until you turn this on."}
             </p>
             <Button
               size="sm"

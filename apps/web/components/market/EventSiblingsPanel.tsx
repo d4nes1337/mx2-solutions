@@ -6,7 +6,7 @@
  * for standalone markets.
  */
 import { GroupedResultCard } from "./GroupedResultCard";
-import { useMarketSiblings } from "@/lib/smart-orders/queries";
+import { useMarketSiblings } from "@/lib/strategies/queries";
 
 export function EventSiblingsPanel({
   tokenId,

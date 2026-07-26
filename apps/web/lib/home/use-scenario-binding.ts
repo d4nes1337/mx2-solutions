@@ -10,7 +10,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { TokenPricesHistoryResponse } from "../types";
-import type { MarketSearchResult } from "../smart-orders/queries";
+import type { MarketSearchResult } from "../strategies/queries";
 import type { ChartPoint } from "@/components/charts/AreaChart";
 import type { DemoScenario } from "./demo-scenarios";
 

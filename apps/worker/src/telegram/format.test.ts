@@ -83,7 +83,7 @@ describe("formatNotification", () => {
       { appBaseUrl: BASE },
     );
     expect(msg.html).toContain("Alert triggered");
-    expect(msg.buttons[0]![0]!.url).toBe("https://app.example.com/smart-orders/rule-9");
+    expect(msg.buttons[0]![0]!.url).toBe("https://app.example.com/strategies/rule-9");
   });
 
   it("order_auto_executed is informational — no sign link ever", () => {

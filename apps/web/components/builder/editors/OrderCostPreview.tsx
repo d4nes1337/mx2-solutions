@@ -9,7 +9,7 @@
  */
 import { takerCrossCost, type BookLevel, type OrderActionV2 } from "@mx2/rules";
 import { useMarketEconomics, useOrderbookByToken } from "@/lib/queries";
-import { isBound } from "@/lib/smart-orders/doc";
+import { isBound } from "@/lib/strategies/doc";
 import { cn } from "@/components/ui";
 
 const money = (n: number) => `$${n.toFixed(2)}`;

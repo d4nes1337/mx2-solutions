@@ -7,7 +7,7 @@ import type { StrategyDefinition } from "@mx2/rules";
 import { makeRateLimit } from "../middleware/rate-limit.js";
 import { generateStrategy } from "../ai/generate.js";
 import type { AiClient } from "../ai/client.js";
-import { StrategyDefinitionSchema } from "./smart-orders.js";
+import { StrategyDefinitionSchema } from "./strategies.js";
 
 export interface AiRoutesDeps {
   config: AppConfig;

@@ -8,9 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, waitFor } from "@testing-library/react";
 import { BuilderShell, parsePinnedParam } from "./BuilderShell";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { emptyDoc } from "@/lib/smart-orders/doc";
-import { loadDraftLocal } from "@/lib/smart-orders/drafts";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { emptyDoc } from "@/lib/strategies/doc";
+import { loadDraftLocal } from "@/lib/strategies/drafts";
 
 const push = vi.fn();
 const replace = vi.fn();
@@ -131,19 +131,19 @@ describe("BuilderShell deep links", () => {
     // The template landed on a fresh draft and the URL was canonicalized.
     expect(useBuilderStore.getState().doc.name).not.toBe("My custom play");
     expect(replace).toHaveBeenCalledWith(
-      expect.stringContaining("/smart-orders/new?draft="),
+      expect.stringContaining("/strategies/new?draft="),
       expect.objectContaining({ scroll: false }),
     );
   });
 
-  it("bare /smart-orders/new keeps this session's live canvas", async () => {
+  it("bare /strategies/new keeps this session's live canvas", async () => {
     searchParams = new URLSearchParams();
     const liveId = useBuilderStore.getState().spawnDraft();
     useBuilderStore.getState().setName("Still working on this");
     renderShell();
 
     await waitFor(() =>
-      expect(replace).toHaveBeenCalledWith(`/smart-orders/new?draft=${liveId}`, {
+      expect(replace).toHaveBeenCalledWith(`/strategies/new?draft=${liveId}`, {
         scroll: false,
       }),
     );
@@ -175,5 +175,24 @@ describe("parsePinnedParam", () => {
   it("drops broken percent-encoding and returns [] for null", () => {
     expect(parsePinnedParam("c1~%E0%A4%A")).toEqual([]);
     expect(parsePinnedParam(null)).toEqual([]);
+  });
+});
+
+describe("BuilderShell grid ⇄ canvas toggle", () => {
+  it("defaults to the grid, switches to the canvas, and persists the choice", async () => {
+    searchParams = new URLSearchParams("start=blank");
+    const { getByText, getByTestId, queryByTestId, findByText } = renderShell();
+
+    // Grid is the default projection: the add-market bar renders, no canvas.
+    await findByText("Add market to watch");
+    expect(queryByTestId("canvas-stub")).toBeNull();
+
+    getByText("Canvas").click();
+    await waitFor(() => expect(getByTestId("canvas-stub")).toBeInTheDocument());
+    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("canvas");
+
+    getByText("Grid").click();
+    await findByText("Add market to watch");
+    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("grid");
   });
 });

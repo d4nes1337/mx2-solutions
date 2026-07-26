@@ -1,7 +1,7 @@
 /**
  * Canonical strategy templates — the ONE source of truth for template
  * structure, copy, hero prompts and the AI few-shot examples. The web builder
- * adapts specs into editor docs (apps/web/lib/smart-orders/templates.ts) and
+ * adapts specs into editor docs (apps/web/lib/strategies/templates.ts) and
  * the API builds its NL-generation few-shots from `aiFewShot`, so the three
  * surfaces can never drift again (they were hand-synced before round 4).
  *

@@ -291,7 +291,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
   });
 
   // ── GET /api/rules ──────────────────────────────────────────────────────────
-  // Legacy surface lists v1 rules only; v2 strategies live at /api/smart-orders.
+  // Legacy surface lists v1 rules only; v2 strategies live at /api/strategies.
   app.get("/api/rules", guard, async (req) => {
     const user = req.user!;
     const rules = await deps.ruleStore.listByWallet(user.walletAddress);
@@ -324,7 +324,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       reply.code(409);
       return {
         error: "USE_SMART_ORDERS",
-        message: "This strategy uses the v2 engine — evaluate it via /api/smart-orders.",
+        message: "This strategy uses the v2 engine — evaluate it via /api/strategies.",
       };
     }
     const def = rule.definition as RuleDefinition;

@@ -3,8 +3,8 @@
 /** quote_loop: the rewards-farming maker loop, parameterized on the canvas. */
 import Link from "next/link";
 import type { QuoteLoopAction } from "@mx2/rules";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import type { MarketSearchResult } from "@/lib/smart-orders/queries";
+import { useBuilderStore } from "@/lib/strategies/store";
+import type { MarketSearchResult } from "@/lib/strategies/queries";
 import { MarketSearch } from "../MarketSearch";
 import { Field, NumberInput } from "./fields";
 

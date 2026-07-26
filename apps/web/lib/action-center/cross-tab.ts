@@ -62,6 +62,49 @@ export const markHandled = (triggerId: string): void => {
   channel?.postMessage({ type: "handled", triggerId });
 };
 
+// ── Auto-opened trigger ids (per device) ──────────────────────────────────────
+// Mirrors the handled map for the auto-opening ready popup: a trigger id that
+// auto-opened once on this device never steals focus again, across tabs and
+// reloads. Acting on the item (sign/dismiss) is tracked server-side; this only
+// dedupes the interruption.
+
+const AUTO_OPENED_KEY = "arima.action-center.auto-opened.v1";
+
+const readAutoOpened = (): HandledMap => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(AUTO_OPENED_KEY);
+    if (!raw) return {};
+    const map = JSON.parse(raw) as HandledMap;
+    const cutoff = now() - HANDLED_TTL_MS;
+    let changed = false;
+    for (const [id, ts] of Object.entries(map)) {
+      if (ts < cutoff) {
+        delete map[id];
+        changed = true;
+      }
+    }
+    if (changed) window.localStorage.setItem(AUTO_OPENED_KEY, JSON.stringify(map));
+    return map;
+  } catch {
+    return {};
+  }
+};
+
+export const isAutoOpened = (triggerId: string): boolean => triggerId in readAutoOpened();
+
+export const markAutoOpened = (triggerId: string): void => {
+  if (typeof window === "undefined") return;
+  try {
+    const map = readAutoOpened();
+    map[triggerId] = now();
+    window.localStorage.setItem(AUTO_OPENED_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+  channel?.postMessage({ type: "auto-opened", triggerId });
+};
+
 // ── BroadcastChannel: announce handled ids across tabs ────────────────────────
 
 let channel: BroadcastChannel | null = null;

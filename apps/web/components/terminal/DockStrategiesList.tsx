@@ -7,10 +7,10 @@
 import Link from "next/link";
 import { ChevronRight, Star } from "lucide-react";
 import { Badge, Empty, LiveDot } from "@/components/ui";
-import { docFromDefinition } from "@/lib/smart-orders/doc";
-import { strategySentence } from "@/lib/smart-orders/sentence";
-import { userStatus } from "@/lib/smart-orders/status";
-import type { StrategyRow } from "@/lib/smart-orders/queries";
+import { docFromDefinition } from "@/lib/strategies/doc";
+import { strategySentence } from "@/lib/strategies/sentence";
+import { userStatus } from "@/lib/strategies/status";
+import type { StrategyRow } from "@/lib/strategies/queries";
 
 /** Client-side dwell % from the row's persisted window (no per-row polling). */
 const dwellPct = (row: StrategyRow): number | null => {
@@ -27,7 +27,7 @@ export function DockStrategiesList({ rows }: { rows: StrategyRow[] }) {
     return (
       <Empty>
         No live strategies.{" "}
-        <Link href="/smart-orders/new" className="text-accent hover:underline">
+        <Link href="/strategies/new" className="text-accent hover:underline">
           Create one →
         </Link>
       </Empty>
@@ -45,7 +45,7 @@ export function DockStrategiesList({ rows }: { rows: StrategyRow[] }) {
         return (
           <li key={row.id}>
             <Link
-              href={`/smart-orders/${row.id}`}
+              href={`/strategies/${row.id}`}
               className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-surface-2/60"
             >
               <div className="w-32 shrink-0">
@@ -68,7 +68,7 @@ export function DockStrategiesList({ rows }: { rows: StrategyRow[] }) {
                       fill="currentColor"
                     />
                   ) : null}
-                  <span className="truncate">{row.name || def.name || "Smart Order"}</span>
+                  <span className="truncate">{row.name || def.name || "Strategy"}</span>
                 </div>
                 <div className="truncate text-[11px] text-faint">
                   {strategySentence(docFromDefinition(def))}

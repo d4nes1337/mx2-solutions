@@ -18,12 +18,12 @@ import { Badge, Spinner } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { ApiError } from "@/lib/api";
 import { useGenerateStrategy, type AiGenerateResponse } from "@/lib/ai/queries";
-import { conditionLeavesOf, docFromDefinition, docHasContent } from "@/lib/smart-orders/doc";
-import { compileDoc } from "@/lib/smart-orders/compile";
-import { layoutDoc } from "@/lib/smart-orders/layout";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import { useMarketMention } from "@/lib/smart-orders/use-mention";
-import { TEMPLATES } from "@/lib/smart-orders/templates";
+import { conditionLeavesOf, docFromDefinition, docHasContent } from "@/lib/strategies/doc";
+import { compileDoc } from "@/lib/strategies/compile";
+import { layoutDoc } from "@/lib/strategies/layout";
+import { useBuilderStore } from "@/lib/strategies/store";
+import { useMarketMention } from "@/lib/strategies/use-mention";
+import { TEMPLATES } from "@/lib/strategies/templates";
 import { useAutogrowTextarea } from "@/lib/use-autogrow";
 import { MentionDropdown } from "./MentionDropdown";
 
@@ -113,7 +113,17 @@ export function AiPanel({
     if (s.aiHistory.length === 0 && s.dirty && docHasContent(s.doc)) {
       spawnDraft(next, { origin: "ai", carryChat: true });
     } else {
+      // In-place apply: snapshot for one-tap undo and mark the rows the AI
+      // added or changed so the grid can flash them (edits are never silent).
+      const prevById = new Map(
+        conditionLeavesOf(s.doc.expr).map((l) => [l.id, JSON.stringify(l.condition)]),
+      );
+      const changedIds = conditionLeavesOf(next.expr)
+        .filter((l) => prevById.get(l.id) !== JSON.stringify(l.condition))
+        .map((l) => l.id);
+      const hadContent = docHasContent(s.doc);
       reset(next);
+      if (hadContent) useBuilderStore.getState().markAiApplied(s.doc, changedIds);
     }
     revealAll();
     pushMessage({

@@ -14,11 +14,11 @@
 import { useState } from "react";
 import type { ActionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
-import { UNBOUND } from "@/lib/smart-orders/doc";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { UNBOUND } from "@/lib/strategies/doc";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
-import { useStrategies } from "@/lib/smart-orders/queries";
+import { useStrategies } from "@/lib/strategies/queries";
 import { CONDITION_KIND_OPTIONS, defaultCondition } from "./ConditionEditor";
 import { Field } from "./fields";
 import { OrderActionEditor } from "./OrderActionEditor";
@@ -152,12 +152,12 @@ function StopStrategyForm({ targetId }: { targetId: string }) {
   if (!session.data) {
     return (
       <p className="text-[12px] leading-snug text-muted">
-        Sign in to pick which of your Smart Orders this one should stop.
+        Sign in to pick which of your strategies this one should stop.
       </p>
     );
   }
   return (
-    <Field label="Smart Order to stop">
+    <Field label="Strategy to stop">
       <select
         className="nodrag w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-[13px] text-fg outline-none focus:border-brand"
         value={targetId}

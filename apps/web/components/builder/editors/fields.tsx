@@ -7,7 +7,7 @@
 import { useState } from "react";
 import type { MarketRef } from "@mx2/rules";
 import { cn } from "@/components/ui";
-import { isBound, marketLabel, type MarketMeta, type StrategyDoc } from "@/lib/smart-orders/doc";
+import { isBound, marketLabel, type MarketMeta, type StrategyDoc } from "@/lib/strategies/doc";
 import { MarketSearch } from "../MarketSearch";
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {

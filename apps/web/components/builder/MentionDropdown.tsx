@@ -6,7 +6,7 @@
  * Escape dismisses) — this component only renders rows and forwards clicks.
  */
 import { cn } from "@/components/ui";
-import type { MarketSearchResult } from "@/lib/smart-orders/queries";
+import type { MarketSearchResult } from "@/lib/strategies/queries";
 import { cents, usdCompact, toNum } from "@/lib/format";
 
 export function MentionDropdown({

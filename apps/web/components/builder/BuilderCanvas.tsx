@@ -38,12 +38,12 @@ import {
   isTokenReferenced,
   marketLabel,
   type StrategyDoc,
-} from "@/lib/smart-orders/doc";
-import { cents, conditionSummary, formatActual } from "@/lib/smart-orders/summaries";
-import { dropTargetFor, validateConnection } from "@/lib/smart-orders/connection-rules";
-import { useBuilderStore } from "@/lib/smart-orders/store";
-import type { BuilderIssue } from "@/lib/smart-orders/compile";
-import type { DraftEvaluation } from "@/lib/smart-orders/queries";
+} from "@/lib/strategies/doc";
+import { cents, conditionSummary, formatActual } from "@/lib/strategies/summaries";
+import { dropTargetFor, validateConnection } from "@/lib/strategies/connection-rules";
+import { useBuilderStore } from "@/lib/strategies/store";
+import type { BuilderIssue } from "@/lib/strategies/compile";
+import type { DraftEvaluation } from "@/lib/strategies/queries";
 import { NODE_TYPES, type ConditionNodeData } from "./nodes";
 
 /** Flatten the evaluation result tree into per-node lookups. */
@@ -189,7 +189,7 @@ function buildGraph(
     doc.action.kind === "alert"
       ? "Alert me"
       : doc.action.kind === "stop_strategy"
-        ? "Stop another Smart Order"
+        ? "Stop another strategy"
         : doc.action.kind === "quote_loop"
           ? `Quote ${doc.action.sizeShares} both sides at mid ±${doc.action.targetSpreadCents}¢`
           : `${doc.action.side === "BUY" ? "Buy" : "Sell"} ${doc.action.size} ${doc.action.market.outcome} at ${cents(doc.action.price)}`;

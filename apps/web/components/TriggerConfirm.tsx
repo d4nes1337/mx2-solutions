@@ -1,24 +1,30 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useAccount } from "wagmi";
 import {
   useConfirmTrigger,
-  useDismissTrigger,
   useSetPrimaryTradingAccount,
   useSubmitOrder,
+  useTokenPricesHistory,
   useTradeStatus,
   useTradingAccounts,
   useTriggerDetail,
 } from "@/lib/queries";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
+import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { Badge, Button, ErrorNote, Spinner, cn } from "./ui";
 
 /**
- * Manual confirmation of a triggered rule (docs/04 §6). Shows the FRESH preview
- * + whether the condition still holds, then reuses the order sign+submit path.
- * Submission stays fail-closed behind the live-trading flag; a signature is
- * always required — a trigger never auto-submits.
+ * The ready popup — manual confirmation of a triggered strategy (docs/04 §6).
+ * Chart-first and dollars-first: the live target market with the trigger
+ * moment marked answers "why did this fire, is it still good?" at a glance;
+ * the numbers row answers "what exactly am I approving?". All honest-state
+ * logic is preserved: the FRESH server preview decides READY vs PRICE-MOVED
+ * vs STALE, submission stays fail-closed behind the live-trading flag, and a
+ * signature is always required — a trigger never auto-submits. The primary
+ * button is never auto-focused (no accidental Enter-to-sign).
  */
 export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onClose: () => void }) {
   const detail = useTriggerDetail(triggerId);
@@ -28,8 +34,10 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
   const setPrimaryAccount = useSetPrimaryTradingAccount();
   const submit = useSubmitOrder();
   const confirm = useConfirmTrigger();
-  const dismiss = useDismissTrigger();
   const [signError, setSignError] = useState<string | null>(null);
+
+  const d = detail.data;
+  const history = useTokenPricesHistory(d?.preview.tokenId ?? null, "1d");
 
   const activeAccount = tradingAccounts.data?.primaryAccount ?? null;
   const accounts = tradingAccounts.data?.accounts ?? [];
@@ -56,7 +64,6 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
               : tradingEnabled
                 ? "Sign & submit"
                 : "Submit (trading disabled)";
-  const d = detail.data;
 
   const signAndSubmit = async () => {
     setSignError(null);
@@ -107,18 +114,53 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
     }
   };
 
+  // Popup identity: calm, payload-first — never slot-machine urgency.
+  const alreadyDone = d && d.trigger.status !== "awaiting_user";
+  const headline = !d
+    ? "Reviewing…"
+    : alreadyDone
+      ? "Already handled"
+      : d.fresh.isStale
+        ? "Waiting for fresh data"
+        : d.conditionStillHolds
+          ? "Conditions met — order prepared"
+          : "Price moved — review before signing";
+  const headlineTone = !d
+    ? "text-fg"
+    : alreadyDone || d.fresh.isStale
+      ? "text-muted"
+      : d.conditionStillHolds
+        ? "text-pos"
+        : "text-warn";
+
+  const price = d ? Number(d.preview.price) : 0;
+  const size = d ? Number(d.preview.size) : 0;
+  const costUsd = d ? (d.preview.side === "BUY" ? price * size : (1 - price) * size) : 0;
+  // BUY: shares pay $1 each if right, minus what was spent. SELL: keep the premium.
+  const payoutUsd = d ? (d.preview.side === "BUY" ? size - costUsd : price * size) : 0;
+  const askNow = d?.fresh.bestAsk ?? null;
+  const usd2 = (n: number) =>
+    `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const cents = (v: number) => `${Math.round(v * 100)}¢`;
+
+  const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  const triggeredAtMs = d ? new Date(d.trigger.triggeredAt).getTime() : 0;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Review triggered order"
     >
       <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-border bg-surface p-4"
+        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg border border-border bg-surface p-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Confirm triggered order</h2>
-          <button onClick={onClose} className="text-muted hover:text-fg">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className={cn("text-[15px] font-semibold", headlineTone)}>{headline}</h2>
+          <button onClick={onClose} className="text-muted hover:text-fg" aria-label="Not now">
             ✕
           </button>
         </div>
@@ -127,36 +169,62 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
           <Spinner label="Loading fresh preview…" />
         ) : (
           <div className="space-y-3 text-xs">
-            {/* Does the condition still hold right now? */}
-            <div
-              className={cn(
-                "rounded-md border p-3",
-                d.conditionStillHolds
-                  ? "border-pos/40 bg-pos/10 text-pos"
-                  : "border-warn/40 bg-warn/10 text-warn",
-              )}
-            >
-              <div className="font-semibold">
-                {d.conditionStillHolds ? "Condition still holds" : "⚠ Condition no longer holds"}
-              </div>
-              <div className="mt-1">
-                {d.fresh.isStale
-                  ? "Latest data is stale."
-                  : `best bid ${d.fresh.bestBid ?? "—"} · best ask ${d.fresh.bestAsk ?? "—"} · data age ${
-                      d.fresh.dataAgeMs ?? "—"
-                    }ms`}
-              </div>
-              {!d.conditionStillHolds ? (
-                <div className="mt-1">
-                  The edge may have moved since the trigger — review before signing.
-                </div>
+            {/* Dollars-first: what exactly is being approved. */}
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-[15px] font-semibold text-fg">
+                {d.preview.side === "BUY" ? "Buy" : "Sell"} {size.toLocaleString()} shares ·{" "}
+                {usd2(costUsd)}
+              </span>
+              <span className="tabular text-[13px] font-medium text-pos">
+                +{usd2(payoutUsd)} if right
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
+              <span>
+                at {cents(price)} limit · {d.preview.orderType}
+              </span>
+              <span>max spend ${d.preview.maxSpend}</span>
+              {askNow !== null ? (
+                <span>
+                  ask now <span className="tabular text-fg">{cents(Number(askNow))}</span>
+                </span>
+              ) : null}
+              {d.fresh.dataAgeMs !== null && d.fresh.dataAgeMs !== undefined ? (
+                <span>data {Math.round(Number(d.fresh.dataAgeMs) / 1000)}s old</span>
               ) : null}
             </div>
 
-            {/* Fresh order preview */}
+            {/* The live target market with the trigger moment marked. */}
+            {series.length >= 2 ? (
+              <AreaChart
+                data={series}
+                height={180}
+                valueFormat={(v) => cents(v)}
+                baselines={[{ value: price, label: `entry ${cents(price)}` }]}
+                includeInDomain={[price]}
+                markers={[{ t: triggeredAtMs, label: "T" }]}
+              />
+            ) : null}
+
+            {/* Honest freshness line — PRICE_MOVED never dresses up as ready. */}
+            {!alreadyDone && !d.conditionStillHolds ? (
+              <div className="rounded-md border border-warn/40 bg-warn/10 p-2.5 text-warn">
+                {d.fresh.isStale
+                  ? "Latest market data is stale — the server won't call this ready until it's fresh."
+                  : "The edge may have moved since the trigger — review the numbers before signing."}
+              </div>
+            ) : null}
+            {alreadyDone ? (
+              <div className="rounded-md border border-border bg-surface-2 p-2.5 text-muted">
+                This trigger was already {d.trigger.status === "confirmed" ? "signed" : "closed"}
+                {d.trigger.orderIntentId ? " — the order is in your activity." : "."}
+              </div>
+            ) : null}
+
+            {/* Signing context (account select) — unchanged mechanics. */}
             <div className="space-y-1 rounded-md border border-border bg-surface-2 p-3">
               <div className="mb-1 flex items-center justify-between">
-                <span className="font-semibold text-fg">Prepared order (fresh)</span>
+                <span className="font-semibold text-fg">Signing wallet</span>
                 <Badge tone="warn">
                   {activeAccount?.signingMode === "browser"
                     ? "awaiting signature"
@@ -169,7 +237,7 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                   if (e.target.value) setPrimaryAccount.mutate(e.target.value);
                 }}
                 disabled={tradingAccounts.isLoading || setPrimaryAccount.isPending}
-                className="mb-2 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
+                className="mb-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent/50"
               >
                 {accounts.length ? null : <option value="">No trading accounts</option>}
                 {accounts.map((account) => (
@@ -178,29 +246,16 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                   </option>
                 ))}
               </select>
-              <Row k="Side" v={d.preview.side} />
-              <Row k="Price" v={d.preview.price} />
-              <Row k="Size" v={d.preview.size} />
-              <Row k="Max spend" v={`$${d.preview.maxSpend}`} />
-              <Row k="Order type" v={d.preview.orderType} />
-              <Row k="Trading account" v={activeAccount?.label ?? "—"} />
-              <Row k="Funder" v={funder || "—"} mono />
-              {activeAccount?.signingMode === "browser" ? (
-                <Row
-                  k="Connected"
-                  v={
-                    connectedMatchesActive
-                      ? "selected signer"
-                      : address
-                        ? shortAddress(address)
-                        : "not connected"
-                  }
-                />
+              {activeAccount?.signingMode === "browser" && !connectedMatchesActive ? (
+                <p className="text-warn">
+                  Connect {address ? shortAddress(address) : "a wallet"} — the selected signer is
+                  not the connected wallet.
+                </p>
               ) : null}
-              <p className="mt-1 text-warn">{d.warning}</p>
+              {d.warning ? <p className="text-warn">{d.warning}</p> : null}
             </div>
 
-            {/* Evidence (why it triggered) */}
+            {/* De-emphasized: why it fired + advanced details. */}
             <details className="rounded-md border border-border bg-surface-2 p-3">
               <summary className="cursor-pointer font-semibold text-fg">
                 Why did this trigger?
@@ -221,15 +276,14 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                 <Row k="Evaluator" v={d.evidence.evaluatorVersion} mono />
               </div>
             </details>
-
-            {/* Builder attribution is not a primary decision field (brief §7.1) —
-                kept available under advanced execution details. */}
             <details className="rounded-md border border-border bg-surface-2 p-3">
               <summary className="cursor-pointer font-semibold text-fg">
                 Advanced execution details
               </summary>
               <div className="mt-2 space-y-1">
                 <Row k="Builder code" v={d.preview.builderCode ?? "—"} mono />
+                <Row k="Funder" v={funder || "—"} mono />
+                <Row k="Trading account" v={activeAccount?.label ?? "—"} />
               </div>
             </details>
 
@@ -243,43 +297,52 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
             ) : null}
 
             <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                className="flex-1"
-                onClick={() => dismiss.mutate(triggerId, { onSuccess: onClose })}
-                disabled={dismiss.isPending}
-              >
-                Dismiss
+              <Button variant="ghost" className="flex-1" onClick={onClose}>
+                Not now
               </Button>
-              <Button
+              <Link
+                href={`/strategies/${d.trigger.ruleId}/edit`}
                 className="flex-1"
-                onClick={() => void signAndSubmit()}
-                disabled={
-                  !tradingEnabled ||
-                  submit.isPending ||
-                  confirm.isPending ||
-                  !selectedBrowserAccountReady
-                }
-                title={
-                  !activeAccount
-                    ? "Select a trading account first"
-                    : activeAccount.signingMode !== "browser"
-                      ? "Deposit-wallet no-signature trading is not active yet"
-                      : !activeAccount.credentialsReady
-                        ? "Set up trading credentials first"
-                        : !connectedMatchesActive
-                          ? "Connect the selected signer wallet"
-                          : tradingEnabled
-                            ? "Sign and submit"
-                            : "Live trading is disabled on the server"
-                }
+                onClick={onClose}
               >
-                {submitButtonLabel}
-              </Button>
+                <Button variant="outline" className="w-full">
+                  Edit strategy
+                </Button>
+              </Link>
+              {!alreadyDone ? (
+                <Button
+                  className="flex-1"
+                  onClick={() => void signAndSubmit()}
+                  disabled={
+                    !tradingEnabled ||
+                    submit.isPending ||
+                    confirm.isPending ||
+                    !selectedBrowserAccountReady
+                  }
+                  title={
+                    !activeAccount
+                      ? "Select a trading account first"
+                      : activeAccount.signingMode !== "browser"
+                        ? "Deposit-wallet no-signature trading is not active yet"
+                        : !activeAccount.credentialsReady
+                          ? "Set up trading credentials first"
+                          : !connectedMatchesActive
+                            ? "Connect the selected signer wallet"
+                            : tradingEnabled
+                              ? "Sign and submit"
+                              : "Live trading is disabled on the server"
+                  }
+                >
+                  {submitButtonLabel}
+                </Button>
+              ) : null}
             </div>
+            <p className="text-[11px] text-muted">
+              Closing this keeps the item in the bell — nothing is lost, nothing is signed.
+            </p>
             {!tradingEnabled ? (
               <p className="text-muted">
-                Live trading is disabled — submission is blocked fail-closed. You can still dismiss.
+                Live trading is disabled — submission is blocked fail-closed.
               </p>
             ) : null}
           </div>

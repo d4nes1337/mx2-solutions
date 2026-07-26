@@ -44,7 +44,7 @@ function MarketRow({ event, suggestion }: { event: GammaEvent; suggestion: Strat
         </span>
       </div>
       <Link
-        href={`/smart-orders/new?prompt=${encodeURIComponent(suggestion.prompt)}`}
+        href={`/strategies/new?prompt=${encodeURIComponent(suggestion.prompt)}`}
         className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-brand bg-brand px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:border-brand-strong hover:bg-brand-strong"
       >
         <Sparkles size={12} aria-hidden />

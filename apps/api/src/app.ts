@@ -57,7 +57,7 @@ import { registerAdminInvitesRoutes } from "./routes/admin-invites.js";
 import { registerWaitlistRoutes } from "./routes/waitlist.js";
 import { enforceAllowlistOnSessions } from "./auth/allowlist-sessions.js";
 import { registerRulesRoutes } from "./routes/rules.js";
-import { registerSmartOrdersRoutes } from "./routes/smart-orders.js";
+import { registerStrategiesRoutes } from "./routes/strategies.js";
 import { registerShowcasesRoutes } from "./routes/showcases.js";
 import { registerNotificationsRoutes } from "./routes/notifications.js";
 import { registerQuoterRoutes } from "./routes/quoter.js";
@@ -128,7 +128,18 @@ export interface AppDeps {
  * `app.inject(...)` without opening a socket or a real database connection.
  */
 export const buildApp = (deps: AppDeps) => {
-  const app = Fastify({ loggerInstance: deps.logger, disableRequestLogging: false });
+  const app = Fastify({
+    loggerInstance: deps.logger,
+    disableRequestLogging: false,
+    // Smart Orders → Strategies rename: one-release back-compat alias so old
+    // clients/bookmarks keep working. Rewrite happens pre-routing, so guards,
+    // rate limits, and handlers are shared with the canonical paths.
+    // TODO(rename): remove after the release following the Strategies rename.
+    rewriteUrl(req) {
+      const url = req.url ?? "/";
+      return url.replace(/^\/api\/smart-orders(?=\/|\?|$)/, "/api/strategies");
+    },
+  });
   // Private-beta enforcement: every route module below authenticates through
   // this wrapped session store, so a session is only valid while its wallet
   // keeps an active allowlist row. Revoking access cuts live sessions on the
@@ -374,7 +385,7 @@ export const buildApp = (deps: AppDeps) => {
     tradingAccounts,
     accountClobCredentials,
   });
-  registerSmartOrdersRoutes(fastifyApp, {
+  registerStrategiesRoutes(fastifyApp, {
     config: deps.config,
     sessions,
     auditStore: deps.auditStore,

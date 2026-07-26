@@ -58,3 +58,16 @@ describe("notification prefs", () => {
     expect(raw.sound).toBe(false);
   });
 });
+
+describe("cross-tab auto-opened ids", () => {
+  it("marks a trigger auto-opened once per device, independent of handled", async () => {
+    const { isAutoOpened, markAutoOpened, isHandled } = await import("./cross-tab");
+    expect(isAutoOpened("t-9")).toBe(false);
+    markAutoOpened("t-9");
+    expect(isAutoOpened("t-9")).toBe(true);
+    expect(isHandled("t-9")).toBe(false); // separate namespaces
+    expect(
+      JSON.parse(window.localStorage.getItem("arima.action-center.auto-opened.v1") ?? "{}"),
+    ).toHaveProperty("t-9");
+  });
+});

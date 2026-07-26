@@ -31,8 +31,8 @@ export function HomeTour() {
           body: "Every market page shows concrete entry ideas under the chart, plus the order book, latest trades and top holders.",
         },
         {
-          target: "nav-smart-orders",
-          title: "Your Smart Orders",
+          target: "nav-strategies",
+          title: "Your strategies",
           body: "Everything you build lives here — watching live prices, triggered, or done.",
         },
         {

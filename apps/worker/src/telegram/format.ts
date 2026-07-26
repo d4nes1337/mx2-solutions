@@ -112,14 +112,14 @@ export const formatNotification = (
     case "rule_alert": {
       lines.push("🔔 <b>Alert triggered</b>", nameLine(payload), bookLine(payload));
       if (payload.ruleId) {
-        buttons.push([{ text: "Open strategy", url: `${base}/smart-orders/${payload.ruleId}` }]);
+        buttons.push([{ text: "Open strategy", url: `${base}/strategies/${payload.ruleId}` }]);
       }
       break;
     }
     case "order_auto_executed": {
       lines.push("⚡️ <b>Order auto-executed</b>", nameLine(payload), orderLine(payload));
       if (payload.ruleId) {
-        buttons.push([{ text: "Open strategy", url: `${base}/smart-orders/${payload.ruleId}` }]);
+        buttons.push([{ text: "Open strategy", url: `${base}/strategies/${payload.ruleId}` }]);
       }
       break;
     }
@@ -152,7 +152,7 @@ export const formatNotification = (
         "The automatic retry gave up — confirm or dismiss the trigger manually.",
       );
       if (payload.ruleId) {
-        buttons.push([{ text: "Open strategy", url: `${base}/smart-orders/${payload.ruleId}` }]);
+        buttons.push([{ text: "Open strategy", url: `${base}/strategies/${payload.ruleId}` }]);
       }
       break;
     }

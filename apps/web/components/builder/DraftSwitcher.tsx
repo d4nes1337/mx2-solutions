@@ -15,8 +15,8 @@ import {
   duplicateDraftLocal,
   listDraftsLocal,
   type DraftMeta,
-} from "@/lib/smart-orders/drafts";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+} from "@/lib/strategies/drafts";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { useOutsideClick } from "@/lib/use-outside-click";
 
 export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => void }) {

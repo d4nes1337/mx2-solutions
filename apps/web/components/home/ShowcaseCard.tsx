@@ -13,7 +13,7 @@ import { AreaChart } from "@/components/charts/AreaChart";
 import { signedUsd } from "@/lib/format";
 import type { Showcase } from "@/lib/types";
 
-/** A chip in a Smart Order sentence preview (shared hero/home styling). */
+/** A chip in a strategy sentence preview (shared hero/home styling). */
 export function Chip({ children, tone = "neutral" }: { children: React.ReactNode; tone?: string }) {
   const tones: Record<string, string> = {
     neutral: "border-border bg-surface text-fg",
@@ -45,8 +45,8 @@ export function ShowcaseCard({
   // Sample ids don't resolve server-side — deep-link the prompt instead.
   const href =
     sample && showcase.prompt
-      ? `/smart-orders/new?prompt=${encodeURIComponent(showcase.prompt)}`
-      : `/smart-orders/new?showcase=${encodeURIComponent(showcase.id)}`;
+      ? `/strategies/new?prompt=${encodeURIComponent(showcase.prompt)}`
+      : `/strategies/new?showcase=${encodeURIComponent(showcase.id)}`;
 
   return (
     <div className="glass rounded-xl p-5 shadow-elev">

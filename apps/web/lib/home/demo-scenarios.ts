@@ -50,7 +50,7 @@ export interface DemoScenario {
   chart: ChartSpec;
   /** Smart-search query for live market binding at render time. */
   marketQuery: string;
-  /** Ready-to-fire AI prompt for "Build this" → /smart-orders/new?prompt=. */
+  /** Ready-to-fire AI prompt for "Build this" → /strategies/new?prompt=. */
   buildPrompt: string;
 }
 

@@ -71,7 +71,7 @@ vi.mock("@/lib/queries", () => ({
   useTradeStatus: () => ({ data: { tradingEnabled: false } }),
   useCancelOrder: () => ({ mutateAsync: async () => ({}) }),
 }));
-vi.mock("@/lib/smart-orders/queries", () => ({
+vi.mock("@/lib/strategies/queries", () => ({
   useStrategies: () => state.strategies,
 }));
 vi.mock("@/components/PositionsTable", () => ({
@@ -111,7 +111,7 @@ describe("TerminalDock", () => {
     expect(container.textContent).toBe("");
 
     state.session = { data: { allowlisted: true } };
-    state.pathname = "/smart-orders/new";
+    state.pathname = "/strategies/new";
     rerender(
       <QueryClientProvider client={qc}>
         <TerminalDock />
@@ -119,7 +119,7 @@ describe("TerminalDock", () => {
     );
     expect(container.textContent).toBe("");
 
-    state.pathname = "/smart-orders/abc/edit";
+    state.pathname = "/strategies/abc/edit";
     rerender(
       <QueryClientProvider client={qc}>
         <TerminalDock />

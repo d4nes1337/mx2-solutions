@@ -11,7 +11,7 @@ import Link from "next/link";
 import { CalendarDays, ChevronDown } from "lucide-react";
 import { cn } from "@/components/ui";
 import { cents, usdCompact } from "@/lib/format";
-import type { EventSearchResult, MarketSearchResult } from "@/lib/smart-orders/queries";
+import type { EventSearchResult, MarketSearchResult } from "@/lib/strategies/queries";
 
 /** Rows shown before the expander (multi-market events). */
 const COLLAPSED_ROWS = 4;
@@ -25,7 +25,7 @@ const automateHref = (market: MarketSearchResult, label: string): string => {
     params.set("outcome", market.outcomes[0] ?? "YES");
     params.set("title", label.slice(0, 120));
   }
-  return `/smart-orders/new?${params.toString()}`;
+  return `/strategies/new?${params.toString()}`;
 };
 
 function SubMarketRow({ event, market }: { event: EventSearchResult; market: MarketSearchResult }) {

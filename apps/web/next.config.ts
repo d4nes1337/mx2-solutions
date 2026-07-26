@@ -22,7 +22,11 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       // Legacy IA (pre Smart Orders pivot). Remove after beta users migrate.
-      { source: "/rules", destination: "/smart-orders", permanent: false },
+      { source: "/rules", destination: "/strategies", permanent: false },
+      // Smart Orders → Strategies rename. Old Telegram messages and bookmarks
+      // deep-link /smart-orders/*; keep these permanent.
+      { source: "/smart-orders", destination: "/strategies", permanent: true },
+      { source: "/smart-orders/:path*", destination: "/strategies/:path*", permanent: true },
     ];
   },
 };

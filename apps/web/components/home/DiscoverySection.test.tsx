@@ -91,14 +91,14 @@ describe("DiscoverySection", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByText("Proven plays")).toBeInTheDocument();
+    expect(screen.getByText("Plays that would have paid")).toBeInTheDocument();
     expect(screen.getByText("Automate these markets now")).toBeInTheDocument();
 
     // Mid 0.50 → the dip-buy heuristic, with a one-click Build deep link.
     expect(await screen.findByText("Will it happen?")).toBeInTheDocument();
     expect(screen.getByText("Dip-buy below 45¢")).toBeInTheDocument();
     const build = screen.getByText("Build");
-    expect(String(build.closest("a")?.getAttribute("href"))).toContain("/smart-orders/new?prompt=");
+    expect(String(build.closest("a")?.getAttribute("href"))).toContain("/strategies/new?prompt=");
 
     // Left column fell back to sample plays (empty showcases) with charts.
     expect(

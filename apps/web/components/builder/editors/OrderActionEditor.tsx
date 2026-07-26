@@ -10,8 +10,8 @@ import { useState } from "react";
 import Link from "next/link";
 import type { OrderActionV2 } from "@mx2/rules";
 import { Segmented } from "@/components/ui";
-import { loadLimitPrefs } from "@/lib/smart-orders/limit-prefs";
-import { useBuilderStore } from "@/lib/smart-orders/store";
+import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
 import { OrderCostPreview } from "./OrderCostPreview";
 

@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Cockpit entry into the Smart Order builder, pre-bound to this market:
+ * Cockpit entry into the strategy builder, pre-bound to this market:
  * the killer feature is one click away from every market page.
  */
 import Link from "next/link";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui";
-import { TEMPLATES } from "@/lib/smart-orders/templates";
+import { TEMPLATES } from "@/lib/strategies/templates";
 
 export function AutomateCard({
   conditionId,
@@ -21,7 +21,7 @@ export function AutomateCard({
   title: string;
 }) {
   const href = (templateId: string) =>
-    `/smart-orders/new?template=${templateId}` +
+    `/strategies/new?template=${templateId}` +
     (tokenId
       ? `&conditionId=${encodeURIComponent(conditionId)}&tokenId=${encodeURIComponent(tokenId)}` +
         `&outcome=${encodeURIComponent(outcome)}&title=${encodeURIComponent(title.slice(0, 120))}`
@@ -52,7 +52,7 @@ export function AutomateCard({
           href={href(TEMPLATES[0]!.id)}
           className="mt-1 flex items-center justify-center gap-1.5 rounded-lg border border-brand bg-brand px-3 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-brand-strong"
         >
-          <Sparkles size={13} aria-hidden /> Create Smart Order
+          <Sparkles size={13} aria-hidden /> Create strategy
         </Link>
       </div>
     </Card>
