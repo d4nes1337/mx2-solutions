@@ -1,8 +1,37 @@
 # Project Status
 
-_Last updated: 2026-07-23_
+_Last updated: 2026-07-27_
 
 ## Recent
+
+- **Grid/strategies UI redesign — all 7 slices built + verified (owner sketch 2026-07-21; plan
+  `users-ettrq-downloads-note-jul-21-2026-iterative-umbrella`).** The product noun is now
+  **"strategy"**; the canvas is demoted to a power-user projection behind a Grid ⇄ Canvas toggle.
+  (0) Mechanical rename `smart-orders → strategies` across web routes/dirs/API path — permanent
+  `/smart-orders/*` redirects (old Telegram links verified end-to-end) + a one-release
+  `/api/smart-orders/*` alias with regression tests; DB and `/m/t/*` sign links untouched.
+  (1) Strategy detail renders as an IF→THEN grid: per-market WATCH cards (chart + threshold
+  lines + live "met / not yet / no data" rows), IF spine (root ALL/ANY + hold window), ACT card
+  (dollars-first order summary incl. taker fees). The pure `docToGrid` projection classifies every
+  expression node exactly once; NOT/nested/mixed-market logic renders read-only ("complex") —
+  never silently flattened. (2) The grid is the DEFAULT builder view (persisted toggle;
+  `NEXT_PUBLIC_GRID_BUILDER=0` restores canvas default): rows open the same store-bound editors in
+  sheets, per-card ALL/ANY writes real two-level groups (`setCardOp`), docked AI composer with
+  full-chat drawer, AI-diff row flash + one-tap "Undo AI edit". (3) Arm-time activation sheet:
+  execution decision (Ask-me-to-sign default / Auto with inline spend caps + honest readiness
+  blockers) + notifications + recurrence/expiry at the arm moment; create/supersede path
+  unchanged. (4) Ready popup redesigned chart-first/dollars-first with calm copy, AUTO-OPENS once
+  per trigger per device (cross-tab deduped, typing/dialog-suppressed → persistent ReadyCorner
+  stack replaces the 9-s toast); signing mechanics byte-for-byte preserved; non-destructive
+  "Not now". (5) Homepage H2: centered identity-first hero ("If this, then trade." /
+  "the conditional strategies engine for Polymarket"), clean composer (capability chips,
+  Polymarket-URL paste → pin), auto-typing demo relocated BELOW the input into the live preview;
+  "Proven plays" reframed honestly. (6) Copy sweep to "strategy" everywhere user-facing + CI grep
+  guard. Deferred with rationale: auto-executed receipts feed (unattended execution is flag-OFF in
+  beta — ships with the live-execution gate). **Verification:** 772 root + 335 web tests green
+  (52 files; new: grid-projection matrix, setCardOp, ArmSheet, TriggerConfirm variants,
+  ReadyCorner, Hero rewrite), typecheck clean, redirects + builder + homepage verified live in the
+  dev preview.
 
 - **Private-beta release — Slice 5: activation-path UX fixes (built + verified; D-049, ADR-0026,
   no migration).** Comprehension/correctness fixes on the first-time path (brief §8; not a

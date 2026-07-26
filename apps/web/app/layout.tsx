@@ -6,7 +6,7 @@ import { AppChrome } from "@/components/AppChrome";
 import { THEME_INIT_SCRIPT } from "@/lib/theme-constants";
 
 export const metadata: Metadata = {
-  title: "arima — smart orders for Polymarket",
+  title: "arima — conditional strategies for Polymarket",
   description:
     "arima · build smart Polymarket orders visually. No code. No spreadsheets. Just logic.",
 };

@@ -189,7 +189,7 @@ function buildGraph(
     doc.action.kind === "alert"
       ? "Alert me"
       : doc.action.kind === "stop_strategy"
-        ? "Stop another Smart Order"
+        ? "Stop another strategy"
         : doc.action.kind === "quote_loop"
           ? `Quote ${doc.action.sizeShares} both sides at mid ±${doc.action.targetSpreadCents}¢`
           : `${doc.action.side === "BUY" ? "Buy" : "Sell"} ${doc.action.size} ${doc.action.market.outcome} at ${cents(doc.action.price)}`;

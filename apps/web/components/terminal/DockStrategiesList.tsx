@@ -68,7 +68,7 @@ export function DockStrategiesList({ rows }: { rows: StrategyRow[] }) {
                       fill="currentColor"
                     />
                   ) : null}
-                  <span className="truncate">{row.name || def.name || "Smart Order"}</span>
+                  <span className="truncate">{row.name || def.name || "Strategy"}</span>
                 </div>
                 <div className="truncate text-[11px] text-faint">
                   {strategySentence(docFromDefinition(def))}

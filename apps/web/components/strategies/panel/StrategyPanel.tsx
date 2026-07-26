@@ -223,7 +223,7 @@ export function StrategyPanel({
               <Star size={14} aria-hidden fill={starred ? "currentColor" : "none"} />
             </button>
             <h2 className="truncate text-[15px] font-semibold text-fg">
-              {row.name || def.name || "Smart Order"}
+              {row.name || def.name || "Strategy"}
             </h2>
             {status.live ? (
               <LiveDot

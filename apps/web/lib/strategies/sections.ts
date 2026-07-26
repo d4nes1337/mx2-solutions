@@ -1,5 +1,5 @@
 /**
- * Actionability sections for the Smart Orders dashboard. Replaces the raw
+ * Actionability sections for the Strategies dashboard. Replaces the raw
  * status grouping with the question the page must answer: "where is my money
  * about to move, and what do I do right now?" — signable money first, regret
  * second, anticipation ranked by proximity, the far tail calm, terminals

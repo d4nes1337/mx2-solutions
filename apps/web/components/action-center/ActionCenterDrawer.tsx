@@ -206,7 +206,7 @@ export function ActionCenterDrawer({
             <div className="flex-1 space-y-2 overflow-y-auto p-3">
               {items.length === 0 ? (
                 <p className="px-1 py-8 text-center text-[13px] text-muted">
-                  Nothing needs your attention right now. Armed Smart Orders will appear here the
+                  Nothing needs your attention right now. Armed strategies will appear here the
                   moment they&apos;re ready to sign.
                 </p>
               ) : (

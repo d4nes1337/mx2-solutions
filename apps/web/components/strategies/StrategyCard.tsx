@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * One Smart Order on the dashboard — chart-first: a mini price chart with the
+ * One strategy on the dashboard — chart-first: a mini price chart with the
  * trigger line drawn on it, a per-section hero metric (edge / regret / dwell /
  * distance), status, plain-English summary, quick actions. Works for v1 rules
  * too — they arrive normalized as definitionV2. Signing NEVER happens here:
@@ -406,14 +406,14 @@ export function StrategyCard({
                 onClick={() => onOpen(row.id)}
                 className="text-left text-[14px] font-semibold text-fg transition-colors hover:text-accent"
               >
-                {row.name || def.name || "Smart Order"}
+                {row.name || def.name || "Strategy"}
               </button>
             ) : (
               <Link
                 href={`/strategies/${row.id}`}
                 className="text-[14px] font-semibold text-fg transition-colors hover:text-accent"
               >
-                {row.name || def.name || "Smart Order"}
+                {row.name || def.name || "Strategy"}
               </Link>
             )}
             {status.live ? (

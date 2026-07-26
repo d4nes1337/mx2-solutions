@@ -17,7 +17,7 @@ const POINTS: { icon: typeof Zap; text: string }[] = [
     icon: Coins,
     text: "A separate, ring-fenced balance you top up with only what you want to trade.",
   },
-  { icon: Zap, text: "Lets Smart Orders execute automatically, without interrupting you to sign." },
+  { icon: Zap, text: "Lets strategies execute automatically, without interrupting you to sign." },
   {
     icon: SlidersHorizontal,
     text: "You set hard per-order, daily, and total spend limits before anything runs.",

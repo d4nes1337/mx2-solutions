@@ -15,7 +15,7 @@ export interface BuilderIssue {
 /** Strip editor metadata; what remains is exactly the API's create payload. */
 export const compileDoc = (doc: StrategyDoc): StrategyDefinition => ({
   version: 2,
-  name: doc.name.trim() || "Untitled Smart Order",
+  name: doc.name.trim() || "Untitled strategy",
   templateId: doc.templateId,
   expr: doc.expr,
   holdsForMs: doc.holdsForMs,
@@ -30,8 +30,8 @@ export const compileDoc = (doc: StrategyDoc): StrategyDefinition => ({
 const FRIENDLY: Record<string, string> = {
   EXPR_EMPTY: "Add at least one condition to watch.",
   EXPR_TOO_DEEP: "Logic is nested too deeply — flatten a group.",
-  EXPR_TOO_MANY_CONDITIONS: "Too many conditions — split this into two Smart Orders.",
-  EXPR_TOO_MANY_MARKETS: "A Smart Order can watch at most 4 markets.",
+  EXPR_TOO_MANY_CONDITIONS: "Too many conditions — split this into two strategies.",
+  EXPR_TOO_MANY_MARKETS: "A strategy can watch at most 4 markets.",
   AUTO_REQUIRES_LIMITS: "Set spending limits before arming auto mode.",
   LIMITS_INCONSISTENT: "Spending limits must satisfy per-order ≤ daily ≤ total.",
   ORDER_EXCEEDS_PER_ORDER_CAP: "The order costs more than your per-order limit.",

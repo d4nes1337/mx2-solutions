@@ -13,7 +13,7 @@ import { AreaChart } from "@/components/charts/AreaChart";
 import { signedUsd } from "@/lib/format";
 import type { Showcase } from "@/lib/types";
 
-/** A chip in a Smart Order sentence preview (shared hero/home styling). */
+/** A chip in a strategy sentence preview (shared hero/home styling). */
 export function Chip({ children, tone = "neutral" }: { children: React.ReactNode; tone?: string }) {
   const tones: Record<string, string> = {
     neutral: "border-border bg-surface text-fg",

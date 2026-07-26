@@ -130,7 +130,7 @@ export const describeStrategy = (doc: StrategyDoc): SentenceSegment[] => {
       break;
     }
     case "stop_strategy":
-      out.push({ text: "stop another Smart Order", nodeId: "action", tone: "warn" });
+      out.push({ text: "stop another strategy", nodeId: "action", tone: "warn" });
       break;
     case "quote_loop": {
       const q = doc.action;

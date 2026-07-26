@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Filter bar for the Smart Orders dashboard: text search, section chips,
+ * Filter bar for the Strategies dashboard: text search, section chips,
  * a Starred pin filter, tag chips (union of tags across loaded strategies),
  * and an Archived toggle. Pure controlled component — filtering happens in
  * the page.

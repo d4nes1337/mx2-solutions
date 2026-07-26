@@ -101,9 +101,9 @@ export function StrategyDetailShell() {
   if (strategy.error || !strategy.data) {
     return (
       <Empty>
-        Smart Order not found.{" "}
+        Strategy not found.{" "}
         <Link href="/strategies" className="text-accent underline">
-          Back to Smart Orders
+          Back to strategies
         </Link>
       </Empty>
     );
@@ -126,7 +126,7 @@ export function StrategyDetailShell() {
         href="/strategies"
         className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-fg"
       >
-        <ArrowLeft size={13} aria-hidden /> Smart Orders
+        <ArrowLeft size={13} aria-hidden /> Strategies
       </Link>
 
       {/* ── Status hero ── */}
@@ -136,7 +136,7 @@ export function StrategyDetailShell() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-[17px] font-semibold text-fg">
-                  {row.name || def.name || "Smart Order"}
+                  {row.name || def.name || "Strategy"}
                 </h1>
                 {status.live ? (
                   <LiveDot

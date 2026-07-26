@@ -28,7 +28,7 @@ export const requestDesktopPermission = async (): Promise<
 };
 
 const PRIVACY_SAFE_BODY =
-  "Your Smart Order conditions were met. Review the current market before signing.";
+  "Your Strategy conditions were met. Review the current market before signing.";
 
 /**
  * Shows one OS notification for a newly-ready trigger. No-op unless the tab is

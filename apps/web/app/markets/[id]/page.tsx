@@ -196,7 +196,7 @@ export default function MarketCockpitPage() {
           ) : null}
         </div>
 
-        {/* Right: trade + Smart Order entry (advanced keeps the raw rule form) */}
+        {/* Right: trade + strategy entry (advanced keeps the raw rule form) */}
         <div className="space-y-4">
           <Card glow className="h-fit">
             <CardHeader>Trade</CardHeader>

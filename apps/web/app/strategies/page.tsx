@@ -125,7 +125,7 @@ function SmartOrdersDashboard() {
       <div className="min-w-0 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-fg">Smart Orders</h1>
+            <h1 className="text-xl font-semibold tracking-tight text-fg">Strategies</h1>
             <p className="mt-1 text-sm text-muted">
               Strategies that watch the market for you — and alert, prepare, or execute when your
               conditions hold.
@@ -136,7 +136,7 @@ function SmartOrdersDashboard() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-brand-strong hover:bg-brand-strong"
           >
             <Sparkles size={14} aria-hidden />
-            New Smart Order
+            New strategy
           </Link>
         </div>
 
@@ -166,10 +166,10 @@ function SmartOrdersDashboard() {
         ) : null}
 
         {flags.data && !flags.data.conditionalRules ? (
-          <Empty>Smart Orders are disabled on this server.</Empty>
+          <Empty>Strategies are disabled on this server.</Empty>
         ) : !signedIn ? (
           <Empty>
-            Sign in to see your Smart Orders — or{" "}
+            Sign in to see your strategies — or{" "}
             <Link href="/strategies/new" className="text-accent hover:underline">
               try the builder
             </Link>{" "}
@@ -185,7 +185,7 @@ function SmartOrdersDashboard() {
           <ErrorNote message={(strategies.error as Error).message} />
         ) : allRows.length === 0 ? (
           <Empty>
-            No Smart Orders yet.{" "}
+            No strategies yet.{" "}
             <Link href="/strategies/new" className="text-accent hover:underline">
               Create your first one
             </Link>{" "}

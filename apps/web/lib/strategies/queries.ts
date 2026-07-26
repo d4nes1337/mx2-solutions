@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Smart Orders data layer (v2 API). Kept beside the builder libs so the whole
+ * Strategies data layer (v2 API). Kept beside the builder libs so the whole
  * feature reads as one module; reuses the shared api wrapper + POLL cadences.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

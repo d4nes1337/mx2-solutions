@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The Smart Order builder: template-first entry, node canvas, plain-English
+ * The strategy builder: template-first entry, node canvas, plain-English
  * sentence, live "Would trigger now?" state, and gated save/arm. Public
  * playground — everything works signed-out except saving.
  */
@@ -535,7 +535,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         <input
           value={doc.name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Name your Smart Order…"
+          placeholder="Name your strategy…"
           className="min-w-[220px] flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-semibold tracking-tight text-fg outline-none transition-colors placeholder:text-faint hover:border-border focus:border-brand"
           aria-label="Strategy name"
         />

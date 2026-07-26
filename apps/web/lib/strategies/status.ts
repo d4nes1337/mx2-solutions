@@ -1,5 +1,5 @@
 /**
- * Internal state machine → user-facing Smart Order status. One mapping shared
+ * Internal state machine → user-facing strategy status. One mapping shared
  * by the monitor page, builder and cards; internal names never reach the UI.
  */
 export interface UserStatus {

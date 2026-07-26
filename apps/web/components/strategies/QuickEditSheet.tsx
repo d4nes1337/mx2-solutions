@@ -105,7 +105,7 @@ export function QuickEditSheet({
       </button>
 
       <h2 className="mb-1 text-[15px] font-semibold text-fg">
-        Edit — {row.name || doc.name || "Smart Order"}
+        Edit — {row.name || doc.name || "Strategy"}
       </h2>
       {ready ? (
         <>

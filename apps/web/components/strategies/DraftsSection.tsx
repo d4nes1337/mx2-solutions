@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Local drafts on the Smart Orders tab: in-progress canvases (autosaved by the
+ * Local drafts on the Strategies tab: in-progress canvases (autosaved by the
  * builder) listed above the live strategy groups, so unfinished work is one
  * tap away. Drafts live in this browser's localStorage until armed.
  */
