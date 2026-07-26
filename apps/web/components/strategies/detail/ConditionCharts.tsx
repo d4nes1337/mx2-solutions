@@ -19,7 +19,9 @@ import type { StrategyRow, StrategyTimeline } from "@/lib/strategies/queries";
 import type { ConditionV2 } from "@mx2/rules";
 
 /** Engine events → chart markers so the price line explains itself. */
-const timelineMarkers = (timeline: StrategyTimeline | undefined): { t: number; label?: string }[] =>
+export const timelineMarkers = (
+  timeline: StrategyTimeline | undefined,
+): { t: number; label?: string }[] =>
   (timeline?.events ?? [])
     .map((e) => {
       const t = new Date(e.at).getTime();

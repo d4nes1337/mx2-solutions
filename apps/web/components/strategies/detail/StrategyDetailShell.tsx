@@ -10,21 +10,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Pencil } from "lucide-react";
-import {
-  Badge,
-  Button,
-  Card,
-  CardHeader,
-  Empty,
-  LiveDot,
-  Segmented,
-  Skeleton,
-  cn,
-} from "@/components/ui";
-import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
-import { useTokenPricesHistory } from "@/lib/queries";
-import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/strategies/doc";
-import { conditionSummary, formatActual, cents } from "@/lib/strategies/summaries";
+import { Badge, Button, Card, Empty, LiveDot, Skeleton, cn } from "@/components/ui";
+import { docFromDefinition } from "@/lib/strategies/doc";
 import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
 import { userStatus } from "@/lib/strategies/status";
 import {
@@ -42,7 +29,7 @@ import { LinkedOrders } from "./LinkedOrders";
 import { QuickEditSheet } from "../QuickEditSheet";
 
 import { useNow } from "@/lib/strategies/use-now";
-import { ConditionCharts } from "./ConditionCharts";
+import { StrategyGrid } from "../grid/StrategyGrid";
 
 function DwellProgress({ evaluation, now }: { evaluation: StrategyEvaluation; now: number }) {
   const holding = evaluation.trueSince !== null && evaluation.holdsForMs > 0;
@@ -88,69 +75,6 @@ function DwellProgress({ evaluation, now }: { evaluation: StrategyEvaluation; no
         />
       </div>
     </div>
-  );
-}
-
-function ConditionsPanel({
-  row,
-  evaluation,
-}: {
-  row: StrategyRow;
-  evaluation?: StrategyEvaluation;
-}) {
-  const doc = docFromDefinition(row.definitionV2);
-  const results = new Map<string, { satisfied: boolean; stale: boolean; actual: number | null }>();
-  const walk = (node: NonNullable<StrategyEvaluation["root"]>): void => {
-    if (node.type === "condition") {
-      results.set(node.id, {
-        satisfied: node.satisfied,
-        stale: node.result.stale,
-        actual: node.result.actual,
-      });
-    } else {
-      node.children.forEach(walk);
-    }
-  };
-  if (evaluation?.root) walk(evaluation.root);
-
-  const leaves = conditionLeavesOf(doc.expr);
-
-  return (
-    <Card>
-      <CardHeader>Conditions</CardHeader>
-      <div className="divide-y divide-border">
-        {leaves.map(({ id, condition: c }) => {
-          const r = results.get(id);
-          const { summary, detail } = conditionSummary(doc, c);
-          const actual = r ? formatActual(c.kind, r.actual) : null;
-          return (
-            <div key={id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <div className="min-w-0">
-                <div className="truncate text-[13px] text-fg">{summary}</div>
-                {detail ? <div className="truncate text-[11px] text-faint">{detail}</div> : null}
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {actual !== null ? (
-                  <span className="tabular text-[12px] text-muted">now {actual}</span>
-                ) : null}
-                {!r ? (
-                  <Badge tone="neutral">—</Badge>
-                ) : r.stale ? (
-                  <Badge tone="warn">no data</Badge>
-                ) : r.satisfied ? (
-                  <Badge tone="pos">met</Badge>
-                ) : (
-                  <Badge tone="neutral">not yet</Badge>
-                )}
-              </div>
-            </div>
-          );
-        })}
-        {leaves.length === 0 ? (
-          <div className="px-4 py-3 text-[12px] text-muted">No conditions.</div>
-        ) : null}
-      </div>
-    </Card>
   );
 }
 
@@ -313,16 +237,15 @@ export function StrategyDetailShell() {
         </div>
       </Card>
 
-      {/* ── Body: live state left, activity right ── */}
+      {/* ── Body: the strategy as a grid — WATCH → IF → ACT ── */}
+      <StrategyGrid
+        doc={doc}
+        {...(evaluation.data ? { evaluation: evaluation.data } : {})}
+        timeline={timeline.data}
+      />
+
       <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]")}>
-        <div className="space-y-4">
-          <ConditionsPanel
-            row={row}
-            {...(evaluation.data ? { evaluation: evaluation.data } : {})}
-          />
-          <ConditionCharts row={row} timeline={timeline.data} />
-          <LinkedOrders orders={timeline.data?.orders ?? []} doc={doc} />
-        </div>
+        <LinkedOrders orders={timeline.data?.orders ?? []} doc={doc} />
         <ActivityTimeline
           timeline={timeline.data}
           loading={timeline.isLoading}
