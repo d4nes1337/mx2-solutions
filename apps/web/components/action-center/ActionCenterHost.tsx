@@ -5,38 +5,54 @@ import { useSession } from "@/lib/auth";
 import { useActionCenter } from "@/lib/queries";
 import { useActionCenterUi } from "@/lib/action-center-store";
 import { readNotificationPrefs } from "@/lib/notification-prefs";
-import { isHandled, markHandled, startLeaderElection } from "@/lib/action-center/cross-tab";
+import {
+  isAutoOpened,
+  isHandled,
+  markAutoOpened,
+  markHandled,
+  startLeaderElection,
+} from "@/lib/action-center/cross-tab";
 import { setTabBadge, restoreTab } from "@/lib/action-center/tab-badge";
 import { playAlertSound } from "@/lib/action-center/sound";
 import { showDesktopNotification } from "@/lib/action-center/desktop";
 import type { ActionCenterItem } from "@/lib/types";
 import { TriggerConfirm } from "@/components/TriggerConfirm";
 import { ActionCenterDrawer } from "./ActionCenterDrawer";
-import { ActionCenterToast, type ToastState } from "./ActionCenterToast";
+import { ReadyCorner } from "./ReadyCorner";
 
 const cents = (v: string) => `${Math.round(Number(v) * 100)}c`;
 
-/** One-line trade summary for a single ready item (toast/desktop body). */
+/** One-line trade summary for a single ready item (desktop-notification body). */
 const detailLine = (item: ActionCenterItem): string =>
   `${item.action.side === "BUY" ? "Buy" : "Sell"} ${item.action.sizeShares} ${item.market.outcome} at up to ${cents(item.action.price)} · ${item.ruleName}`;
+
+/** True while an interruption would fight the user's current context. */
+const interactionSuppressed = (): boolean => {
+  const el = document.activeElement as HTMLElement | null;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+    return true;
+  }
+  return document.querySelector('[role="dialog"]') !== null;
+};
 
 /**
  * The single global Action Center orchestrator (brief §6.2). Mounted once in
  * AppChrome (never on /m/* restricted routes). Owns the one wallet-scoped
  * actionable-trigger query and drives every side effect: tab title/favicon
- * badge (all tabs), one toast, one sound + one desktop notification (leader
- * tab only), and opening the existing TriggerConfirm fresh-review + signing
- * modal. It never submits anything itself.
+ * badge (all tabs), the persistent ready-corner stack, one sound + one desktop
+ * notification (leader tab only), and the ready popup — which AUTO-OPENS once
+ * per newly-ready trigger (per device, deduped across tabs) unless the user is
+ * typing or another dialog is up, in which case the corner card carries it.
+ * It never submits anything itself.
  */
 export function ActionCenterHost() {
   const session = useSession();
   const signedIn = Boolean(session.data);
   const query = useActionCenter(signedIn);
-  const { reviewTriggerId, openReview, closeReview } = useActionCenterUi();
+  const { open, openDrawer, reviewTriggerId, openReview, closeReview } = useActionCenterUi();
 
-  const [toast, setToast] = useState<ToastState | null>(null);
-  // Per-tab, in-session memory so a poll/rerender never re-toasts the same id.
-  const toastedRef = useRef<Set<string>>(new Set());
+  // Per-tab "Not now" snoozes: hidden from this tab's corner, still in the bell.
+  const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const leaderRef = useRef<{ isLeader: () => boolean; stop: () => void } | null>(null);
 
   // Leader election lives for the tab's lifetime.
@@ -49,8 +65,7 @@ export function ActionCenterHost() {
   useEffect(() => {
     if (!signedIn) {
       restoreTab();
-      setToast(null);
-      toastedRef.current.clear();
+      setSnoozed(new Set());
     }
   }, [signedIn]);
 
@@ -64,29 +79,21 @@ export function ActionCenterHost() {
 
     const ready = data.items.filter((i) => i.state === "READY_TO_SIGN");
 
-    // Toast: per-tab, once per newly-ready trigger. Alerts require the explicit
-    // browser-alerts opt-in; without it, the bell + badge still update silently.
-    if (prefs.browserAlerts) {
-      const fresh = ready.filter((i) => !toastedRef.current.has(i.triggerId));
-      if (fresh.length > 0) {
-        fresh.forEach((i) => toastedRef.current.add(i.triggerId));
-        const primary = fresh[0]!;
-        setToast(
-          fresh.length === 1
-            ? {
-                triggerId: primary.triggerId,
-                title: "Ready to sign",
-                body: detailLine(primary),
-              }
-            : {
-                triggerId: primary.triggerId,
-                title: "Ready to sign",
-                body: `${fresh.length} Smart Orders are ready to sign`,
-              },
-        );
+    // Auto-open the ready popup: the product's money moment. Once per trigger
+    // per device (cross-tab deduped), only in a focused tab, never while the
+    // user is typing or another dialog is open — those fall through to the
+    // persistent corner card instead. In-app UI: independent of browserAlerts.
+    if (prefs.autoOpenReady && reviewTriggerId === null && !open) {
+      const candidate = ready.find((i) => !isAutoOpened(i.triggerId) && !snoozed.has(i.triggerId));
+      if (candidate && document.hasFocus() && !interactionSuppressed()) {
+        markAutoOpened(candidate.triggerId);
+        openReview(candidate.triggerId);
       }
+    }
 
-      // Sound + desktop: LEADER tab only, once per trigger across tabs/reloads.
+    // Sound + desktop: LEADER tab only, once per trigger across tabs/reloads,
+    // and only after the explicit browser-alerts opt-in.
+    if (prefs.browserAlerts) {
       const isLeader = leaderRef.current?.isLeader() ?? false;
       if (isLeader) {
         const unhandled = ready.filter((i) => !isHandled(i.triggerId));
@@ -104,20 +111,31 @@ export function ActionCenterHost() {
         }
       }
     }
-  }, [signedIn, data, openReview]);
+  }, [signedIn, data, openReview, reviewTriggerId, open, snoozed]);
 
   if (!signedIn) return null;
 
+  const readyItems = (data?.items ?? []).filter(
+    (i) => i.state === "READY_TO_SIGN" && !snoozed.has(i.triggerId),
+  );
+
   return (
     <>
-      <ActionCenterToast
-        toast={toast}
-        onReview={(id) => {
-          setToast(null);
-          openReview(id);
-        }}
-        onDismiss={() => setToast(null)}
-      />
+      {/* Corner cards hide while the popup or drawer already has the user. */}
+      {reviewTriggerId === null && !open ? (
+        <ReadyCorner
+          items={readyItems}
+          onReview={(id) => {
+            markAutoOpened(id);
+            openReview(id);
+          }}
+          onLater={(id) => {
+            markAutoOpened(id); // an explicit "not now" must never re-interrupt
+            setSnoozed((s) => new Set(s).add(id));
+          }}
+          onOpenDrawer={openDrawer}
+        />
+      ) : null}
       <ActionCenterDrawer items={data?.items ?? []} onReview={(id) => openReview(id)} />
       {reviewTriggerId ? (
         <TriggerConfirm triggerId={reviewTriggerId} onClose={closeReview} />

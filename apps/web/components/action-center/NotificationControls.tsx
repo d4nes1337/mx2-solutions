@@ -85,6 +85,14 @@ export function NotificationControls() {
           />
           Show trade details in desktop notifications
         </label>
+        <label className="col-span-2 flex items-center gap-1.5 text-muted">
+          <input
+            type="checkbox"
+            checked={prefs.autoOpenReady}
+            onChange={(e) => prefs.set({ autoOpenReady: e.target.checked })}
+          />
+          Open the sign popup automatically when a strategy fires
+        </label>
       </div>
       <p className="text-[11px] text-muted">
         <Link href="/wallet" className="text-accent hover:underline">

@@ -20,6 +20,8 @@ export interface NotificationPrefs {
   desktop: boolean;
   /** Include trade details in the OS notification body (default OFF, privacy). */
   showDetails: boolean;
+  /** Auto-open the ready-to-sign popup when a strategy fires (in-app UI). */
+  autoOpenReady: boolean;
 }
 
 const KEY = "arima.action-center.prefs.v1";
@@ -30,6 +32,7 @@ const DEFAULTS: NotificationPrefs = {
   volume: 0.4,
   desktop: true,
   showDetails: false,
+  autoOpenReady: true,
 };
 
 const load = (): NotificationPrefs => {
@@ -68,6 +71,7 @@ export const useNotificationPrefs = create<NotificationPrefsStore>((set, get) =>
 
 /** Non-reactive snapshot for imperative host code (sound/desktop dispatch). */
 export const readNotificationPrefs = (): NotificationPrefs => {
-  const { browserAlerts, sound, volume, desktop, showDetails } = useNotificationPrefs.getState();
-  return { browserAlerts, sound, volume, desktop, showDetails };
+  const { browserAlerts, sound, volume, desktop, showDetails, autoOpenReady } =
+    useNotificationPrefs.getState();
+  return { browserAlerts, sound, volume, desktop, showDetails, autoOpenReady };
 };
