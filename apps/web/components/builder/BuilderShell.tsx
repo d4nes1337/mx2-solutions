@@ -6,15 +6,12 @@
  * playground — everything works signed-out except saving.
  */
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import { Badge, Button, Segmented, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
 import { InviteCodeForm, isAccessError } from "@/components/InviteCodeForm";
-import { useActionCenterUi } from "@/lib/action-center-store";
-import { useNotificationPrefs } from "@/lib/notification-prefs";
 import { ApiError } from "@/lib/api";
 import {
   useFeatureFlags,
@@ -50,6 +47,7 @@ import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
 import { StrategyGrid } from "@/components/strategies/grid/StrategyGrid";
 import { GridComposer } from "@/components/strategies/grid/GridComposer";
+import { ArmSheet } from "@/components/strategies/ArmSheet";
 import { AddPalette } from "./AddPalette";
 import { CanvasToolbar } from "./CanvasToolbar";
 import { DraftSwitcher } from "./DraftSwitcher";
@@ -437,6 +435,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // The consumed draft is tombstoned (linked to the created strategy) and the
   // canvas moves to a fresh blank draft, so returning to the builder doesn't
   // resurrect already-armed work.
+  // Arm flow: the save button opens the activation sheet (execution mode +
+  // notifications + recurrence live there); the sheet's Arm button runs this
+  // mutation — the create/supersede path itself is unchanged.
+  const [armOpen, setArmOpen] = useState(false);
   const save = () => {
     create.mutate(
       { ...compileDoc(doc), ...(editOf ? { supersedes: editOf } : {}) },
@@ -452,15 +454,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
             markDraftConsumedLocal(consumedId, created.id);
             void markDraftConsumedOnServer(consumedId, created.id);
           }
+          setArmOpen(false);
           router.push("/strategies");
-          // Prime browser alerts right after arming (owner refinement): so the
-          // user is asked to turn them on the first time it matters. Opens the
-          // Action Center, whose footer offers "Enable browser alerts" (the
-          // permission gesture) plus an optional "connect Telegram" link. Only
-          // nudges once — after that browserAlerts is set and it stays quiet.
-          if (!useNotificationPrefs.getState().browserAlerts) {
-            useActionCenterUi.getState().openDrawer();
-          }
         },
       },
     );
@@ -483,34 +478,13 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       {signedIn ? (
         allowlisted ? (
           <>
-            <Button className="w-full" disabled={!canSave} onClick={save}>
+            <Button className="w-full" disabled={!canSave} onClick={() => setArmOpen(true)}>
               <Sparkles size={14} aria-hidden />
-              {create.isPending ? "Saving…" : "Save & start watching"}
+              {create.isPending ? "Arming…" : "Arm — start watching"}
             </Button>
-            {doc.action.kind === "order" && doc.action.execution === "auto" ? (
-              (autoReadiness.data?.blockers.length ?? 0) > 0 ? (
-                <div className="rounded-md border border-warn/30 bg-warn/10 p-2 text-[11px] leading-snug text-warn">
-                  <p className="font-medium">
-                    Auto mode can&apos;t execute unattended yet — triggers will wait for your
-                    confirmation:
-                  </p>
-                  <ul className="mt-1 list-disc pl-4">
-                    {autoReadiness.data!.blockers.slice(0, 3).map((b) => (
-                      <li key={b.code}>{b.detail}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <p className="text-[11px] leading-snug text-muted">
-                  Auto mode places orders from your{" "}
-                  <Link href="/wallet" className="text-accent hover:underline">
-                    Arima trading wallet
-                  </Link>{" "}
-                  within the limits above. If the wallet isn&apos;t ready, triggers wait for your
-                  signature instead.
-                </p>
-              )
-            ) : null}
+            <p className="text-[11px] leading-snug text-muted">
+              Arming just starts watching — nothing is bought until you approve it.
+            </p>
             {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
           </>
         ) : (
@@ -678,6 +652,15 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           />
         </div>
       )}
+
+      <ArmSheet
+        open={armOpen}
+        onClose={() => setArmOpen(false)}
+        onArm={save}
+        arming={create.isPending}
+        saveError={saveError}
+        autoReadiness={autoReadiness.data}
+      />
     </div>
   );
 }

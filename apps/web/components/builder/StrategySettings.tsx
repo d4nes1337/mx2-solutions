@@ -7,7 +7,8 @@
  */
 import { Segmented } from "@/components/ui";
 import { useBuilderStore } from "@/lib/strategies/store";
-import { Field, NumberInput } from "./editors/fields";
+import { Field } from "./editors/fields";
+import { ExpiryField, RecurrenceFields } from "./editors/RecurrenceFields";
 
 const HOLD_OPTIONS = [
   { value: "0", label: "instant" },
@@ -30,7 +31,6 @@ export function StrategySettings() {
   const setRootOp = useBuilderStore((s) => s.setRootOp);
   const setHoldsFor = useBuilderStore((s) => s.setHoldsFor);
   const setMaxDataAge = useBuilderStore((s) => s.setMaxDataAge);
-  const setRecurrence = useBuilderStore((s) => s.setRecurrence);
 
   return (
     <aside className="space-y-3 rounded-xl border border-border bg-surface p-4 shadow-panel">
@@ -56,61 +56,8 @@ export function StrategySettings() {
           grow={3}
         />
       </Field>
-      <Field label="How often">
-        <Segmented
-          options={[
-            { value: "once", label: "Trigger once" },
-            { value: "repeat", label: "Repeat" },
-          ]}
-          value={doc.recurrence.kind}
-          onChange={(v) =>
-            setRecurrence(
-              v === "once"
-                ? { kind: "once" }
-                : { kind: "repeat", maxRepeats: 5, cooldownMs: 600_000 },
-            )
-          }
-          size="md"
-          grow
-        />
-      </Field>
-      {doc.recurrence.kind === "repeat" ? (
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="Max repeats">
-            <NumberInput
-              value={doc.recurrence.maxRepeats}
-              onChange={(v) =>
-                setRecurrence({
-                  kind: "repeat",
-                  maxRepeats: Math.max(2, Math.round(v)),
-                  cooldownMs:
-                    doc.recurrence.kind === "repeat" ? doc.recurrence.cooldownMs : 600_000,
-                })
-              }
-              suffix="×"
-              min={2}
-              max={100}
-            />
-          </Field>
-          <Field label="Cooldown">
-            <NumberInput
-              value={Math.round(
-                (doc.recurrence.kind === "repeat" ? doc.recurrence.cooldownMs : 0) / 60_000,
-              )}
-              onChange={(v) =>
-                setRecurrence({
-                  kind: "repeat",
-                  maxRepeats: doc.recurrence.kind === "repeat" ? doc.recurrence.maxRepeats : 5,
-                  cooldownMs: Math.max(0, Math.round(v)) * 60_000,
-                })
-              }
-              suffix="min"
-              min={0}
-              max={1440}
-            />
-          </Field>
-        </div>
-      ) : null}
+      <RecurrenceFields />
+      <ExpiryField />
       <details className="rounded-lg border border-border bg-surface-2 px-3 py-2">
         <summary className="cursor-pointer text-[12px] font-medium text-muted">Advanced</summary>
         <div className="mt-2 space-y-2">

@@ -4,14 +4,12 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, m } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, Check, Clock, Loader2, Send, Volume2, X } from "lucide-react";
+import { Bell, Clock, X } from "lucide-react";
 import type { ActionCenterItem, ActionCenterState } from "@/lib/types";
 import { useDismissTrigger } from "@/lib/queries";
 import { useActionCenterUi } from "@/lib/action-center-store";
-import { useNotificationPrefs } from "@/lib/notification-prefs";
-import { requestDesktopPermission, desktopPermission } from "@/lib/action-center/desktop";
-import { playAlertSound } from "@/lib/action-center/sound";
 import { Badge, Button, cn } from "@/components/ui";
+import { NotificationControls } from "./NotificationControls";
 import { useReducedMotion } from "@/components/motion";
 
 const STATE_META: Record<
@@ -133,91 +131,6 @@ function ItemCard({
           Dismiss
         </button>
       </div>
-    </div>
-  );
-}
-
-/** Footer controls: the explicit browser-alert opt-in + per-device toggles. */
-function NotificationControls() {
-  const prefs = useNotificationPrefs();
-  const perm = desktopPermission();
-
-  const enable = () => {
-    // The ONE gesture that may request OS permission and unlock audio.
-    prefs.set({ browserAlerts: true });
-    void requestDesktopPermission();
-    playAlertSound(prefs.volume);
-  };
-
-  if (!prefs.browserAlerts) {
-    return (
-      <div className="space-y-2 border-t border-border pt-3">
-        <p className="text-[12px] leading-snug text-muted">
-          Get alerted the moment a Smart Order is ready to sign — a ping, a tab badge, and (when the
-          tab is in the background) a desktop notification.
-        </p>
-        <Button size="sm" className="w-full" onClick={enable}>
-          <Bell size={13} aria-hidden />
-          Enable browser alerts
-        </Button>
-        <p className="text-[11px] text-muted">
-          You can also{" "}
-          <Link href="/wallet" className="text-accent hover:underline">
-            connect Telegram
-          </Link>{" "}
-          for alerts when Arima is closed.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2 border-t border-border pt-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-fg">
-          <Check size={13} className="text-pos" aria-hidden /> Browser alerts on
-        </span>
-        <button
-          type="button"
-          onClick={() => playAlertSound(prefs.volume)}
-          className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
-        >
-          <Volume2 size={12} aria-hidden /> Play test sound
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5 text-[12px]">
-        <label className="flex items-center gap-1.5 text-muted">
-          <input
-            type="checkbox"
-            checked={prefs.sound}
-            onChange={(e) => prefs.set({ sound: e.target.checked })}
-          />
-          Sound
-        </label>
-        <label className="flex items-center gap-1.5 text-muted">
-          <input
-            type="checkbox"
-            checked={prefs.desktop}
-            onChange={(e) => prefs.set({ desktop: e.target.checked })}
-          />
-          Desktop {perm === "denied" ? "(blocked)" : ""}
-        </label>
-        <label className="col-span-2 flex items-center gap-1.5 text-muted">
-          <input
-            type="checkbox"
-            checked={prefs.showDetails}
-            onChange={(e) => prefs.set({ showDetails: e.target.checked })}
-          />
-          Show trade details in desktop notifications
-        </label>
-      </div>
-      <p className="text-[11px] text-muted">
-        <Link href="/wallet" className="text-accent hover:underline">
-          <Send size={11} className="mr-0.5 inline" aria-hidden />
-          Connect Telegram
-        </Link>{" "}
-        for alerts when Arima is closed.
-      </p>
     </div>
   );
 }
