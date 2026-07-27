@@ -23,6 +23,7 @@ vi.mock("@/lib/strategies/queries", () => ({
   useStrategy: () => ({ data: state.row }),
   useStrategyEvaluation: () => ({ data: undefined }),
   useStrategyTimeline: () => ({ data: undefined }),
+  useRenameStrategy: () => ({ isPending: false, mutate: vi.fn() }),
   useStarStrategy: () => ({ isPending: false, mutate: vi.fn() }),
   useStrategyControl: () => ({ isPending: false, mutate: vi.fn() }),
   useCreateStrategy: () => ({

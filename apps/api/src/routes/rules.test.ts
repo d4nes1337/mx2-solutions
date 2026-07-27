@@ -166,6 +166,12 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       }
       return null;
     },
+    setName: async (id, w, name) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.name = name;
+      return r;
+    },
     setTags: async (id, w, tags) => {
       const r = find(id);
       if (!r || r.walletAddress !== w) return null;

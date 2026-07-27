@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * Strategy detail — the "what is ACTUALLY happening" page. One glance answers:
- * is it live, how far along is the hold window, what do the conditions read
- * right now, what has the engine done (timeline), and which orders came out
- * of it (with fills). Minimum prose; numbers and states do the talking.
+ * Strategy ACTIVITY — the record of what this strategy has actually done:
+ * status, hold-window progress, the engine timeline, the orders it produced
+ * (with fills) and the version lineage. Deep-linkable and shareable.
+ *
+ * It deliberately does NOT render the condition grid: the grid is an EDITING
+ * surface and lives in exactly two places — the dashboard side panel (fast
+ * number tuning) and the builder page (structural changes). Showing a
+ * read-only third copy here is what made the flow feel duplicated.
  */
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Pencil, SlidersHorizontal } from "lucide-react";
 import { Badge, Button, Card, Empty, LiveDot, Skeleton, cn } from "@/components/ui";
 import { docFromDefinition } from "@/lib/strategies/doc";
 import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
@@ -24,12 +27,11 @@ import {
   type StrategyRow,
   type StrategyTimeline,
 } from "@/lib/strategies/queries";
+import { RenameField } from "../RenameField";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { LinkedOrders } from "./LinkedOrders";
-import { QuickEditSheet } from "../QuickEditSheet";
 
 import { useNow } from "@/lib/strategies/use-now";
-import { StrategyGrid } from "../grid/StrategyGrid";
 
 function DwellProgress({ evaluation, now }: { evaluation: StrategyEvaluation; now: number }) {
   const holding = evaluation.trueSince !== null && evaluation.holdsForMs > 0;
@@ -88,7 +90,6 @@ export function StrategyDetailShell() {
   const control = useStrategyControl();
   const disarm = useStrategyDisarm();
   const now = useNow();
-  const [quickEdit, setQuickEdit] = useState(false);
 
   if (strategy.isLoading) {
     return (
@@ -122,12 +123,18 @@ export function StrategyDetailShell() {
 
   return (
     <div className="space-y-4">
-      <Link
-        href="/strategies"
-        className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-fg"
-      >
-        <ArrowLeft size={13} aria-hidden /> Strategies
-      </Link>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Link
+          href="/strategies"
+          className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-fg"
+        >
+          <ArrowLeft size={13} aria-hidden /> Strategies
+        </Link>
+        {/* Names the page so it reads as the record, not another editor. */}
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">
+          Activity
+        </span>
+      </div>
 
       {/* ── Status hero ── */}
       <Card>
@@ -135,8 +142,13 @@ export function StrategyDetailShell() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-[17px] font-semibold text-fg">
-                  {row.name || def.name || "Strategy"}
+                <h1 className="min-w-0 text-[17px] font-semibold text-fg">
+                  <RenameField
+                    id={row.id}
+                    name={row.name}
+                    fallback={def.name || "Untitled strategy"}
+                    className="text-[17px] font-semibold"
+                  />
                 </h1>
                 {status.live ? (
                   <LiveDot
@@ -204,14 +216,22 @@ export function StrategyDetailShell() {
                 </Button>
               ) : null}
               {(active || paused) && row.version === 2 ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  title="Edit parameters here — applies as a new version (canvas still available inside)"
-                  onClick={() => setQuickEdit(true)}
-                >
-                  <Pencil size={11} aria-hidden /> Edit
-                </Button>
+                <>
+                  <Link href={`/strategies?focus=${encodeURIComponent(row.id)}`}>
+                    <Button variant="ghost" size="sm" title="Tune the numbers in the side panel">
+                      <SlidersHorizontal size={11} aria-hidden /> Tune
+                    </Button>
+                  </Link>
+                  <Link href={`/strategies/${row.id}/edit`}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Open the builder (add markets, rewire logic)"
+                    >
+                      <Pencil size={11} aria-hidden /> Edit in builder
+                    </Button>
+                  </Link>
+                </>
               ) : null}
               {active || paused ? (
                 <Button
@@ -237,13 +257,7 @@ export function StrategyDetailShell() {
         </div>
       </Card>
 
-      {/* ── Body: the strategy as a grid — WATCH → IF → ACT ── */}
-      <StrategyGrid
-        doc={doc}
-        {...(evaluation.data ? { evaluation: evaluation.data } : {})}
-        timeline={timeline.data}
-      />
-
+      {/* ── Body: what it DID (the grid lives in the panel + builder) ── */}
       <div className={cn("grid gap-4", "lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]")}>
         <LinkedOrders orders={timeline.data?.orders ?? []} doc={doc} />
         <ActivityTimeline
@@ -279,13 +293,6 @@ export function StrategyDetailShell() {
           ) : null}
         </p>
       ) : null}
-
-      <QuickEditSheet
-        row={row}
-        open={quickEdit}
-        onClose={() => setQuickEdit(false)}
-        onApplied={(newId) => router.push(`/strategies/${newId}`)}
-      />
     </div>
   );
 }

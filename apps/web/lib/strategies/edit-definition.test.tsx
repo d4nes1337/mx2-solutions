@@ -110,3 +110,104 @@ describe("applyDefinitionEdits", () => {
     expect(next.action).toBe(def.action);
   });
 });
+
+describe("applyDefinitionEdits: every joint's own number", () => {
+  const market = { conditionId: "c", tokenId: "t", outcome: "YES" } as const;
+  const withCondition = (id: string, condition: object): StrategyDefinition =>
+    ({
+      ...def,
+      expr: {
+        type: "group",
+        id: "root",
+        op: "and",
+        children: [{ type: "condition", id, condition }],
+      },
+    }) as StrategyDefinition;
+
+  it("edits a spread threshold", () => {
+    const d = withCondition("s1", { kind: "spread", market, comparator: "lte", threshold: 0.02 });
+    const out = applyDefinitionEdits(d, { thresholds: { s1: 0.04 } });
+    expect(
+      (out.expr as never as { children: { condition: { threshold: number } }[] }).children[0]!
+        .condition.threshold,
+    ).toBe(0.04);
+  });
+
+  it("edits a trailing offset", () => {
+    const d = withCondition("t1", {
+      kind: "trailing",
+      market,
+      mode: "stop",
+      source: "bid",
+      offset: 0.05,
+    });
+    const out = applyDefinitionEdits(d, { offsets: { t1: 0.08 } });
+    expect(
+      (out.expr as never as { children: { condition: { offset: number } }[] }).children[0]!
+        .condition.offset,
+    ).toBe(0.08);
+  });
+
+  it("edits price_move delta and window together", () => {
+    const d = withCondition("m1", {
+      kind: "price_move",
+      market,
+      direction: "drop",
+      deltaThreshold: 0.05,
+      windowMs: 600_000,
+    });
+    const out = applyDefinitionEdits(d, { deltas: { m1: 0.09 }, windows: { m1: 1_800_000 } });
+    const c = (
+      out.expr as never as {
+        children: { condition: { deltaThreshold: number; windowMs: number } }[];
+      }
+    ).children[0]!.condition;
+    expect(c.deltaThreshold).toBe(0.09);
+    expect(c.windowMs).toBe(1_800_000);
+  });
+
+  it("edits liquidity and visible-levels minimums", () => {
+    const liq = withCondition("l1", {
+      kind: "cumulative_notional",
+      market,
+      source: "ask",
+      priceBound: 0.5,
+      minNotional: 1000,
+    });
+    expect(
+      (
+        applyDefinitionEdits(liq, { minNotionals: { l1: 2500 } }).expr as never as {
+          children: { condition: { minNotional: number } }[];
+        }
+      ).children[0]!.condition.minNotional,
+    ).toBe(2500);
+
+    const lv = withCondition("v1", {
+      kind: "visible_levels",
+      market,
+      source: "ask",
+      priceBound: 0.5,
+      minLevels: 3,
+    });
+    expect(
+      (
+        applyDefinitionEdits(lv, { minLevels: { v1: 7 } }).expr as never as {
+          children: { condition: { minLevels: number } }[];
+        }
+      ).children[0]!.condition.minLevels,
+    ).toBe(7);
+  });
+
+  it("edits the root hold window and leaves the rest untouched", () => {
+    const out = applyDefinitionEdits(def, { holdsForMs: 900_000 });
+    expect(out.holdsForMs).toBe(900_000);
+    expect(out.expr).toBe(def.expr);
+    expect(out.action).toBe(def.action);
+  });
+
+  it("never mutates the input definition", () => {
+    const before = JSON.stringify(def);
+    applyDefinitionEdits(def, { thresholds: { p1: 0.9 }, holdsForMs: 60_000 });
+    expect(JSON.stringify(def)).toBe(before);
+  });
+});

@@ -203,6 +203,12 @@ export const StrategyDefinitionSchema = z.object({
 /** PATCH /:id/tags body — ≤10 freeform labels, 1–24 chars each. */
 const TagsSchema = z.object({ tags: z.array(z.string().min(1).max(24)).max(10) }).strict();
 
+/**
+ * PATCH /:id/name body. Same 120-char ceiling as creation; an empty string
+ * clears the override so the label falls back to the definition's own name.
+ */
+const NameSchema = z.object({ name: z.string().max(120) }).strict();
+
 const CreateSmartOrderSchema = z.object({
   name: z.string().min(1).max(120),
   templateId: z.string().max(64).nullish(),
@@ -1018,6 +1024,41 @@ export const registerStrategiesRoutes = (
       action: "rule.state_changed",
       subject: `rule:${id}`,
       metadata: { control: "tags", tags },
+    });
+    return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
+  });
+
+  /**
+   * Rename. The DEFINITION is immutable (evidence hashes depend on it), so a
+   * rename only moves the display label on the row — it is not a versioned
+   * edit and never re-arms or restarts a hold window.
+   */
+  app.patch("/api/strategies/:id/name", guard, async (req, reply) => {
+    const user = req.user!;
+    const { id } = req.params as { id: string };
+    const parsed = NameSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return {
+        error: "INVALID_REQUEST",
+        message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+      };
+    }
+    const trimmed = parsed.data.name.trim();
+    const row = await deps.ruleStore.setName(
+      id,
+      user.walletAddress,
+      trimmed === "" ? null : trimmed,
+    );
+    if (!row) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Strategy not found" };
+    }
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "rule.state_changed",
+      subject: `rule:${id}`,
+      metadata: { control: "name", name: trimmed },
     });
     return serializeStrategy(row, deps.config.features.conditionalLiveExecution);
   });

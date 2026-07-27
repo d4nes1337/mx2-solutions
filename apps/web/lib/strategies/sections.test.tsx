@@ -4,7 +4,13 @@
  * first, and first-paint (no overview yet) never hides or demotes live rows.
  */
 import { describe, it, expect } from "vitest";
-import { partitionSections, sectionOf, SECTION_ORDER, WATCHING_CUTOFF } from "./sections";
+import {
+  partitionSections,
+  sectionOf,
+  sortByDate,
+  SECTION_ORDER,
+  WATCHING_CUTOFF,
+} from "./sections";
 import type { StrategyOverviewItem, StrategyRow } from "./queries";
 import type { StrategyDefinition } from "@mx2/rules";
 
@@ -224,5 +230,53 @@ describe("partitionSections", () => {
     const first = partitionSections(rows, ov)[0]!.rows.map((r) => r.id);
     const second = partitionSections([...rows], ov)[0]!.rows.map((r) => r.id);
     expect(second).toEqual(first);
+  });
+});
+
+describe("sortByDate", () => {
+  const at = (iso: string, over: Partial<StrategyRow> = {}) =>
+    row("ACTIVE_WAITING", { createdAt: iso, updatedAt: iso, ...over });
+
+  it("orders by last edited, newest first", () => {
+    const old = at("2026-01-01T00:00:00.000Z", { id: "old" });
+    const mid = at("2026-03-01T00:00:00.000Z", { id: "mid" });
+    const fresh = at("2026-06-01T00:00:00.000Z", { id: "fresh" });
+    expect(sortByDate([old, fresh, mid], "edited").map((r) => r.id)).toEqual([
+      "fresh",
+      "mid",
+      "old",
+    ]);
+  });
+
+  it("orders by creation date independently of edits", () => {
+    // Created first but edited most recently — 'created' must ignore the edit.
+    const a = row("ACTIVE_WAITING", {
+      id: "a",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    });
+    const b = row("ACTIVE_WAITING", {
+      id: "b",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    });
+    expect(sortByDate([a, b], "created").map((r) => r.id)).toEqual(["b", "a"]);
+    expect(sortByDate([a, b], "edited").map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("floats starred rows above newer unstarred ones", () => {
+    const pinnedOld = at("2026-01-01T00:00:00.000Z", {
+      id: "pinned",
+      starredAt: "2026-01-02T00:00:00.000Z",
+    });
+    const newer = at("2026-08-01T00:00:00.000Z", { id: "newer" });
+    expect(sortByDate([newer, pinnedOld], "edited").map((r) => r.id)).toEqual(["pinned", "newer"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const rows = [at("2026-01-01T00:00:00.000Z"), at("2026-02-01T00:00:00.000Z")];
+    const snapshot = rows.map((r) => r.id);
+    sortByDate(rows, "created");
+    expect(rows.map((r) => r.id)).toEqual(snapshot);
   });
 });

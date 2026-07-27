@@ -4,7 +4,7 @@
  * corresponding canvas node on click.
  */
 import type { ConditionV2, ExprNode } from "@mx2/rules";
-import { marketLabel, isBound, type StrategyDoc } from "./doc";
+import { conditionLeavesOf, marketLabel, isBound, type StrategyDoc } from "./doc";
 
 export interface SentenceSegment {
   text: string;
@@ -161,3 +161,25 @@ export const strategySentence = (doc: StrategyDoc): string =>
     .join(" ")
     .replace(/\( /g, "(")
     .replace(/ \)/g, ")");
+
+/**
+ * A human default name, used as the arm-sheet placeholder and applied when the
+ * user arms without typing one. Naming stays optional, but nobody ends up with
+ * a list of "Untitled strategy" rows they can't tell apart.
+ */
+export const suggestStrategyName = (doc: StrategyDoc): string => {
+  const shorten = (s: string) => (s.length > 44 ? `${s.slice(0, 41)}…` : s);
+  const a = doc.action;
+  if (a.kind === "order" && isBound(a.market)) {
+    const verb = a.side === "BUY" ? "Buy" : "Sell";
+    return shorten(`${verb} ${marketLabel(doc, a.market)}`);
+  }
+  if (a.kind === "quote_loop") return shorten(`Maker loop · ${a.market.title ?? "market"}`);
+  if (a.kind === "stop_strategy") return "Stop another strategy";
+  // Alert (or an unbound order): name it after what it watches.
+  const watched = conditionLeavesOf(doc.expr)
+    .map((l) => (l.condition.kind === "time_window" ? null : l.condition.market))
+    .find((m) => m !== null && isBound(m));
+  if (watched) return shorten(`Watch ${marketLabel(doc, watched)}`);
+  return "";
+};

@@ -451,8 +451,11 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // mutation — the create/supersede path itself is unchanged.
   const [armOpen, setArmOpen] = useState(false);
   const save = () => {
+    // Read FRESH state: the arm sheet may have just adopted the suggested name
+    // in the same tick, and a stale closure would arm the unnamed doc.
+    const current = useBuilderStore.getState().doc;
     create.mutate(
-      { ...compileDoc(doc), ...(editOf ? { supersedes: editOf } : {}) },
+      { ...compileDoc(current), ...(editOf ? { supersedes: editOf } : {}) },
       {
         onSuccess: (created) => {
           // Remember the armed caps so the next auto strategy starts prefilled.

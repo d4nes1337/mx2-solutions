@@ -19,6 +19,7 @@ import { useAutoReadiness, useStrategies, useStrategiesOverview } from "@/lib/st
 import {
   partitionSections,
   sectionOf,
+  sortByDate,
   SECTION_ORDER,
   SECTION_TITLES,
 } from "@/lib/strategies/sections";
@@ -80,7 +81,17 @@ function SmartOrdersDashboard() {
 
   const rows = applyFilters(liveRows);
   const archived = filters.showArchived ? applyFilters(archivedRows) : [];
-  const sections = useMemo(() => partitionSections(rows, overview), [rows, overview]);
+  // "smart" groups by actionability; the date sorts are one flat list, because
+  // dates inside actionability buckets would order nothing the user asked for.
+  const dateSorted = filters.sort === "smart" ? null : filters.sort;
+  const sections = useMemo(
+    () => (dateSorted ? [] : partitionSections(rows, overview)),
+    [rows, overview, dateSorted],
+  );
+  const flatRows = useMemo(
+    () => (dateSorted ? sortByDate(rows, dateSorted) : []),
+    [rows, dateSorted],
+  );
 
   // The panel is URL state (?focus=<id>) so selections deep-link and survive
   // reloads; replace (not push) keeps card-to-card browsing off the history.
@@ -202,6 +213,18 @@ function SmartOrdersDashboard() {
             {rows.length === 0 && archived.length === 0 ? (
               <Empty>Nothing matches the current filters.</Empty>
             ) : null}
+            {dateSorted ? (
+              <section className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="h-3.5 w-0.5 rounded-full bg-brand-strong" />
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    {dateSorted === "edited" ? "Recently edited" : "Newest first"} ·{" "}
+                    {flatRows.length}
+                  </h2>
+                </div>
+                {flatRows.map(renderCard)}
+              </section>
+            ) : null}
             {sections.map(({ section, rows: sectionRows }) =>
               section === "done" ? (
                 // Terminal strategies stay out of the way — one collapsed line.
@@ -273,7 +296,7 @@ function SmartOrdersDashboard() {
               open
               onClose={closePanel}
               label="Strategy details"
-              panelClassName="max-h-[85vh] w-[min(94vw,560px)] overflow-y-auto"
+              panelClassName="max-h-[85vh] w-[min(94vw,560px)] overflow-y-auto rounded-xl border border-border bg-bg shadow-xl"
             >
               {panel}
             </SheetShell>

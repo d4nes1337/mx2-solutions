@@ -271,6 +271,41 @@ export function useStarStrategy() {
   });
 }
 
+/**
+ * Rename a strategy. Only the label moves — the definition stays immutable, so
+ * this is NOT a versioned edit and never re-arms the strategy. Optimistic so
+ * the new name lands instantly in the list and the panel.
+ */
+export function useRenameStrategy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.patch<StrategyRow>(`/api/strategies/${id}/name`, { name }),
+    onMutate: async ({ id, name }) => {
+      await qc.cancelQueries({ queryKey: ["strategies"] });
+      const next = name.trim() === "" ? null : name.trim();
+      const patched = qc.getQueriesData<{ strategies: StrategyRow[] }>({
+        queryKey: ["strategies"],
+      });
+      for (const [key, data] of patched) {
+        if (!data || !Array.isArray(data.strategies)) continue;
+        qc.setQueryData(key, {
+          ...data,
+          strategies: data.strategies.map((r) => (r.id === id ? { ...r, name: next } : r)),
+        });
+      }
+      const detail = qc.getQueryData<StrategyRow>(["strategies", id]);
+      if (detail) qc.setQueryData(["strategies", id], { ...detail, name: next });
+      return { patched, detail };
+    },
+    onError: (_err, vars, ctx) => {
+      for (const [key, data] of ctx?.patched ?? []) qc.setQueryData(key, data);
+      if (ctx?.detail) qc.setQueryData(["strategies", vars.id], ctx.detail);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
+  });
+}
+
 /** Why auto wouldn't execute right now (server flags + account setup). */
 export function useAutoReadiness(signedIn: boolean) {
   return useQuery({

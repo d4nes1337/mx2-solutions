@@ -15,6 +15,7 @@ import { ExternalLink, Star, X } from "lucide-react";
 import { Badge, Button, Card, CardHeader, LiveDot, Skeleton, cn } from "@/components/ui";
 import { fromCents, toCents } from "@/components/builder/editors/fields";
 import { InlineNumber } from "./InlineNumber";
+import { RenameField } from "../RenameField";
 import { ConditionCharts } from "../detail/ConditionCharts";
 import { conditionLeavesOf, docFromDefinition } from "@/lib/strategies/doc";
 import { applyDefinitionEdits, type DefinitionEdits } from "@/lib/strategies/edit-definition";
@@ -115,27 +116,47 @@ export function StrategyPanel({
   const editable = row.version === 2 && EDITABLE_STATUSES.includes(row.status);
   const starred = row.starredAt !== null;
 
-  const stagedThreshold = (leafId: string, stored: number): number =>
-    edits.thresholds?.[leafId] ?? stored;
+  /** Stage one number into any of the per-condition maps. */
+  const stageIn = (
+    map: "thresholds" | "offsets" | "deltas" | "windows" | "minNotionals" | "minLevels",
+    leafId: string,
+    next: number,
+  ) => setEdits((prev) => ({ ...prev, [map]: { ...prev[map], [leafId]: next } }));
+  const stagedHold = edits.holdsForMs ?? def.holdsForMs;
   const stagedPrice = edits.orderPrice ?? (def.action.kind === "order" ? def.action.price : null);
   const stagedSize = edits.orderSize ?? (def.action.kind === "order" ? def.action.size : null);
+  /** Stored value for a staged number, so "dirty" compares like with like. */
+  const storedOf = (leafId: string, map: keyof DefinitionEdits): number | null => {
+    const leaf = conditionLeavesOf(doc.expr).find((l) => l.id === leafId);
+    const c = leaf?.condition;
+    if (!c) return null;
+    if (map === "thresholds") return c.kind === "price" || c.kind === "spread" ? c.threshold : null;
+    if (map === "offsets") return c.kind === "trailing" ? c.offset : null;
+    if (map === "deltas") return c.kind === "price_move" ? c.deltaThreshold : null;
+    if (map === "windows") return c.kind === "price_move" ? c.windowMs : null;
+    if (map === "minNotionals") return c.kind === "cumulative_notional" ? c.minNotional : null;
+    if (map === "minLevels") return c.kind === "visible_levels" ? c.minLevels : null;
+    return null;
+  };
+  const CONDITION_MAPS = [
+    "thresholds",
+    "offsets",
+    "deltas",
+    "windows",
+    "minNotionals",
+    "minLevels",
+  ] as const;
   const dirty =
-    Object.entries(edits.thresholds ?? {}).some(([leafId, v]) => {
-      const leaf = conditionLeavesOf(doc.expr).find((l) => l.id === leafId);
-      return leaf && leaf.condition.kind === "price" && leaf.condition.threshold !== v;
-    }) ||
+    CONDITION_MAPS.some((map) =>
+      Object.entries(edits[map] ?? {}).some(([leafId, v]) => storedOf(leafId, map) !== v),
+    ) ||
     (edits.orderPrice !== undefined &&
       def.action.kind === "order" &&
       edits.orderPrice !== def.action.price) ||
     (edits.orderSize !== undefined &&
       def.action.kind === "order" &&
-      edits.orderSize !== def.action.size);
-
-  const stageThreshold = (leafId: string, next: number) =>
-    setEdits((prev) => ({
-      ...prev,
-      thresholds: { ...prev.thresholds, [leafId]: next },
-    }));
+      edits.orderSize !== def.action.size) ||
+    (edits.holdsForMs !== undefined && edits.holdsForMs !== def.holdsForMs);
 
   const apply = () => {
     create.mutate(
@@ -166,41 +187,128 @@ export function StrategyPanel({
 
   const leaves = conditionLeavesOf(doc.expr);
 
+  /**
+   * The editable number(s) for ONE condition — every joint is tunable here, and
+   * each kind exposes only the number that actually matters for it. Read-only
+   * strategies (or v1 rows) render the same chips disabled, so the panel looks
+   * identical whether or not editing is allowed.
+   */
   const thresholdChip = (leafId: string, c: ConditionV2) => {
-    if (c.kind === "price") {
-      const staged = stagedThreshold(leafId, c.threshold);
-      return (
-        <span className="flex items-center gap-1 text-[11px] text-muted">
-          trigger{" "}
-          <InlineNumber
-            label="Trigger price"
-            display={cents(staged)}
-            value={toCents(staged)}
-            min={1}
-            max={99}
-            suffix="¢"
-            dirty={staged !== c.threshold}
-            disabled={!editable}
-            onCommit={(v) => stageThreshold(leafId, fromCents(v))}
-          />
-        </span>
-      );
+    const common = { disabled: !editable } as const;
+    switch (c.kind) {
+      case "price":
+      case "spread": {
+        const staged = edits.thresholds?.[leafId] ?? c.threshold;
+        return (
+          <span className="flex items-center gap-1 text-[11px] text-muted">
+            {c.kind === "spread" ? "spread" : "trigger"}{" "}
+            <InlineNumber
+              {...common}
+              label={c.kind === "spread" ? "Spread threshold" : "Trigger price"}
+              display={cents(staged)}
+              value={toCents(staged)}
+              min={1}
+              max={99}
+              suffix="¢"
+              dirty={staged !== c.threshold}
+              onCommit={(v) => stageIn("thresholds", leafId, fromCents(v))}
+            />
+          </span>
+        );
+      }
+      case "trailing": {
+        const staged = edits.offsets?.[leafId] ?? c.offset;
+        return (
+          <span className="flex items-center gap-1 text-[11px] text-muted">
+            {c.mode} by{" "}
+            <InlineNumber
+              {...common}
+              label="Trailing offset"
+              display={cents(staged)}
+              value={toCents(staged)}
+              min={1}
+              max={50}
+              suffix="¢"
+              dirty={staged !== c.offset}
+              onCommit={(v) => stageIn("offsets", leafId, fromCents(v))}
+            />
+          </span>
+        );
+      }
+      case "price_move": {
+        const delta = edits.deltas?.[leafId] ?? c.deltaThreshold;
+        const window = edits.windows?.[leafId] ?? c.windowMs;
+        return (
+          <span className="flex items-center gap-1 text-[11px] text-muted">
+            {c.direction}{" "}
+            <InlineNumber
+              {...common}
+              label="Move size"
+              display={cents(delta)}
+              value={toCents(delta)}
+              min={1}
+              max={99}
+              suffix="¢"
+              dirty={delta !== c.deltaThreshold}
+              onCommit={(v) => stageIn("deltas", leafId, fromCents(v))}
+            />
+            in{" "}
+            <InlineNumber
+              {...common}
+              label="Look-back window"
+              display={humanDuration(window)}
+              value={Math.round(window / 60_000)}
+              min={1}
+              max={60}
+              suffix="min"
+              dirty={window !== c.windowMs}
+              onCommit={(v) => stageIn("windows", leafId, v * 60_000)}
+            />
+          </span>
+        );
+      }
+      case "cumulative_notional": {
+        const staged = edits.minNotionals?.[leafId] ?? c.minNotional;
+        return (
+          <span className="flex items-center gap-1 text-[11px] text-muted">
+            at least{" "}
+            <InlineNumber
+              {...common}
+              label="Minimum liquidity"
+              display={`$${staged.toLocaleString()}`}
+              value={Math.round(staged)}
+              min={1}
+              max={10_000_000}
+              suffix="$"
+              dirty={staged !== c.minNotional}
+              onCommit={(v) => stageIn("minNotionals", leafId, v)}
+            />
+          </span>
+        );
+      }
+      case "visible_levels": {
+        const staged = edits.minLevels?.[leafId] ?? c.minLevels;
+        return (
+          <span className="flex items-center gap-1 text-[11px] text-muted">
+            at least{" "}
+            <InlineNumber
+              {...common}
+              label="Minimum book levels"
+              display={`${staged} levels`}
+              value={staged}
+              min={1}
+              max={50}
+              suffix="levels"
+              dirty={staged !== c.minLevels}
+              onCommit={(v) => stageIn("minLevels", leafId, v)}
+            />
+          </span>
+        );
+      }
+      case "time_window":
+        // Exact timestamps are a builder job — the panel stays light.
+        return <span className="text-[11px] text-faint">schedule</span>;
     }
-    if (c.kind === "trailing") {
-      return (
-        <span className="tabular text-[11px] text-muted">
-          trailing {c.mode} · {cents(c.offset)} offset
-        </span>
-      );
-    }
-    if (c.kind === "price_move") {
-      return (
-        <span className="tabular text-[11px] text-muted">
-          {c.direction} {cents(c.deltaThreshold)} in {humanDuration(c.windowMs)}
-        </span>
-      );
-    }
-    return null;
   };
 
   return (
@@ -222,9 +330,12 @@ export function StrategyPanel({
             >
               <Star size={14} aria-hidden fill={starred ? "currentColor" : "none"} />
             </button>
-            <h2 className="truncate text-[15px] font-semibold text-fg">
-              {row.name || def.name || "Strategy"}
-            </h2>
+            <RenameField
+              id={row.id}
+              name={row.name}
+              fallback={def.name || "Untitled strategy"}
+              className="text-[15px] font-semibold"
+            />
             {status.live ? (
               <LiveDot
                 label={status.label.toUpperCase()}
@@ -326,6 +437,22 @@ export function StrategyPanel({
           {leaves.length === 0 ? (
             <div className="px-3 py-2 text-[12px] text-muted">No conditions.</div>
           ) : null}
+          {/* The one root-level number worth tuning fast; recurrence, expiry and
+              caps stay in the builder so the panel doesn't become a form. */}
+          <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted">
+            <span>All of the above must hold for</span>
+            <InlineNumber
+              label="Hold window"
+              display={stagedHold === 0 ? "instantly" : humanDuration(stagedHold)}
+              value={Math.round(stagedHold / 60_000)}
+              min={0}
+              max={1440}
+              suffix="min"
+              dirty={stagedHold !== def.holdsForMs}
+              disabled={!editable}
+              onCommit={(v) => setEdits((prev) => ({ ...prev, holdsForMs: v * 60_000 }))}
+            />
+          </div>
         </div>
       </Card>
 

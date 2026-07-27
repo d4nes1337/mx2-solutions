@@ -7,8 +7,9 @@
  * the page.
  */
 import { Archive, Search, Star, X } from "lucide-react";
-import { cn } from "@/components/ui";
+import { cn, Segmented } from "@/components/ui";
 import { SECTION_TITLES, type SectionId } from "@/lib/strategies/sections";
+import type { SortMode } from "@/lib/strategies/sections";
 
 export interface StrategyFilters {
   query: string;
@@ -18,6 +19,12 @@ export interface StrategyFilters {
   /** OR-matched: a strategy shows when it carries ANY active tag. */
   tags: string[];
   showArchived: boolean;
+  /**
+   * "smart" keeps the actionability sections (what needs you first); the date
+   * modes are a flat, plainly-ordered list — mixing dates INTO sections would
+   * order nothing meaningfully.
+   */
+  sort: SortMode;
 }
 
 export const EMPTY_FILTERS: StrategyFilters = {
@@ -26,7 +33,14 @@ export const EMPTY_FILTERS: StrategyFilters = {
   starred: false,
   tags: [],
   showArchived: false,
+  sort: "smart",
 };
+
+const SORT_OPTIONS: { value: SortMode; label: string }[] = [
+  { value: "smart", label: "Needs me" },
+  { value: "edited", label: "Edited" },
+  { value: "created", label: "Created" },
+];
 
 const chipClass = (active: boolean) =>
   cn(
@@ -90,6 +104,18 @@ export function FilterBar({
           </button>
         ) : null}
         <span className="ml-auto" />
+        <span
+          className="inline-flex items-center gap-1.5"
+          title="Needs me = most actionable first (grouped). Edited / Created = newest first, one flat list."
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-faint">Sort</span>
+          <Segmented
+            options={SORT_OPTIONS}
+            value={filters.sort}
+            onChange={(sort) => onChange({ ...filters, sort })}
+            size="sm"
+          />
+        </span>
         <button
           type="button"
           onClick={() => onChange({ ...filters, showArchived: !filters.showArchived })}
@@ -102,7 +128,9 @@ export function FilterBar({
         {hasFilters ? (
           <button
             type="button"
-            onClick={() => onChange({ ...EMPTY_FILTERS, showArchived: filters.showArchived })}
+            onClick={() =>
+              onChange({ ...EMPTY_FILTERS, showArchived: filters.showArchived, sort: filters.sort })
+            }
             className="inline-flex items-center gap-1 text-[11px] font-medium text-muted transition-colors hover:text-fg"
           >
             <X size={11} aria-hidden /> Clear

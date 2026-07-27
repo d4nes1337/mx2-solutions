@@ -16,7 +16,7 @@ import { ShieldCheck, Sparkles } from "lucide-react";
 import { Button, Segmented } from "@/components/ui";
 import { SheetPanel } from "@/components/ui/SheetPanel";
 import { useBuilderStore } from "@/lib/strategies/store";
-import { strategySentence } from "@/lib/strategies/sentence";
+import { strategySentence, suggestStrategyName } from "@/lib/strategies/sentence";
 import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
 import type { AutoReadiness } from "@/lib/strategies/queries";
 import { Field, NumberInput } from "@/components/builder/editors/fields";
@@ -74,6 +74,8 @@ export function ArmSheet({
   const doc = useBuilderStore((s) => s.doc);
   const setAction = useBuilderStore((s) => s.setAction);
   const setLimits = useBuilderStore((s) => s.setLimits);
+  const setName = useBuilderStore((s) => s.setName);
+  const suggestion = suggestStrategyName(doc);
 
   // First-time explanation collapses on later arms.
   const seenBefore = open ? loadArmPrefs().seen : false;
@@ -95,7 +97,14 @@ export function ArmSheet({
 
   const armFooter = (
     <div className="space-y-2">
-      <Button className="w-full" disabled={arming} onClick={onArm}>
+      <Button
+        className="w-full"
+        disabled={arming}
+        onClick={() => {
+          if (doc.name.trim() === "" && suggestion !== "") setName(suggestion);
+          onArm();
+        }}
+      >
         <Sparkles size={14} aria-hidden />
         {arming ? "Arming…" : "Arm — start watching"}
       </Button>
@@ -119,6 +128,18 @@ export function ArmSheet({
     >
       <div className="space-y-4">
         <p className="text-[12px] leading-relaxed text-muted">{strategySentence(doc)}</p>
+
+        {/* Asked, never required: arming with this blank adopts the suggestion,
+            so the list never fills up with indistinguishable rows. */}
+        <Field label="Name it (optional)">
+          <input
+            value={doc.name}
+            onChange={(e) => setName(e.target.value.slice(0, 120))}
+            placeholder={suggestion || "Name your strategy…"}
+            aria-label="Strategy name"
+            className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-[13px] text-fg outline-none transition-colors placeholder:text-faint focus:border-brand"
+          />
+        </Field>
 
         {order ? (
           <div className="space-y-2">

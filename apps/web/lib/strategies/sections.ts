@@ -109,6 +109,31 @@ export interface Section {
 }
 
 /**
+ * Dashboard ordering. "smart" is the actionability partition (below);
+ * "edited"/"created" are plain reverse-chronological lists — the answer to
+ * "what did I touch last?" rather than "what needs me?".
+ */
+export type SortMode = "smart" | "edited" | "created";
+
+/**
+ * Reverse-chronological rows for the date sorts. Starred still floats first
+ * (a pin is a user instruction that outranks recency), and the opposite date
+ * breaks ties so the order is total and never shuffles between polls.
+ */
+export const sortByDate = (
+  rows: readonly StrategyRow[],
+  mode: "edited" | "created",
+): StrategyRow[] =>
+  [...rows].sort((a, b) => {
+    const starDelta = Number(b.starredAt !== null) - Number(a.starredAt !== null);
+    if (starDelta !== 0) return starDelta;
+    const primary =
+      mode === "edited" ? byDesc(a.updatedAt, b.updatedAt) : byDesc(a.createdAt, b.createdAt);
+    if (primary !== 0) return primary;
+    return mode === "edited" ? byDesc(a.createdAt, b.createdAt) : byDesc(a.updatedAt, b.updatedAt);
+  });
+
+/**
  * Partition + order the dashboard. Starred rows float first within their
  * section; ties keep the per-section order; the final tiebreak (createdAt
  * desc) makes the sort fully deterministic so identical polls never shuffle.

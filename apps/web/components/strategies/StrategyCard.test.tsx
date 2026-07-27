@@ -27,12 +27,12 @@ vi.mock("@/lib/strategies/queries", () => ({
   useCreateStrategy: () => ({ isPending: false, error: null, mutate: vi.fn() }),
   useSetStrategyTags: () => ({ mutate: vi.fn() }),
   useStrategyControl: () => ({ isPending: false, mutate: vi.fn() }),
+  useRenameStrategy: () => ({ isPending: false, mutate: vi.fn() }),
   useStarStrategy: () => ({
     isPending: false,
     mutate: (v: { id: string; starred: boolean }) => calls.star.push(v),
   }),
 }));
-vi.mock("./QuickEditSheet", () => ({ QuickEditSheet: () => null }));
 vi.mock("@/components/charts/AreaChart", () => ({
   AreaChart: (props: { baselines?: { value: number; label?: string }[] }) => (
     <div data-testid="mini-chart">{props.baselines?.map((b) => b.label).join(",")}</div>

@@ -107,6 +107,12 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       r.tags = [...tags];
       return r;
     },
+    setName: async (id, w, name) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w) return null;
+      r.name = name;
+      return r;
+    },
     setStarred: async (id, w, starred) => {
       const r = find(id);
       if (!r || r.walletAddress !== w) return null;
@@ -1168,6 +1174,95 @@ describe("GET /api/strategies/:id/evaluate-now", () => {
 });
 
 // ── Dashboard: star pin + batch overview ─────────────────────────────────────
+
+describe("PATCH /api/strategies/:id/name (rename)", () => {
+  const createOne = async (app: {
+    inject: (opts: object) => Promise<{ statusCode: number; json: () => { id: string } }>;
+  }): Promise<string> => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/strategies",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: validBody,
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().id;
+  };
+
+  it("renames without touching the immutable definition, and audits", async () => {
+    const { app, audits } = buildSmartOrdersApp({});
+    const id = await createOne(app);
+    const before = await app.inject({
+      method: "GET",
+      url: `/api/strategies/${id}`,
+      headers: { cookie: COOKIE },
+    });
+    const definitionBefore = JSON.stringify(before.json().definitionV2);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/strategies/${id}/name`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { name: "  Fed cuts hedge  " },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe("Fed cuts hedge");
+    // A rename is NOT a versioned edit: definition, status and lineage hold.
+    expect(JSON.stringify(res.json().definitionV2)).toBe(definitionBefore);
+    expect(res.json().supersededBy).toBeNull();
+    expect(res.json().status).toBe(before.json().status);
+    expect(
+      audits.some((a) => a.action === "rule.state_changed" && a.subject === `rule:${id}`),
+    ).toBe(true);
+    await app.close();
+  });
+
+  it("an empty name clears the override (falls back to the definition name)", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const id = await createOne(app);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/strategies/${id}/name`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { name: "   " },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBeNull();
+    await app.close();
+  });
+
+  it("rejects an over-long name and unknown fields", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const id = await createOne(app);
+    const tooLong = await app.inject({
+      method: "PATCH",
+      url: `/api/strategies/${id}/name`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { name: "x".repeat(121) },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    const extra = await app.inject({
+      method: "PATCH",
+      url: `/api/strategies/${id}/name`,
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { name: "ok", nope: 1 },
+    });
+    expect(extra.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("404s on another wallet's strategy", async () => {
+    const { app } = buildSmartOrdersApp({});
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/strategies/00000000-0000-4000-8000-000000000999/name",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { name: "nope" },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+});
 
 describe("PATCH /api/strategies/:id/star", () => {
   const createStrategy = async (app: Awaited<ReturnType<typeof buildSmartOrdersApp>>["app"]) => {

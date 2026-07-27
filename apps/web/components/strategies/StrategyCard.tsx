@@ -39,7 +39,7 @@ import { sectionOf } from "@/lib/strategies/sections";
 import { userStatus } from "@/lib/strategies/status";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { useNow } from "@/lib/strategies/use-now";
-import { QuickEditSheet } from "./QuickEditSheet";
+import { RenameField } from "./RenameField";
 import {
   useCreateStrategy,
   useSetStrategyTags,
@@ -282,7 +282,6 @@ export function StrategyCard({
   const star = useStarStrategy();
   const dismiss = useDismissTrigger();
   const spawnDraft = useBuilderStore((s) => s.spawnDraft);
-  const [quickEdit, setQuickEdit] = useState(false);
   const now = useNow();
   const def = row.definitionV2;
   const doc = docFromDefinition(def);
@@ -400,22 +399,43 @@ export function StrategyCard({
             >
               <Star size={13} aria-hidden fill={starred ? "currentColor" : "none"} />
             </button>
-            {onOpen ? (
-              <button
-                type="button"
-                onClick={() => onOpen(row.id)}
-                className="text-left text-[14px] font-semibold text-fg transition-colors hover:text-accent"
-              >
-                {row.name || def.name || "Strategy"}
-              </button>
-            ) : (
-              <Link
-                href={`/strategies/${row.id}`}
-                className="text-[14px] font-semibold text-fg transition-colors hover:text-accent"
-              >
-                {row.name || def.name || "Strategy"}
-              </Link>
-            )}
+            {/* The title keeps its primary action (open the panel / the page);
+                rename gets its own hover trigger so neither steals the click. */}
+            <RenameField
+              id={row.id}
+              name={row.name}
+              fallback={def.name || "Untitled strategy"}
+              className="text-[14px] font-semibold"
+              idle={(startEditing) => (
+                <span className="group/title inline-flex min-w-0 items-center gap-1">
+                  {onOpen ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpen(row.id)}
+                      className="truncate text-left text-[14px] font-semibold text-fg transition-colors hover:text-accent"
+                    >
+                      {row.name || def.name || "Untitled strategy"}
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/strategies/${row.id}`}
+                      className="truncate text-[14px] font-semibold text-fg transition-colors hover:text-accent"
+                    >
+                      {row.name || def.name || "Untitled strategy"}
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Rename strategy"
+                    title="Rename — this doesn't change the strategy's logic"
+                    onClick={startEditing}
+                    className="shrink-0 text-faint opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover/title:opacity-100"
+                  >
+                    <Pencil size={11} aria-hidden />
+                  </button>
+                </span>
+              )}
+            />
             {status.live ? (
               <LiveDot
                 label={status.label.toUpperCase()}
@@ -523,14 +543,22 @@ export function StrategyCard({
             ) : null}
             {/* Triggered rows are not supersedable (store gate) — Re-arm first. */}
             {(active || row.status === "PAUSED") && row.version === 2 ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Edit parameters here — applies as a new version (canvas still available inside)"
-                onClick={() => setQuickEdit(true)}
-              >
-                <Pencil size={11} aria-hidden /> Edit
-              </Button>
+              onOpen ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Tune the numbers in the side panel"
+                  onClick={() => onOpen(row.id)}
+                >
+                  <Pencil size={11} aria-hidden /> Edit
+                </Button>
+              ) : (
+                <Link href={`/strategies/${row.id}/edit`}>
+                  <Button variant="ghost" size="sm" title="Open the builder">
+                    <Pencil size={11} aria-hidden /> Edit
+                  </Button>
+                </Link>
+              )
             ) : null}
             {active || row.status === "PAUSED" ? (
               <Button
@@ -595,7 +623,6 @@ export function StrategyCard({
           </div>
         </div>
       </div>
-      <QuickEditSheet row={row} open={quickEdit} onClose={() => setQuickEdit(false)} />
     </div>
   );
 }

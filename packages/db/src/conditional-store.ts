@@ -95,6 +95,17 @@ export interface RuleStore {
     walletAddress: string,
     tags: readonly string[],
   ): Promise<ConditionalRuleRow | null>;
+  /**
+   * Rename the strategy. Only the display label moves — the immutable
+   * definition (and therefore every trigger's evidence hash) is untouched, so
+   * renaming is safe on an armed strategy and never counts as an edit.
+   * `null` clears the name back to the definition's own.
+   */
+  setName(
+    id: string,
+    walletAddress: string,
+    name: string | null,
+  ): Promise<ConditionalRuleRow | null>;
   /** Pin/unpin the strategy on the dashboard (starred floats first in-section). */
   setStarred(
     id: string,
@@ -211,6 +222,15 @@ export const createRuleStore = (db: Database): RuleStore => ({
     const [row] = await db
       .update(conditionalRules)
       .set({ tags: [...tags], updatedAt: sql`now()` })
+      .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
+      .returning();
+    return row ?? null;
+  },
+
+  async setName(id, walletAddress, name) {
+    const [row] = await db
+      .update(conditionalRules)
+      .set({ name, updatedAt: sql`now()` })
       .where(and(eq(conditionalRules.id, id), eq(conditionalRules.walletAddress, walletAddress)))
       .returning();
     return row ?? null;
