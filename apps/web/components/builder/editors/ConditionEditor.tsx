@@ -7,10 +7,12 @@
  */
 import { Trash2 } from "lucide-react";
 import type { ConditionV2 } from "@mx2/rules";
+import { PRICE_MOVE_WINDOW_MAX_MS, PRICE_MOVE_WINDOW_MIN_MS } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
 import { findNode, UNBOUND } from "@/lib/strategies/doc";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
+import { DurationField } from "./DurationField";
 
 export const CONDITION_KIND_OPTIONS = [
   { value: "price", label: "Price" },
@@ -134,21 +136,20 @@ export function ConditionEditor({ id }: { id: string }) {
             />
           </Field>
           <Field label="Within the last">
-            <div className="nodrag">
-              <Segmented
-                options={[
-                  { value: "60000", label: "1m" },
-                  { value: "300000", label: "5m" },
-                  { value: "600000", label: "10m" },
-                  { value: "1800000", label: "30m" },
-                  { value: "3600000", label: "1h" },
-                ]}
-                value={String(c.windowMs)}
-                onChange={(v) => updateCondition(id, { ...c, windowMs: Number(v) })}
-                size="md"
-                grow
-              />
-            </div>
+            <DurationField
+              value={c.windowMs}
+              onChange={(ms) => updateCondition(id, { ...c, windowMs: ms })}
+              presets={[
+                { value: 60_000, label: "1m" },
+                { value: 300_000, label: "5m" },
+                { value: 600_000, label: "10m" },
+                { value: 1_800_000, label: "30m" },
+                { value: 3_600_000, label: "1h" },
+              ]}
+              units={["seconds", "minutes"]}
+              min={PRICE_MOVE_WINDOW_MIN_MS}
+              max={PRICE_MOVE_WINDOW_MAX_MS}
+            />
           </Field>
           <p className="text-[11px] leading-snug text-muted">
             Live detection uses tick-by-tick data; draft checks and backtests use 1-minute candles,

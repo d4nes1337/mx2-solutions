@@ -178,21 +178,25 @@ describe("parsePinnedParam", () => {
   });
 });
 
-describe("BuilderShell grid ⇄ canvas toggle", () => {
-  it("defaults to the grid, switches to the canvas, and persists the choice", async () => {
+describe("BuilderShell canvas strip", () => {
+  it("shows the grid and the canvas together, and remembers the strip height", async () => {
     searchParams = new URLSearchParams("start=blank");
-    const { getByText, getByTestId, queryByTestId, findByText } = renderShell();
+    const { getByText, getByTestId, findByText } = renderShell();
 
-    // Grid is the default projection: the add-market bar renders, no canvas.
+    // The grid is the editing surface AND the canvas is on screen with it —
+    // no hidden toggle: the canvas is discoverable from the first render.
     await findByText("Add market to watch");
-    expect(queryByTestId("canvas-stub")).toBeNull();
+    expect(getByTestId("canvas-stub")).toBeInTheDocument();
+    expect(getByText("Canvas")).toBeInTheDocument();
 
-    getByText("Canvas").click();
-    await waitFor(() => expect(getByTestId("canvas-stub")).toBeInTheDocument());
-    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("canvas");
+    getByText("Expand").click();
+    await waitFor(() =>
+      expect(window.localStorage.getItem("arima.builder.canvas-height.v1")).toBe("tall"),
+    );
 
-    getByText("Grid").click();
-    await findByText("Add market to watch");
-    expect(window.localStorage.getItem("arima.builder.view.v1")).toBe("grid");
+    getByText("Collapse").click();
+    await waitFor(() =>
+      expect(window.localStorage.getItem("arima.builder.canvas-height.v1")).toBe("peek"),
+    );
   });
 });

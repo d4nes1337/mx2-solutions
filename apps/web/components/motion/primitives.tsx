@@ -25,6 +25,15 @@ const INSTANT: Transition = { duration: 0 };
  * Adds what the static version lacked: dialog semantics, Escape-to-close, and
  * initial focus.
  */
+/**
+ * Surface applied when a caller passes no `panelClassName`. The panel used to
+ * be unstyled, so forgetting the class shipped a transparent, unreadable
+ * dialog — the primitive is now safe by default and callers only override
+ * when they need a different width or layout.
+ */
+const DEFAULT_PANEL =
+  "w-full max-w-lg rounded-t-xl border border-border bg-bg shadow-xl sm:rounded-xl";
+
 export function SheetShell({
   open,
   onClose,
@@ -35,6 +44,7 @@ export function SheetShell({
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  /** Overrides the default surface entirely — include a background. */
   panelClassName?: string;
   /** Accessible dialog name. */
   label: string;
@@ -58,9 +68,9 @@ export function SheetShell({
   return (
     <AnimatePresence>
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
           <m.div
-            className="absolute inset-0 bg-black/50"
+            className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -74,7 +84,7 @@ export function SheetShell({
             aria-modal="true"
             aria-label={label}
             tabIndex={-1}
-            className={cn("relative z-10 outline-none", panelClassName)}
+            className={cn("relative z-10 outline-none", panelClassName ?? DEFAULT_PANEL)}
             initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 24 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 12 }}

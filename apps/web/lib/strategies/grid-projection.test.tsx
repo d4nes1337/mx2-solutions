@@ -8,7 +8,12 @@ import type {
   OrderActionV2,
 } from "@mx2/rules";
 import { emptyDoc, type StrategyDoc } from "./doc";
-import { collectConditionResults, docToGrid, isComplexDoc } from "./grid-projection";
+import {
+  collectConditionResults,
+  docToGrid,
+  isComplexDoc,
+  selectionTarget,
+} from "./grid-projection";
 
 const market = (n: number): MarketRef => ({
   conditionId: `cond-${n}`,
@@ -51,7 +56,7 @@ const orderAction = (m: MarketRef): OrderActionV2 => ({
   execution: "prepare",
 });
 
-/** Total condition leaves reachable in the projection (cards + guards + complex). */
+/** Total condition leaves reachable in the projection (cards + complex). */
 const projectedLeafCount = (d: StrategyDoc): number => {
   const p = docToGrid(d);
   const inComplex = p.complex.reduce((acc, { node }) => {
@@ -59,7 +64,7 @@ const projectedLeafCount = (d: StrategyDoc): number => {
       n.type === "condition" ? 1 : n.children.reduce((a, c) => a + walk(c), 0);
     return acc + walk(node);
   }, 0);
-  return p.watch.reduce((acc, c) => acc + c.rows.length, 0) + p.guards.length + inComplex;
+  return p.watch.reduce((acc, c) => acc + c.rows.length, 0) + inComplex;
 };
 
 describe("docToGrid — classification", () => {
@@ -131,8 +136,8 @@ describe("docToGrid — classification", () => {
   });
 });
 
-describe("docToGrid — guards and placeholders", () => {
-  it("moves conditions bound to the order's target market into guards", () => {
+describe("docToGrid — the order's target market", () => {
+  it("keeps conditions on the target market in the WATCH zone and flags the card", () => {
     const m1 = market(1);
     const target = market(9);
     const d: StrategyDoc = {
@@ -140,35 +145,42 @@ describe("docToGrid — guards and placeholders", () => {
       action: orderAction(target),
     };
     const p = docToGrid(d);
-    expect(p.watch.map((c) => c.key)).toEqual(["tok-1"]);
-    expect(p.guards).toHaveLength(1);
-    expect(p.guards[0]!.condition.kind).toBe("price");
-    expect(p.guardsOpNodeId).toBeNull();
+    // "watch X -> trade X" must show X on BOTH sides, not vanish from IF.
+    expect(p.watch.map((c) => c.key)).toEqual(["tok-1", "tok-9"]);
+    expect(p.watch.find((c) => c.key === "tok-9")?.rows).toHaveLength(1);
+    expect(p.targetTokenId).toBe("tok-9");
   });
 
-  it("carries the guard group's own op when the target conditions were grouped", () => {
+  it("does not invent an empty watch card for a target that has no conditions", () => {
     const target = market(9);
-    const g = group("or", [cond(price(target, 0.6)), cond(price(target, 0.4))]);
-    const d: StrategyDoc = { ...doc([g, cond(price(market(1)))]), action: orderAction(target) };
+    const d: StrategyDoc = { ...doc([cond(price(market(1)))]), action: orderAction(target) };
     const p = docToGrid(d);
-    expect(p.guards).toHaveLength(2);
-    expect(p.guardsOp).toBe("or");
-    expect(p.guardsOpNodeId).toBe(g.id);
+    expect(p.watch.map((c) => c.key)).toEqual(["tok-1"]);
+    expect(p.targetTokenId).toBe("tok-9");
   });
 
-  it("renders unreferenced watched markets as placeholder cards, excluding the target", () => {
+  it("renders an explicitly watched target market as a placeholder card", () => {
     const target = market(9);
-    const watched = market(5);
     const d: StrategyDoc = {
       ...doc([cond(price(market(1)))]),
       action: orderAction(target),
-      watchedMarkets: [watched, target],
+      watchedMarkets: [target],
+    };
+    const p = docToGrid(d);
+    const card = p.watch.find((c) => c.key === "tok-9");
+    expect(card?.placeholder).toBe(true);
+  });
+
+  it("renders unreferenced watched markets as placeholder cards", () => {
+    const watched = market(5);
+    const d: StrategyDoc = {
+      ...doc([cond(price(market(1)))]),
+      watchedMarkets: [watched],
     };
     const p = docToGrid(d);
     const placeholder = p.watch.find((c) => c.key === "tok-5");
     expect(placeholder?.placeholder).toBe(true);
     expect(placeholder?.rows).toHaveLength(0);
-    expect(p.watch.some((c) => c.key === "tok-9")).toBe(false);
   });
 });
 
@@ -258,5 +270,40 @@ describe("collectConditionResults", () => {
     expect(m.get("a")).toEqual({ satisfied: true, stale: false, actual: 0.68 });
     expect(m.get("b")).toEqual({ satisfied: false, stale: true, actual: null });
     expect(collectConditionResults(null).size).toBe(0);
+  });
+});
+
+describe("selectionTarget — canvas selection ↔ grid card", () => {
+  const m1 = market(1);
+  const target = market(9);
+  const base: StrategyDoc = {
+    ...doc([cond(price(m1)), cond(price(target, 0.6))]),
+    action: orderAction(target),
+  };
+
+  it("maps a condition node to the card that owns it", () => {
+    const p = docToGrid(base);
+    const nodeId = p.watch.find((c) => c.key === "tok-1")!.rows[0]!.nodeId;
+    expect(selectionTarget(p, nodeId)).toEqual({ cardKey: "tok-1", action: false });
+  });
+
+  it("maps a market node to its watch card", () => {
+    const p = docToGrid(base);
+    expect(selectionTarget(p, "market:tok-1")).toEqual({ cardKey: "tok-1", action: false });
+  });
+
+  it("maps the action node to the ACT card", () => {
+    const p = docToGrid(base);
+    expect(selectionTarget(p, "action")).toEqual({ cardKey: null, action: true });
+  });
+
+  it("maps a target-only market node to the ACT card when it has no watch card", () => {
+    const d: StrategyDoc = { ...doc([cond(price(m1))]), action: orderAction(target) };
+    const p = docToGrid(d);
+    expect(selectionTarget(p, "market:tok-9")).toEqual({ cardKey: null, action: true });
+  });
+
+  it("resolves to nothing when there is no selection", () => {
+    expect(selectionTarget(docToGrid(base), null)).toEqual({ cardKey: null, action: false });
   });
 });

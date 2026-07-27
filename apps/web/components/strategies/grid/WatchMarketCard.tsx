@@ -3,14 +3,15 @@
 /**
  * One watched market in the grid's WATCH zone: title + live price, a compact
  * chart with every price-type threshold drawn as a labeled line, then the
- * market's conditions as rows with live state. When the card carries more
- * than one condition its own ALL/ANY combinator is shown — the visual
- * grouping always tells the truth about the logic (two-level tree). Edit
- * mode turns the combinator into a toggle, rows into editors, and adds the
- * "+ add condition" ghost row.
+ * market's conditions as rows with live state.
+ *
+ * Combinators read as CONNECTORS between rows ("and"/"or" chips on the rule
+ * line), not as a control in the card header — a header pill looked like it
+ * governed the whole strategy. The header only carries identity: market name,
+ * live price, and a "also traded" tag when this market is the order target.
  */
-import { Clock, Plus, X } from "lucide-react";
-import { Badge, Card, CardHeader, Segmented, Skeleton } from "@/components/ui";
+import { Clock, Plus, Target, X } from "lucide-react";
+import { Badge, Card, CardHeader, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
 import { marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
@@ -32,12 +33,41 @@ const cardBaselines = (card: WatchCard): { value: number; label: string }[] =>
     c.kind === "price" ? [{ value: c.threshold, label: cents(c.threshold) }] : [],
   );
 
-const opLabel = (op: "and" | "or"): string => (op === "and" ? "ALL" : "ANY");
-
-const OP_OPTIONS = [
-  { value: "and", label: "ALL" },
-  { value: "or", label: "ANY" },
-];
+/** The and/or connector shown between two condition rows. */
+function OpConnector({
+  op,
+  onSetOp,
+}: {
+  op: "and" | "or";
+  onSetOp?: ((op: "and" | "or") => void) | undefined;
+}) {
+  const label = op === "and" ? "and" : "or";
+  if (!onSetOp) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-faint">
+          {label}
+        </span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 px-3 py-1">
+      <span className="h-px flex-1 bg-border" />
+      <button
+        type="button"
+        onClick={() => onSetOp(op === "and" ? "or" : "and")}
+        title={op === "and" ? "Both must hold — tap for ANY" : "Either can hold — tap for ALL"}
+        className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted transition-colors hover:border-brand/50 hover:text-fg"
+      >
+        {label}
+      </button>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
 
 export function WatchMarketCard({
   doc,
@@ -48,6 +78,9 @@ export function WatchMarketCard({
   chartHeight = 150,
   edit,
   highlightIds,
+  isTarget = false,
+  selected = false,
+  onSelect,
 }: {
   doc: StrategyDoc;
   card: WatchCard;
@@ -57,6 +90,12 @@ export function WatchMarketCard({
   chartHeight?: number;
   edit?: WatchCardEdit | undefined;
   highlightIds?: Set<string> | undefined;
+  /** This market is also the order's target — shown on both sides. */
+  isTarget?: boolean;
+  /** Canvas selection landed on this card. */
+  selected?: boolean;
+  /** Selects this card's canvas node (header click only, so rows stay clickable). */
+  onSelect?: (() => void) | undefined;
 }) {
   const tokenId = card.market?.tokenId ?? null;
   const history = useTokenPricesHistory(tokenId, range);
@@ -65,32 +104,21 @@ export function WatchMarketCard({
   const baselines = cardBaselines(card);
   const firstT = series.length > 0 ? series[0]!.t : 0;
   const visibleMarkers = markers.filter((m) => m.t >= firstT);
-
-  const opControl =
-    card.rows.length > 1 ? (
-      edit ? (
-        <Segmented
-          options={OP_OPTIONS}
-          value={card.op}
-          onChange={(v) => edit.onSetOp(v as "and" | "or")}
-          size="sm"
-        />
-      ) : (
-        <Badge tone="neutral">{opLabel(card.op)}</Badge>
-      )
-    ) : null;
+  const ring = selected ? "ring-1 ring-brand/50" : undefined;
 
   const rows = (
-    <div className="divide-y divide-border">
-      {card.rows.map((row) => (
-        <ConditionRow
-          key={row.nodeId}
-          doc={doc}
-          row={row}
-          result={results.get(row.nodeId)}
-          onClick={edit ? () => edit.onEditRow(row.nodeId) : undefined}
-          highlight={highlightIds?.has(row.nodeId) ?? false}
-        />
+    <div>
+      {card.rows.map((row, i) => (
+        <div key={row.nodeId}>
+          {i > 0 ? <OpConnector op={card.op} onSetOp={edit?.onSetOp} /> : null}
+          <ConditionRow
+            doc={doc}
+            row={row}
+            result={results.get(row.nodeId)}
+            onClick={edit ? () => edit.onEditRow(row.nodeId) : undefined}
+            highlight={highlightIds?.has(row.nodeId) ?? false}
+          />
+        </div>
       ))}
       {card.rows.length === 0 && !edit ? (
         <div className="px-3 py-2.5 text-[12px] text-muted">No conditions on this market yet.</div>
@@ -99,7 +127,10 @@ export function WatchMarketCard({
         <button
           type="button"
           onClick={edit.onAddCondition}
-          className="flex w-full items-center gap-1.5 px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          className={cn(
+            "flex w-full items-center gap-1.5 px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg",
+            card.rows.length > 0 && "border-t border-border",
+          )}
         >
           <Plus size={12} aria-hidden /> Add condition
         </button>
@@ -110,8 +141,8 @@ export function WatchMarketCard({
   // Market-less pseudo-cards (time window / unbound placeholder).
   if (tokenId === null) {
     return (
-      <Card>
-        <CardHeader right={opControl ?? undefined}>
+      <Card className={ring}>
+        <CardHeader>
           <span className="inline-flex items-center gap-1.5">
             {card.key === "time" ? <Clock size={12} aria-hidden /> : null}
             {card.key === "time" ? "Schedule" : "Pick a market"}
@@ -123,14 +154,19 @@ export function WatchMarketCard({
   }
 
   return (
-    <Card>
+    <Card className={ring}>
       <CardHeader
         right={
           <span className="flex items-center gap-2">
+            {isTarget ? (
+              <Badge tone="brand" title="This is also the market the order trades">
+                <Target size={9} className="mr-0.5 inline" aria-hidden />
+                also traded
+              </Badge>
+            ) : null}
             {last !== null ? (
               <span className="tabular text-[12px] text-muted">{cents(last)}</span>
             ) : null}
-            {opControl}
             {edit?.onRemove ? (
               <button
                 type="button"
@@ -143,6 +179,8 @@ export function WatchMarketCard({
             ) : null}
           </span>
         }
+        className={onSelect ? "cursor-pointer" : undefined}
+        {...(onSelect ? { onClick: onSelect } : {})}
       >
         {card.market ? marketLabel(doc, card.market) : "Market"}
       </CardHeader>

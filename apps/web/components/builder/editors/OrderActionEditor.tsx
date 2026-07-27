@@ -9,17 +9,19 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { OrderActionV2 } from "@mx2/rules";
+import { GTD_MAX_EXPIRES_AFTER_MS, GTD_MIN_EXPIRES_AFTER_MS } from "@mx2/rules";
 import { Segmented } from "@/components/ui";
 import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
+import { DurationField } from "./DurationField";
 import { OrderCostPreview } from "./OrderCostPreview";
 
-const ENTRY_WINDOW_OPTIONS = [
-  { value: "180000", label: "3m" },
-  { value: "300000", label: "5m" },
-  { value: "900000", label: "15m" },
-  { value: "3600000", label: "1h" },
+const ENTRY_WINDOW_PRESETS = [
+  { value: 180_000, label: "3m" },
+  { value: 300_000, label: "5m" },
+  { value: 900_000, label: "15m" },
+  { value: 3_600_000, label: "1h" },
 ];
 
 const STYLE_HINTS: Record<OrderActionV2["orderType"], string> = {
@@ -231,15 +233,14 @@ export function OrderActionEditor({ action: a }: { action: OrderActionV2 }) {
 
           {a.orderType === "GTD" ? (
             <Field label="Entry window (after trigger)">
-              <div className="nodrag">
-                <Segmented
-                  options={ENTRY_WINDOW_OPTIONS}
-                  value={String(a.expiresAfterMs ?? 300_000)}
-                  onChange={(v) => setAction({ ...a, expiresAfterMs: Number(v) })}
-                  size="md"
-                  grow
-                />
-              </div>
+              <DurationField
+                value={a.expiresAfterMs ?? 300_000}
+                onChange={(ms) => setAction({ ...a, expiresAfterMs: ms })}
+                presets={ENTRY_WINDOW_PRESETS}
+                units={["minutes", "hours"]}
+                min={GTD_MIN_EXPIRES_AFTER_MS}
+                max={GTD_MAX_EXPIRES_AFTER_MS}
+              />
             </Field>
           ) : null}
 

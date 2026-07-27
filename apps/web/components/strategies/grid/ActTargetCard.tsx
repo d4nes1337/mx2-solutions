@@ -2,62 +2,55 @@
 
 /**
  * The ACT zone: what fires when the conditions hold. For order actions this
- * is the target market's chart with the entry price drawn, a dollars-first
+ * is the target market's chart with the entry price drawn and a dollars-first
  * order summary (cost → payoff if right, fees included — "100 shares @ 57¢"
- * is a math quiz; "$57" is an answer), the execution-mode badge, and any
- * guard conditions bound to the target market itself.
+ * is a math quiz; "$57" is an answer), plus the execution-mode badge.
+ *
+ * Conditions never live here: they are the IF side and always render in the
+ * WATCH zone, including conditions on this same market (the "watch X → trade
+ * X" shape shows the market on both sides, which is what it actually is).
+ *
+ * One strategy = one action (StrategyDefinition.action is a single ActionV2,
+ * and the whole trigger→sign→submit path is one order per trigger). Trading
+ * several markets off one set of conditions is therefore several strategies;
+ * the card says so and offers the duplicate path instead of pretending.
  */
 import Link from "next/link";
-import { Pencil, Plus } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Segmented, Skeleton } from "@/components/ui";
+import { Copy, Pencil } from "lucide-react";
+import { Badge, Button, Card, CardHeader, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
-import { isBound, marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
+import { marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
 import { cents } from "@/lib/strategies/summaries";
 import { computePayoff } from "@/lib/strategies/projection";
-import type { ConditionLiveResult, GridRow } from "@/lib/strategies/grid-projection";
 import type { OrderActionV2 } from "@mx2/rules";
-import { ConditionRow } from "./ConditionRow";
 
 export interface ActCardEdit {
   /** Opens the shared action editor (kind switch + order params). */
   onEditAction: () => void;
-  /** Adds a condition bound to the target market (a guard row). */
-  onAddGuard: () => void;
-  onEditRow: (nodeId: string) => void;
-  onSetGuardsOp: (op: "and" | "or") => void;
+  /** Clones this strategy so another market can be traded on the same logic. */
+  onDuplicateForMarket?: (() => void) | undefined;
 }
 
 const usd2 = (n: number): string =>
   `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const OP_OPTIONS = [
-  { value: "and", label: "ALL" },
-  { value: "or", label: "ANY" },
-];
-
 function OrderTarget({
   doc,
   action,
-  guards,
-  guardsOp,
-  results,
   range,
   markers,
   chartHeight,
   edit,
-  highlightIds,
+  selected,
 }: {
   doc: StrategyDoc;
   action: OrderActionV2;
-  guards: GridRow[];
-  guardsOp: "and" | "or";
-  results: Map<string, ConditionLiveResult>;
   range: string;
   markers: { t: number; label?: string }[];
   chartHeight: number;
   edit?: ActCardEdit | undefined;
-  highlightIds?: Set<string> | undefined;
+  selected?: boolean;
 }) {
   const tokenId = action.market.tokenId || null;
   const history = useTokenPricesHistory(tokenId, range);
@@ -77,17 +70,12 @@ function OrderTarget({
     feeSchedule: economics.data?.feeSchedule ?? null,
   });
 
-  const baselines = [
-    { value: action.price, label: `entry ${cents(action.price)}` },
-    ...guards.flatMap(({ condition: c }) =>
-      c.kind === "price" ? [{ value: c.threshold, label: cents(c.threshold) }] : [],
-    ),
-  ];
+  const baselines = [{ value: action.price, label: `entry ${cents(action.price)}` }];
   const firstT = series.length > 0 ? series[0]!.t : 0;
   const visibleMarkers = markers.filter((m) => m.t >= firstT);
 
   return (
-    <Card>
+    <Card className={selected ? "ring-1 ring-brand/50" : undefined}>
       <CardHeader
         right={
           action.execution === "auto" ? (
@@ -97,7 +85,7 @@ function OrderTarget({
           )
         }
       >
-        <span className="text-faint">Target · </span>
+        <span className="text-faint">Trade · </span>
         {marketLabel(doc, action.market)}
       </CardHeader>
       {history.isLoading ? (
@@ -139,46 +127,19 @@ function OrderTarget({
           ) : null}
         </div>
       </div>
-      {guards.length > 0 || edit ? (
-        <div className="border-t border-border">
-          <div className="flex items-center justify-between px-3 pb-0.5 pt-2">
-            <span className="text-micro font-semibold uppercase tracking-wider text-faint">
-              Only if
-            </span>
-            {guards.length > 1 ? (
-              edit ? (
-                <Segmented
-                  options={OP_OPTIONS}
-                  value={guardsOp}
-                  onChange={(v) => edit.onSetGuardsOp(v as "and" | "or")}
-                  size="sm"
-                />
-              ) : (
-                <Badge tone="neutral">{guardsOp === "and" ? "ALL" : "ANY"}</Badge>
-              )
-            ) : null}
-          </div>
-          <div className="divide-y divide-border">
-            {guards.map((row) => (
-              <ConditionRow
-                key={row.nodeId}
-                doc={doc}
-                row={row}
-                result={results.get(row.nodeId)}
-                onClick={edit ? () => edit.onEditRow(row.nodeId) : undefined}
-                highlight={highlightIds?.has(row.nodeId) ?? false}
-              />
-            ))}
-            {edit && isBound(action.market) ? (
-              <button
-                type="button"
-                onClick={edit.onAddGuard}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-              >
-                <Plus size={12} aria-hidden /> Add guard on the target
-              </button>
-            ) : null}
-          </div>
+      {edit?.onDuplicateForMarket ? (
+        <div className="border-t border-border px-3 py-2">
+          <button
+            type="button"
+            onClick={edit.onDuplicateForMarket}
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-accent transition-colors hover:underline"
+          >
+            <Copy size={12} aria-hidden /> Trade another market on these conditions
+          </button>
+          <p className="mt-0.5 text-[11px] leading-snug text-faint">
+            One strategy places one order. This copies the conditions into a new strategy so you can
+            point it at a different market — each keeps its own spend caps.
+          </p>
         </div>
       ) : null}
     </Card>
@@ -187,24 +148,19 @@ function OrderTarget({
 
 export function ActTargetCard({
   doc,
-  guards,
-  guardsOp,
-  results,
   range,
   markers,
   chartHeight = 210,
   edit,
-  highlightIds,
+  selected,
 }: {
   doc: StrategyDoc;
-  guards: GridRow[];
-  guardsOp: "and" | "or";
-  results: Map<string, ConditionLiveResult>;
   range: string;
   markers: { t: number; label?: string }[];
   chartHeight?: number;
   edit?: ActCardEdit | undefined;
-  highlightIds?: Set<string> | undefined;
+  /** Canvas selection landed on the action node. */
+  selected?: boolean;
 }) {
   const action = doc.action;
   const editButton = edit ? (
@@ -212,27 +168,26 @@ export function ActTargetCard({
       <Pencil size={11} aria-hidden /> Edit action
     </Button>
   ) : null;
+  const ring = selected ? "ring-1 ring-brand/50" : undefined;
+
   if (action.kind === "order") {
     return (
       <OrderTarget
         doc={doc}
         action={action}
-        guards={guards}
-        guardsOp={guardsOp}
-        results={results}
         range={range}
         markers={markers}
         chartHeight={chartHeight}
         edit={edit}
-        highlightIds={highlightIds}
+        selected={selected}
       />
     );
   }
   if (action.kind === "alert") {
     return (
-      <Card>
-        <CardHeader right={editButton ?? undefined}>Alert</CardHeader>
-        <p className="px-3 pb-3 text-[13px] text-muted">
+      <Card className={ring}>
+        <CardHeader right={editButton ?? undefined}>Alert me</CardHeader>
+        <p className="px-3 pb-3 pt-2 text-[13px] text-muted">
           You&apos;ll be notified when the conditions hold — no order is placed.
           {edit ? " Want it to trade instead? Edit the action." : ""}
         </p>
@@ -241,9 +196,9 @@ export function ActTargetCard({
   }
   if (action.kind === "stop_strategy") {
     return (
-      <Card>
+      <Card className={ring}>
         <CardHeader right={editButton ?? undefined}>Stop a strategy</CardHeader>
-        <p className="px-3 pb-3 text-[13px] text-muted">
+        <p className="px-3 pb-3 pt-2 text-[13px] text-muted">
           Stops{" "}
           <Link
             href={`/strategies/${action.targetStrategyId}`}
@@ -257,9 +212,9 @@ export function ActTargetCard({
     );
   }
   return (
-    <Card>
+    <Card className={ring}>
       <CardHeader right={editButton ?? undefined}>Maker loop</CardHeader>
-      <p className="px-3 pb-3 text-[13px] text-muted">
+      <p className="px-3 pb-3 pt-2 text-[13px] text-muted">
         Rests delta-neutral quotes while the conditions hold.
         {edit ? "" : " This action is managed on the canvas."}
       </p>

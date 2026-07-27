@@ -30,13 +30,17 @@ export function CardHeader({
   children,
   className,
   right,
+  onClick,
 }: {
   children: ReactNode;
   className?: string;
   right?: ReactNode;
+  /** Makes the header bar itself a click target (e.g. select this card). */
+  onClick?: () => void;
 }) {
   return (
     <div
+      onClick={onClick}
       className={cn(
         "flex items-center justify-between gap-2 border-b border-border px-4 py-3",
         className,

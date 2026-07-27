@@ -44,12 +44,17 @@ export interface ComplexGroup {
 
 export interface GridProjection {
   rootOp: "and" | "or";
+  /**
+   * Every market carrying conditions, INCLUDING the order's target market.
+   * Conditions are the IF side by definition, so they always live here — an
+   * earlier version moved target-market conditions into the ACT card, which
+   * made the most common strategy shape ("watch X → trade X") vanish from the
+   * WATCH zone entirely.
+   */
   watch: WatchCard[];
-  /** Conditions bound to the order's target market — shown in the ACT zone. */
-  guards: GridRow[];
-  guardsOp: "and" | "or";
-  guardsOpNodeId: string | null;
   complex: ComplexGroup[];
+  /** The order's target token, when bound — the ACT card's market. */
+  targetTokenId: string | null;
 }
 
 const TIME_KEY = "time";
@@ -151,12 +156,14 @@ export const docToGrid = (doc: StrategyDoc): GridProjection => {
     });
   }
 
-  // Pass 3 — editor-only watched markets nothing references yet.
+  // Pass 3 — editor-only watched markets nothing references yet. The target
+  // market is no longer skipped: when the user explicitly watches the market
+  // they also trade, that card belongs in the WATCH zone. It is not added
+  // implicitly, so a target with no conditions stays out of the IF side.
   const targetTokenId =
     doc.action.kind === "order" && isBound(doc.action.market) ? doc.action.market.tokenId : null;
   for (const ref of doc.watchedMarkets) {
     if (!isBound(ref)) continue;
-    if (ref.tokenId === targetTokenId) continue;
     if (cards.some((c) => c.key === ref.tokenId)) continue;
     cards.push({
       key: ref.tokenId,
@@ -168,26 +175,35 @@ export const docToGrid = (doc: StrategyDoc): GridProjection => {
     });
   }
 
-  // Pass 4 — the target market's card becomes the ACT-zone guard list.
-  let guards: GridRow[] = [];
-  let guardsOp: "and" | "or" = rootOp;
-  let guardsOpNodeId: string | null = null;
-  if (targetTokenId !== null) {
-    const idx = cards.findIndex((c) => c.key === targetTokenId);
-    if (idx >= 0) {
-      const card = cards[idx]!;
-      guards = card.rows;
-      guardsOp = card.op;
-      guardsOpNodeId = card.opNodeId;
-      cards.splice(idx, 1);
-    }
-  }
-
-  return { rootOp, watch: cards, guards, guardsOp, guardsOpNodeId, complex };
+  return { rootOp, watch: cards, complex, targetTokenId };
 };
 
 /** True when the doc contains logic the grid cannot edit (canvas required). */
 export const isComplexDoc = (doc: StrategyDoc): boolean => docToGrid(doc).complex.length > 0;
+
+/**
+ * Which grid element a canvas selection maps to, so clicking a node in the
+ * canvas strip highlights the matching card. Canvas node ids are either a
+ * condition node id, `market:<tokenId>`, "action", or "root".
+ */
+export const selectionTarget = (
+  projection: GridProjection,
+  selectedNodeId: string | null,
+): { cardKey: string | null; action: boolean } => {
+  if (!selectedNodeId) return { cardKey: null, action: false };
+  if (selectedNodeId === "action") return { cardKey: null, action: true };
+  if (selectedNodeId.startsWith("market:")) {
+    const tokenId = selectedNodeId.slice("market:".length);
+    const card = projection.watch.find((c) => c.key === tokenId);
+    return {
+      cardKey: card?.key ?? null,
+      // A market node that is only the order target highlights the ACT card.
+      action: !card && projection.targetTokenId === tokenId,
+    };
+  }
+  const owning = projection.watch.find((c) => c.rows.some((r) => r.nodeId === selectedNodeId));
+  return { cardKey: owning?.key ?? null, action: false };
+};
 
 export interface ConditionLiveResult {
   satisfied: boolean;

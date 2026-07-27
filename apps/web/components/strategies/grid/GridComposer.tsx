@@ -8,8 +8,8 @@
  * "Undo AI edit" chip rendered beside the bar.
  */
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Undo2, X } from "lucide-react";
-import { SheetShell } from "@/components/motion/primitives";
+import { Sparkles, Undo2 } from "lucide-react";
+import { SheetPanel } from "@/components/ui/SheetPanel";
 import { AiPanel } from "@/components/builder/AiPanel";
 import { useBuilderStore } from "@/lib/strategies/store";
 
@@ -100,19 +100,17 @@ export function GridComposer({
         </form>
       </div>
 
-      <SheetShell open={open} onClose={close} label="AI strategy chat">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h3 className="text-[13px] font-semibold text-fg">arima AI</h3>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={close}
-            className="text-muted transition-colors hover:text-fg"
-          >
-            <X size={16} aria-hidden />
-          </button>
-        </div>
-        <div className="h-[70vh] p-3">
+      <SheetPanel
+        open={open}
+        onClose={close}
+        title="arima AI"
+        description="Describe a change and the grid updates — every edit is undoable."
+        size="xl"
+        flushBody
+        bodyClassName="p-3"
+      >
+        {/* The panel owns its own scrolling chat log, so it fills the body. */}
+        <div className="h-[min(64svh,560px)]">
           {open ? (
             <AiPanel
               initialPrompt={pending}
@@ -120,7 +118,7 @@ export function GridComposer({
             />
           ) : null}
         </div>
-      </SheetShell>
+      </SheetPanel>
     </>
   );
 }

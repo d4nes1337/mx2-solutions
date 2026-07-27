@@ -20,7 +20,13 @@ import {
   useShowcases,
 } from "@/lib/queries";
 import { signedUsd } from "@/lib/format";
-import { conditionLeavesOf, docFromDefinition, docMarketRefs } from "@/lib/strategies/doc";
+import {
+  UNBOUND,
+  conditionLeavesOf,
+  docFromDefinition,
+  docMarketRefs,
+  type StrategyDoc,
+} from "@/lib/strategies/doc";
 import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/strategies/drafts";
 import { saveLimitPrefs } from "@/lib/strategies/limit-prefs";
 import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/strategies/drafts-sync";
@@ -37,29 +43,19 @@ import {
 } from "@/lib/strategies/queries";
 import { TEMPLATES, templateById } from "@/lib/strategies/templates";
 import {
-  loadBuilderView,
-  saveBuilderView,
-  DEFAULT_BUILDER_VIEW,
-  type BuilderView,
+  loadCanvasHeight,
+  saveCanvasHeight,
+  DEFAULT_CANVAS_HEIGHT,
+  type CanvasHeight,
 } from "@/lib/strategies/builder-view";
 import { isComplexDoc } from "@/lib/strategies/grid-projection";
-import { usePanelWidth } from "@/lib/use-panel-width";
 import { BuilderTour } from "@/components/onboarding/tours";
 import { StrategyGrid } from "@/components/strategies/grid/StrategyGrid";
 import { GridComposer } from "@/components/strategies/grid/GridComposer";
+import { CanvasStrip } from "@/components/strategies/grid/CanvasStrip";
 import { ArmSheet } from "@/components/strategies/ArmSheet";
-import { AddPalette } from "./AddPalette";
-import { CanvasToolbar } from "./CanvasToolbar";
 import { DraftSwitcher } from "./DraftSwitcher";
-import { CANVAS_HEIGHT_CLASS } from "./layout-constants";
-import { PanelResizeHandle } from "./PanelResizeHandle";
 import { SentenceBar } from "./SentenceBar";
-import { WorkspacePanel } from "./WorkspacePanel";
-
-const BuilderCanvas = dynamic(() => import("./BuilderCanvas"), {
-  ssr: false,
-  loading: () => <Skeleton className="h-full w-full rounded-xl" />,
-});
 
 /**
  * Parse ?pinned= — comma-separated `conditionId~encodedTitle` entries, capped
@@ -158,22 +154,22 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const initializedRef = useRef(false);
   const routerRef = useRef(router);
   routerRef.current = router;
-  const panel = usePanelWidth();
 
-  // Grid ⇄ Canvas projection toggle. Persisted per device; loaded after mount
-  // so SSR/hydration always render the default.
-  const [view, setViewState] = useState<BuilderView>(DEFAULT_BUILDER_VIEW);
-  const firstViewRef = useRef<BuilderView>(DEFAULT_BUILDER_VIEW);
-  const viewSettledRef = useRef(false);
-  useEffect(() => {
-    const v = loadBuilderView();
-    firstViewRef.current = v;
-    viewSettledRef.current = true;
-    setViewState(v);
-  }, []);
-  const setView = (v: BuilderView) => {
-    setViewState(v);
-    saveBuilderView(v);
+  // The canvas is always on screen under the grid; this only remembers how
+  // tall the user keeps it. Loaded after mount so SSR matches the default.
+  const [canvasHeight, setCanvasHeightState] = useState<CanvasHeight>(DEFAULT_CANVAS_HEIGHT);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => setCanvasHeightState(loadCanvasHeight()), []);
+  const setCanvasHeight = (h: CanvasHeight) => {
+    setCanvasHeightState(h);
+    saveCanvasHeight(h);
+  };
+  /** Expand the strip and bring it into view (complex-logic escape hatch). */
+  const openCanvas = () => {
+    setCanvasHeight("tall");
+    requestAnimationFrame(() =>
+      canvasRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" }),
+    );
   };
   useDraftAutosave();
   // Pull the account's drafts into localStorage once per mount (fail-soft when
@@ -202,12 +198,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   }));
 
   const flags = useFeatureFlags();
-  // The deep-linked AI prompt is consumed by whichever view is active first;
-  // switching views afterwards must not re-fire it (AiPanel remounts).
-  const [aiPrompt, setAiPrompt] = useState(entry.prompt);
-  useEffect(() => {
-    if (viewSettledRef.current && view !== firstViewRef.current) setAiPrompt(null);
-  }, [view]);
+  const aiPrompt = entry.prompt;
   const initialPinned = useMemo(() => parsePinnedParam(entry.pinned), [entry.pinned]);
   const showcaseId = entry.showcase;
   const showcases = useShowcases(Boolean(showcaseId));
@@ -435,6 +426,26 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // The consumed draft is tombstoned (linked to the created strategy) and the
   // canvas moves to a fresh blank draft, so returning to the builder doesn't
   // resurrect already-armed work.
+  /**
+   * A strategy places exactly ONE order (StrategyDefinition.action is a single
+   * ActionV2 and the trigger→sign→submit path is one order per trigger), so
+   * "trade a second market on these conditions" is a second strategy. This
+   * forks the current doc into a fresh draft with the same conditions and an
+   * unbound target, which is the honest, engine-shaped way to express it.
+   */
+  const duplicateForMarket = () => {
+    const source = useBuilderStore.getState().doc;
+    if (source.action.kind !== "order") return;
+    const next: StrategyDoc = {
+      ...source,
+      name: source.name ? `${source.name} (2nd market)` : "",
+      action: { ...source.action, market: UNBOUND },
+      selectedNodeId: "action",
+    };
+    const id = spawnDraft(next, { origin: "duplicate" });
+    if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
+  };
+
   // Arm flow: the save button opens the activation sheet (execution mode +
   // notifications + recurrence live there); the sheet's Arm button runs this
   // mutation — the create/supersede path itself is unchanged.
@@ -540,15 +551,6 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           aria-label="Strategy name"
         />
         <div className="no-scrollbar flex min-w-0 max-w-full items-center gap-2 overflow-x-auto">
-          <Segmented
-            options={[
-              { value: "grid", label: "Grid" },
-              { value: "canvas", label: "Canvas" },
-            ]}
-            value={view}
-            onChange={(v) => setView(v as BuilderView)}
-            size="sm"
-          />
           <DraftSwitcher
             onOpenDraft={(id) => {
               if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
@@ -586,72 +588,47 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         projection={projection}
       />
 
-      {view === "grid" ? (
-        <>
-          {isComplexDoc(doc) ? (
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3.5 py-2 text-[12px] text-warn">
-              <span>
-                Part of this strategy uses grouped logic the grid shows read-only — review it on the
-                canvas.
-              </span>
-              <button
-                type="button"
-                onClick={() => setView("canvas")}
-                className="shrink-0 font-semibold text-warn underline-offset-2 hover:underline"
-              >
-                Open canvas
-              </button>
-            </div>
-          ) : null}
-          <StrategyGrid
-            doc={doc}
-            edit
-            evaluation={evaluation.data}
-            onOpenCanvas={() => setView("canvas")}
-            actFooter={
-              <div className="space-y-3">
-                {checklist}
-                {saveFooter}
-              </div>
-            }
-          />
-          {flags.data?.aiChat ? (
-            <GridComposer initialPrompt={aiPrompt} initialPinned={initialPinned} />
-          ) : null}
-        </>
-      ) : (
-        <div
-          className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_var(--panel-w)] lg:gap-1"
-          style={{ ["--panel-w" as string]: `${panel.width}px` }}
-        >
-          <div className="min-w-0 space-y-2">
-            <CanvasToolbar />
-            {/* Clip the desktop-first canvas viewport so React Flow nodes pan
-                INSIDE it instead of scrolling the whole page on mobile (§8.1.3). */}
-            <div className={cn("relative overflow-hidden", CANVAS_HEIGHT_CLASS)}>
-              <BuilderCanvas evaluation={evaluation.data} issues={issues} />
-              <AddPalette />
-            </div>
-            {checklist}
-          </div>
-
-          <PanelResizeHandle
-            width={panel.width}
-            dragging={panel.dragging}
-            onPointerDown={panel.startDrag}
-            onKeyDown={panel.onKeyDown}
-            className="hidden lg:block"
-          />
-
-          <WorkspacePanel
-            evaluation={evaluation.data}
-            aiChatEnabled={Boolean(flags.data?.aiChat)}
-            aiPrompt={aiPrompt}
-            aiPinned={initialPinned}
-            footer={saveFooter}
-          />
+      {isComplexDoc(doc) ? (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3.5 py-2 text-[12px] text-warn">
+          <span>
+            Part of this strategy uses grouped logic the grid shows read-only — rewire it on the
+            canvas below.
+          </span>
+          <button
+            type="button"
+            onClick={openCanvas}
+            className="shrink-0 font-semibold text-warn underline-offset-2 hover:underline"
+          >
+            Show me
+          </button>
         </div>
-      )}
+      ) : null}
+
+      <StrategyGrid
+        doc={doc}
+        edit
+        evaluation={evaluation.data}
+        onOpenCanvas={openCanvas}
+        onDuplicateForMarket={duplicateForMarket}
+        actFooter={
+          <div className="space-y-3">
+            {checklist}
+            {saveFooter}
+          </div>
+        }
+      />
+
+      <CanvasStrip
+        ref={canvasRef}
+        height={canvasHeight}
+        onHeightChange={setCanvasHeight}
+        evaluation={evaluation.data}
+        issues={issues}
+      />
+
+      {flags.data?.aiChat ? (
+        <GridComposer initialPrompt={aiPrompt} initialPinned={initialPinned} />
+      ) : null}
 
       <ArmSheet
         open={armOpen}

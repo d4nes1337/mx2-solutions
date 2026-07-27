@@ -12,9 +12,9 @@
  */
 import { useEffect } from "react";
 import Link from "next/link";
-import { ShieldCheck, Sparkles, X } from "lucide-react";
+import { ShieldCheck, Sparkles } from "lucide-react";
 import { Button, Segmented } from "@/components/ui";
-import { SheetShell } from "@/components/motion/primitives";
+import { SheetPanel } from "@/components/ui/SheetPanel";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { strategySentence } from "@/lib/strategies/sentence";
 import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
@@ -93,21 +93,31 @@ export function ArmSheet({
     }
   };
 
-  return (
-    <SheetShell open={open} onClose={onClose} label="Arm this strategy">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h3 className="text-[14px] font-semibold text-fg">Arm this strategy</h3>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className="text-muted transition-colors hover:text-fg"
-        >
-          <X size={16} aria-hidden />
-        </button>
-      </div>
+  const armFooter = (
+    <div className="space-y-2">
+      <Button className="w-full" disabled={arming} onClick={onArm}>
+        <Sparkles size={14} aria-hidden />
+        {arming ? "Arming…" : "Arm — start watching"}
+      </Button>
+      <p className="flex items-center gap-1.5 text-[11px] leading-snug text-muted">
+        <ShieldCheck size={12} className="shrink-0 text-pos" aria-hidden />
+        {auto
+          ? "Auto trades only within the caps you set — everything else waits for your signature."
+          : "Nothing trades without your signature. Arming just starts watching — nothing is bought until you approve it."}
+      </p>
+      {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
+    </div>
+  );
 
-      <div className="max-h-[70vh] space-y-4 overflow-y-auto p-4">
+  return (
+    <SheetPanel
+      open={open}
+      onClose={onClose}
+      title="Arm this strategy"
+      footer={armFooter}
+      bodyClassName="space-y-4"
+    >
+      <div className="space-y-4">
         <p className="text-[12px] leading-relaxed text-muted">{strategySentence(doc)}</p>
 
         {order ? (
@@ -214,20 +224,6 @@ export function ArmSheet({
           <NotificationControls />
         </div>
       </div>
-
-      <div className="space-y-2 border-t border-border px-4 py-3">
-        <Button className="w-full" disabled={arming} onClick={onArm}>
-          <Sparkles size={14} aria-hidden />
-          {arming ? "Arming…" : "Arm — start watching"}
-        </Button>
-        <p className="flex items-center gap-1.5 text-[11px] leading-snug text-muted">
-          <ShieldCheck size={12} className="shrink-0 text-pos" aria-hidden />
-          {auto
-            ? "Auto trades only within the caps you set — everything else waits for your signature."
-            : "Nothing trades without your signature. Arming just starts watching — nothing is bought until you approve it."}
-        </p>
-        {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
-      </div>
-    </SheetShell>
+    </SheetPanel>
   );
 }

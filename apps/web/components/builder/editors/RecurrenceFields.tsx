@@ -3,11 +3,20 @@
 /**
  * Recurrence + expiry controls, store-bound — shared by the Settings tab and
  * the arm-time activation sheet so both surfaces edit the same fields with
- * the same words.
+ * the same words. Every duration offers presets AND a custom value: presets
+ * are a shortcut, never a cage.
  */
 import { Segmented } from "@/components/ui";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, NumberInput } from "./fields";
+import { DurationField } from "./DurationField";
+
+const COOLDOWN_PRESETS = [
+  { value: 0, label: "none" },
+  { value: 300_000, label: "5m" },
+  { value: 600_000, label: "10m" },
+  { value: 3_600_000, label: "1h" },
+];
 
 export function RecurrenceFields() {
   const doc = useBuilderStore((s) => s.doc);
@@ -33,7 +42,7 @@ export function RecurrenceFields() {
         />
       </Field>
       {doc.recurrence.kind === "repeat" ? (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-2">
           <Field label="Max repeats">
             <NumberInput
               value={doc.recurrence.maxRepeats}
@@ -50,21 +59,19 @@ export function RecurrenceFields() {
               max={100}
             />
           </Field>
-          <Field label="Cooldown">
-            <NumberInput
-              value={Math.round(
-                (doc.recurrence.kind === "repeat" ? doc.recurrence.cooldownMs : 0) / 60_000,
-              )}
-              onChange={(v) =>
+          <Field label="Cooldown between triggers">
+            <DurationField
+              value={doc.recurrence.kind === "repeat" ? doc.recurrence.cooldownMs : 600_000}
+              onChange={(ms) =>
                 setRecurrence({
                   kind: "repeat",
                   maxRepeats: doc.recurrence.kind === "repeat" ? doc.recurrence.maxRepeats : 5,
-                  cooldownMs: Math.max(0, Math.round(v)) * 60_000,
+                  cooldownMs: ms,
                 })
               }
-              suffix="min"
-              min={0}
-              max={1440}
+              presets={COOLDOWN_PRESETS}
+              units={["seconds", "minutes", "hours"]}
+              max={86_400_000}
             />
           </Field>
         </div>
@@ -75,28 +82,53 @@ export function RecurrenceFields() {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Coarse "stop watching after" control; exact timestamps stay canvas/API turf. */
+const EXPIRY_PRESETS = [
+  { value: 1 * DAY_MS, label: "1 day" },
+  { value: 7 * DAY_MS, label: "1 week" },
+  { value: 30 * DAY_MS, label: "30 days" },
+];
+
+/**
+ * "Stop watching after" — a RELATIVE window the user picks, stored as an
+ * absolute timestamp. "Never" is a distinct state (null), so it sits outside
+ * the duration control rather than pretending to be a zero duration.
+ */
 export function ExpiryField() {
   const doc = useBuilderStore((s) => s.doc);
   const setExpiresAt = useBuilderStore((s) => s.setExpiresAt);
-  const remainingDays = doc.expiresAtMs === null ? null : (doc.expiresAtMs - Date.now()) / DAY_MS;
-  // Snap the stored timestamp back onto the nearest option for display.
-  const value =
-    remainingDays === null ? "never" : remainingDays <= 2 ? "1" : remainingDays <= 10 ? "7" : "30";
+  const never = doc.expiresAtMs === null;
+  // Remaining time, rounded to whole minutes so a stored timestamp still
+  // matches the preset it was created from instead of drifting to Custom.
+  const remainingMs = never
+    ? 7 * DAY_MS
+    : Math.max(60_000, Math.round((doc.expiresAtMs! - Date.now()) / 60_000) * 60_000);
+  const snapped = EXPIRY_PRESETS.find((p) => Math.abs(p.value - remainingMs) < 60_000);
+
   return (
     <Field label="Stop watching after">
-      <Segmented
-        options={[
-          { value: "never", label: "never" },
-          { value: "1", label: "1 day" },
-          { value: "7", label: "1 week" },
-          { value: "30", label: "30 days" },
-        ]}
-        value={value}
-        onChange={(v) => setExpiresAt(v === "never" ? null : Date.now() + Number(v) * DAY_MS)}
-        size="md"
-        grow
-      />
+      <div className="space-y-1.5">
+        <Segmented
+          options={[
+            { value: "never", label: "Never expires" },
+            { value: "after", label: "After a while" },
+          ]}
+          value={never ? "never" : "after"}
+          onChange={(v) =>
+            setExpiresAt(v === "never" ? null : Date.now() + (snapped?.value ?? 7 * DAY_MS))
+          }
+          size="md"
+          grow
+        />
+        {never ? null : (
+          <DurationField
+            value={snapped?.value ?? remainingMs}
+            onChange={(ms) => setExpiresAt(Date.now() + ms)}
+            presets={EXPIRY_PRESETS}
+            units={["hours", "days"]}
+            max={365 * DAY_MS}
+          />
+        )}
+      </div>
     </Field>
   );
 }

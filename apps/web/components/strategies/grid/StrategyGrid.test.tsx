@@ -150,7 +150,7 @@ afterEach(() => {
 });
 
 describe("StrategyGrid (view mode)", () => {
-  it("renders WATCH cards, the IF spine, the dollars-first ACT card, guards and complex logic", async () => {
+  it("renders WATCH cards, the IF header, the dollars-first ACT card and complex logic", async () => {
     mockApis();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -159,36 +159,43 @@ describe("StrategyGrid (view mode)", () => {
       </QueryClientProvider>,
     );
 
-    // WATCH zone: both watched markets, per-card op for the grouped one.
+    // WATCH zone: both watched markets AND the traded market (bug: the target
+    // used to be spliced out of the IF side entirely).
     expect(screen.getByText("Fed cuts in March")).toBeInTheDocument();
     expect(screen.getByText("BTC above 100k")).toBeInTheDocument();
-    expect(screen.getByText("ALL")).toBeInTheDocument();
+    // The traded market appears on BOTH sides: its WATCH card (conditions +
+    // chart) and the ACT card. Exactly two occurrences, never zero.
+    expect(screen.getAllByText("Recession in 2026")).toHaveLength(2);
+    expect(screen.getByText("also traded")).toBeInTheDocument();
+
+    // Root combinator lives in the IF header spanning every card, not in the
+    // first card's header where it read as a per-card control.
+    expect(screen.getByText(/of these 3 markets hold at once/)).toBeInTheDocument();
+    // Per-card combinator renders as an inline connector between two rows.
+    expect(screen.getByText("and")).toBeInTheDocument();
 
     // Live condition states from the evaluation walk.
-    expect(screen.getAllByText("met").length).toBe(2); // condition "a" + guard
+    expect(screen.getAllByText("met").length).toBe(2);
     expect(screen.getByText("not yet")).toBeInTheDocument();
     expect(screen.getByText("no data")).toBeInTheDocument();
     expect(screen.getByText("now 68¢")).toBeInTheDocument();
 
-    // IF spine: root op + hold window.
-    expect(screen.getByText("ANY met")).toBeInTheDocument();
+    // Hold window on the spine.
     expect(screen.getByText("holds 5 minutes")).toBeInTheDocument();
 
-    // ACT zone: dollars-first order summary + execution badge + guards.
-    expect(screen.getByText("Recession in 2026")).toBeInTheDocument();
+    // ACT zone: dollars-first order summary + execution badge.
     expect(screen.getByText("Buy YES · $57.00")).toBeInTheDocument();
     expect(screen.getByText("+$43.00 if right")).toBeInTheDocument();
     expect(screen.getByText(/at 57¢ limit · 100 shares · GTC/)).toBeInTheDocument();
     expect(screen.getByText("You sign")).toBeInTheDocument();
-    expect(screen.getByText("Only if")).toBeInTheDocument();
 
     // Complex logic renders read-only, never silently flattened.
     expect(screen.getByText("Grouped logic")).toBeInTheDocument();
     expect(screen.getByText("NOT")).toBeInTheDocument();
 
-    // Charts arrive async once the mocked history resolves (2 watch + 1 target).
+    // Charts arrive async once the mocked history resolves (3 watch + 1 target).
     await waitFor(() =>
-      expect(screen.getAllByRole("img", { name: "price chart" }).length).toBeGreaterThanOrEqual(3),
+      expect(screen.getAllByRole("img", { name: "price chart" }).length).toBeGreaterThanOrEqual(4),
     );
   });
 });

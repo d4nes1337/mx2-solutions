@@ -1,30 +1,29 @@
 "use client";
 
 /**
- * Which projection the builder shows — the grid (default) or the node canvas.
- * Persisted per device; NEXT_PUBLIC_GRID_BUILDER=0 flips the default back to
- * the canvas (rollout lever for the grid-builder slice).
+ * How tall the canvas strip sits under the grid. The canvas is no longer a
+ * separate view behind a toggle nobody found — it is always on screen as a
+ * peek strip and expands in place. Persisted per device.
  */
-export type BuilderView = "grid" | "canvas";
+export type CanvasHeight = "peek" | "tall";
 
-const KEY = "arima.builder.view.v1";
+const KEY = "arima.builder.canvas-height.v1";
 
-export const DEFAULT_BUILDER_VIEW: BuilderView =
-  process.env.NEXT_PUBLIC_GRID_BUILDER === "0" ? "canvas" : "grid";
+export const DEFAULT_CANVAS_HEIGHT: CanvasHeight = "peek";
 
-export const loadBuilderView = (): BuilderView => {
+export const loadCanvasHeight = (): CanvasHeight => {
   try {
     const v = localStorage.getItem(KEY);
-    return v === "canvas" || v === "grid" ? v : DEFAULT_BUILDER_VIEW;
+    return v === "tall" || v === "peek" ? v : DEFAULT_CANVAS_HEIGHT;
   } catch {
-    return DEFAULT_BUILDER_VIEW;
+    return DEFAULT_CANVAS_HEIGHT;
   }
 };
 
-export const saveBuilderView = (view: BuilderView): void => {
+export const saveCanvasHeight = (height: CanvasHeight): void => {
   try {
-    localStorage.setItem(KEY, view);
+    localStorage.setItem(KEY, height);
   } catch {
-    // Private-mode storage failures are non-fatal — the toggle just won't stick.
+    // Private-mode storage failures are non-fatal — the choice just won't stick.
   }
 };
