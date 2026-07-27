@@ -29,7 +29,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { ExprNode, ExprResultNode } from "@mx2/rules";
-import { Spinner } from "@/components/ui";
+import { Spinner, cn } from "@/components/ui";
 import {
   UNBOUND,
   conditionLeavesOf,
@@ -305,9 +305,12 @@ const refForToken = (doc: StrategyDoc, tokenId: string) =>
 function BuilderCanvasInner({
   evaluation,
   issues,
+  compact = false,
 }: {
   evaluation: DraftEvaluation | undefined;
   issues: BuilderIssue[];
+  /** Fill the host box instead of claiming a 420px floor (canvas strip). */
+  compact?: boolean;
 }) {
   const doc = useBuilderStore((s) => s.doc);
   const select = useBuilderStore((s) => s.select);
@@ -490,7 +493,12 @@ function BuilderCanvasInner({
 
   return (
     <div
-      className="relative h-full min-h-[420px] w-full rounded-xl border border-border bg-surface-2/50"
+      className={cn(
+        "relative h-full w-full rounded-xl border border-border bg-surface-2/50",
+        // A hard min-height overflowed the short canvas strip and cropped the
+        // graph; embedded mode simply fills whatever box it is given.
+        !compact && "min-h-[420px]",
+      )}
       data-tour="builder-canvas"
     >
       <ReactFlow
@@ -624,7 +632,9 @@ function BuilderCanvasInner({
         }}
       >
         <Background gap={24} size={1.5} />
-        <Controls showInteractive={false} />
+        {/* In the short strip the default bottom-left corner collides with the
+            app's fixed bottom-left widgets, so the controls move across. */}
+        <Controls showInteractive={false} position={compact ? "bottom-right" : "bottom-left"} />
       </ReactFlow>
       {hint ? (
         <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[320px] rounded-lg border border-warn/40 bg-warn/10 px-3 py-1.5 text-[12px] leading-snug text-warn shadow-panel">
@@ -657,6 +667,7 @@ function BuilderCanvasInner({
 export default function BuilderCanvas(props: {
   evaluation: DraftEvaluation | undefined;
   issues: BuilderIssue[];
+  compact?: boolean;
 }) {
   return (
     <ReactFlowProvider>

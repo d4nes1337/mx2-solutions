@@ -105,6 +105,8 @@ export interface BuilderState {
   pushAiHistory: (turns: DraftHistoryEntry[]) => void;
   /** Record an in-place AI apply: what to restore on undo + which rows changed. */
   markAiApplied: (prevDoc: StrategyDoc, changedIds: string[]) => void;
+  /** Drop the changed-row flash (it is a brief cue, not a permanent state). */
+  clearAiChanged: () => void;
   /** Restore the pre-AI doc (one level). */
   undoAiApply: () => void;
   setActiveTab: (tab: WorkspaceTab) => void;
@@ -268,6 +270,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     set((s) => ({ aiHistory: [...s.aiHistory, ...turns].slice(-MAX_AI_HISTORY) })),
 
   markAiApplied: (prevDoc, changedIds) => set({ aiUndo: prevDoc, lastAiChangedIds: changedIds }),
+
+  clearAiChanged: () => set({ lastAiChangedIds: [] }),
 
   undoAiApply: () =>
     set((s) => {

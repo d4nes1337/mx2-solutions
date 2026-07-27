@@ -2,85 +2,67 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Light — calm warm-grey paper. The default palette; also what
+   <html data-theme="light"> selects (the attribute is always written, but the
+   light tokens live here so a missing attribute renders identically). */
 :root {
-  /* ── Surfaces (calm light cards) ────────────────────────────────────── */
-  --bg: #f7f8fb;
-  --surface: #ffffff;
-  --surface-2: #f2f4f9;
-  --surface-3: #e9ecf4;
-  --border: #e3e6ef;
-  --border-strong: #cfd4e3;
-
-  /* ── Text ───────────────────────────────────────────────────────────── */
-  --fg: #0e1220;
-  --muted: #5b6478;
-  --faint: #8b93a8;
-
-  /* ── Brand (arima) ──────────────────────────────────────────────────── */
-  --brand: #2a36ff;
-  --brand-rgb: 42, 54, 255; /* raw channels for rgba() glows — re-tints per theme */
-  --brand-strong: #1d28e0; /* darker = stronger on light surfaces */
-  --brand-soft: #e8eaff;
-  --accent: #2230d9; /* darkened brand — readable as text/icons on light */
-
-  /* ── Semantic (AA on white) ─────────────────────────────────────────── */
-  --pos: #0f9d63;
-  --neg: #d92d3f;
-  --warn: #b97b0e;
-
-  --radius: 8px;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
-}
-
-/* Dark terminal palette. Selected via <html data-theme="dark"> (theme switcher);
-   `.dark` kept as a class alias for tooling/tests. */
-[data-theme="dark"],
-.dark {
-  --bg: #06070d;
-  --surface: #0b0d15;
-  --surface-2: #11131e;
-  --surface-3: #171a28;
-  --border: #1d2130;
-  --border-strong: #2b3046;
-  --fg: #e9ecf5;
-  --muted: #8a93ab;
-  --faint: #59617a;
-  --brand-rgb: 75, 86, 255; /* brighter glow channel reads better on near-black */
-  --brand-strong: #4b56ff;
-  --brand-soft: #1a1f4d;
-  --accent: #7c84ff;
-  --pos: #2bd98c;
-  --neg: #ff4d5e;
-  --warn: #f5a524;
-  color-scheme: dark;
-}
-
-/* Paper — calm warm-grey, Claude-app-inspired reading theme. */
-[data-theme="paper"] {
+  /* ── Surfaces (warm paper cards) ────────────────────────────────────── */
   --bg: #eceae3;
   --surface: #f6f5f0;
   --surface-2: #efede6;
   --surface-3: #e6e3da;
   --border: #d9d5c9;
   --border-strong: #b8b3a3;
+
+  /* ── Text ───────────────────────────────────────────────────────────── */
   --fg: #2a2925;
   --muted: #6b675b;
   --faint: #938e7f;
+
+  /* ── Brand (arima) ──────────────────────────────────────────────────── */
   --brand: #2a36ff;
-  --brand-rgb: 42, 54, 255;
-  --brand-strong: #1d28e0;
+  --brand-rgb: 42, 54, 255; /* raw channels for rgba() glows — re-tints per theme */
+  --brand-strong: #1d28e0; /* darker = stronger on light surfaces */
   --brand-soft: #e3e2f0; /* softened/desaturated for the warm background */
-  --accent: #2230d9;
-  --pos: #0d8a57; /* slightly darkened for AA parity on the warm bg */
+  --accent: #2230d9; /* darkened brand — readable as text/icons on light */
+
+  /* ── Semantic (AA on the warm bg) ───────────────────────────────────── */
+  --pos: #0d8a57;
   --neg: #c22537;
   --warn: #a06a08;
+
+  --scrollbar-hover: #a8a293;
+
+  --radius: 8px;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
   color-scheme: light;
 }
 
-/* Default color-scheme; the [data-theme] blocks above override it on <html>
-   (attribute selector out-specifies the bare `html` type selector). */
-html {
-  color-scheme: light;
+/* Dark — warm charcoal, the night counterpart of the paper light theme:
+   grey-and-pastel rather than near-black, so the two read as one family.
+   Selected via <html data-theme="dark"> (theme switcher, or the OS scheme when
+   the preference is "system"); `.dark` kept as a class alias for tooling/tests. */
+[data-theme="dark"],
+.dark {
+  --bg: #262624;
+  --surface: #2f2f2d;
+  --surface-2: #383836;
+  --surface-3: #41413e;
+  --border: #3d3d3a;
+  --border-strong: #55554f;
+  --fg: #f0efe9;
+  --muted: #b4b1a6;
+  --faint: #979488;
+  --brand: #4a55ff; /* lifted off the deep blue — the warm grey mutes it */
+  --brand-rgb: 130, 140, 255; /* brighter glow channel reads on warm charcoal */
+  --brand-strong: #5560ff; /* keeps white AA (4.7:1) on `hover:bg-brand-strong` */
+  --brand-soft: #2f3358;
+  --accent: #a5abff; /* pastel periwinkle — 7:1 on --bg */
+  --pos: #4ecf9a;
+  --neg: #f8737f;
+  --warn: #e9b45f;
+  --scrollbar-hover: #63635c;
+  color-scheme: dark;
 }
 
 body {
@@ -133,7 +115,7 @@ body::before {
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #b6bdd1;
+  background: var(--scrollbar-hover);
   background-clip: padding-box;
 }
 .no-scrollbar::-webkit-scrollbar {
@@ -207,11 +189,11 @@ body::before {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(14, 18, 32, 0.05), transparent);
+  background: linear-gradient(90deg, transparent, rgba(42, 41, 37, 0.05), transparent);
   animation: shimmer 1.4s infinite;
 }
 [data-theme="dark"] .skeleton::after {
-  background: linear-gradient(90deg, transparent, rgba(233, 236, 245, 0.05), transparent);
+  background: linear-gradient(90deg, transparent, rgba(240, 239, 233, 0.06), transparent);
 }
 
 @keyframes fade-in {
@@ -231,18 +213,14 @@ body::before {
 /* ── Glass & elevation ────────────────────────────────────────────────────── */
 /* Frosted panel for floating surfaces (hover cards, tooltips, sheets, hero). */
 .glass {
-  background: rgba(255, 255, 255, 0.68);
+  background: rgba(246, 245, 240, 0.68); /* ~surface */
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid rgba(207, 212, 227, 0.8); /* ~border-strong */
+  border: 1px solid rgba(184, 179, 163, 0.55); /* ~border-strong */
 }
 [data-theme="dark"] .glass {
-  background: rgba(11, 13, 21, 0.68);
-  border-color: rgba(43, 48, 70, 0.8);
-}
-[data-theme="paper"] .glass {
-  background: rgba(246, 245, 240, 0.68);
-  border-color: rgba(184, 179, 163, 0.55);
+  background: rgba(47, 47, 45, 0.72);
+  border-color: rgba(85, 85, 79, 0.75);
 }
 
 /* ── Live motion (all disabled under prefers-reduced-motion, see below) ────── */

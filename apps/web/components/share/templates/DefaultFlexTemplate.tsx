@@ -9,17 +9,18 @@
 import type { FlexCardModel } from "../types";
 import { LOGO_MARK_PATHS } from "@/lib/brand/logo-mark";
 
+// Mirrors the app's dark palette ([data-theme="dark"] in app/globals.css).
 const C = {
-  bg: "#06070d",
-  panel: "#0b0d15",
-  border: "#1d2130",
-  fg: "#e9ecf5",
-  muted: "#8a93ab",
-  faint: "#59617a",
-  brand: "#2a36ff",
-  accent: "#7c84ff",
-  pos: "#2bd98c",
-  neg: "#ff4d5e",
+  bg: "#262624",
+  panel: "#2f2f2d",
+  border: "#3d3d3a",
+  fg: "#f0efe9",
+  muted: "#b4b1a6",
+  faint: "#979488",
+  brand: "#4a55ff",
+  accent: "#a5abff",
+  pos: "#4ecf9a",
+  neg: "#f8737f",
 } as const;
 
 const SANS = "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";

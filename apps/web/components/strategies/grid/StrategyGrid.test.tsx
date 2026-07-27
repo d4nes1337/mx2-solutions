@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConditionV2, ExprNode, ExprResultNode, GroupNode, MarketRef } from "@mx2/rules";
 import { emptyDoc, type StrategyDoc } from "@/lib/strategies/doc";
 import type { StrategyEvaluation } from "@/lib/strategies/queries";
@@ -221,5 +221,51 @@ describe("StrategyGrid (edit mode) — one sheet at a time", () => {
     await waitFor(() => expect(screen.queryByText("Strategy settings")).toBeNull());
     expect(screen.getByText("Edit the action")).toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+});
+
+describe("StrategyGrid (edit mode) — transient state hygiene", () => {
+  it("closes the row editor when its condition is deleted underneath it", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset(doc);
+    // BuilderShell feeds the grid the LIVE store doc; mirror that here so the
+    // deletion actually reaches the projection.
+    const Live = () => {
+      const live = useBuilderStore((s) => s.doc);
+      return <StrategyGrid doc={live} edit evaluation={evaluation} />;
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getAllByText("YES price above 67¢")[0]!);
+    expect(await screen.findByText("Edit condition")).toBeInTheDocument();
+
+    // Remove the node the sheet is editing (as the editor's Remove does).
+    act(() => useBuilderStore.getState().removeNode("a"));
+    await waitFor(() => expect(screen.queryByText("Edit condition")).toBeNull());
+  });
+
+  it("stops flashing AI-changed rows after the cue window", async () => {
+    vi.useFakeTimers();
+    try {
+      mockApis();
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      useBuilderStore.getState().reset(doc);
+      useBuilderStore.getState().markAiApplied(doc, ["a"]);
+      render(
+        <QueryClientProvider client={client}>
+          <StrategyGrid doc={doc} edit evaluation={evaluation} />
+        </QueryClientProvider>,
+      );
+      expect(useBuilderStore.getState().lastAiChangedIds).toEqual(["a"]);
+      await vi.advanceTimersByTimeAsync(6_500);
+      expect(useBuilderStore.getState().lastAiChangedIds).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

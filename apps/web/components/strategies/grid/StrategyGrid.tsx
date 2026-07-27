@@ -101,6 +101,24 @@ export function StrategyGrid({
     selectedRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [selection.cardKey, selection.action]);
 
+  // The AI-changed flash is a cue, not a state: without this the touched rows
+  // pulse for the rest of the session.
+  const clearAiChanged = useBuilderStore((s) => s.clearAiChanged);
+  useEffect(() => {
+    if (lastAiChangedIds.length === 0) return;
+    const t = setTimeout(clearAiChanged, 6_000);
+    return () => clearTimeout(t);
+  }, [lastAiChangedIds, clearAiChanged]);
+
+  // Deleting the condition from inside its editor would leave an empty sheet
+  // pointing at a node that no longer exists.
+  const rowNodeGone =
+    sheet?.kind === "row" &&
+    !projection.watch.some((c) => c.rows.some((r) => r.nodeId === sheet.nodeId));
+  useEffect(() => {
+    if (rowNodeGone) setSheet(null);
+  }, [rowNodeGone]);
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end">

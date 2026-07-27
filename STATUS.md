@@ -4,6 +4,24 @@ _Last updated: 2026-07-27_
 
 ## Recent
 
+- **Theme system reduced to light / dark / system (owner request 2026-07-27; D-050).** The old
+  blue-grey light palette is gone. The warm-grey "paper" palette is promoted verbatim into `:root`
+  and renamed **light** — now the default when nothing is stored. Dark was re-cut from near-black
+  to warm charcoal (`--bg` `#06070d` → `#262624`, surfaces `#2f2f2d`/`#383836`/`#41413e`) with
+  pastel semantics (`--pos #4ecf9a`, `--neg #f8737f`, `--warn #e9b45f`, `--accent #a5abff`) so the
+  two themes read as one warm family instead of two unrelated products. New third option
+  **System** follows `prefers-color-scheme` live via a `matchMedia` change listener. The
+  preference type (`light`/`dark`/`system`) is now distinct from the resolved palette
+  (`light`/`dark`); only the resolved value reaches `<html data-theme>` and the RainbowKit theme
+  object, and the anti-flash inline script resolves system before first paint. The share-card
+  template mirrors the new dark hexes (it rasterizes standalone and cannot read CSS vars).
+  **Verification:** 343 web tests green across 51 files (14 theme tests, incl. system resolution
+  - live OS-flip + garbage-value fallback), typecheck/prettier clean, all three modes exercised in
+    the dev preview with no console errors; contrast re-measured in-browser (dark `--fg` 13.2:1,
+    `--muted` 7.1:1, `--accent` 7.1:1, semantics 5.6–8.1:1, white on `--brand` 5.2:1 / on
+    `--brand-strong` 4.7:1). Excluded from the run: `components/strategies/grid/**`, being edited
+    concurrently by another session.
+
 - **Grid/strategies UI redesign — all 7 slices built + verified (owner sketch 2026-07-21; plan
   `users-ettrq-downloads-note-jul-21-2026-iterative-umbrella`).** The product noun is now
   **"strategy"**; the canvas is demoted to a power-user projection behind a Grid ⇄ Canvas toggle.
@@ -434,7 +452,8 @@ _Last updated: 2026-07-27_
 
 - **Round-4: workspace redesign + `price_move` + execution styles/fee engine + maker-loop shadow
   foundations (built; D-024, ADR-0013/0014, RFC-0003).** Owner's round-4 scope executed end-to-end:
-  - **Workspace redesign.** Focus-ring fix + **paper is now the default theme**; the builder
+  - **Workspace redesign.** Focus-ring fix + **paper is now the default theme** (renamed to
+    "light" on 2026-07-27, D-050); the builder
     becomes a resizable tabbed workspace — full-height AI chat, Simulate tab, and a Market tab
     (chart + orderbook) — with inline canvas editing (edit-in-place + delete on nodes) and an
     add-market search directly on the canvas.
@@ -485,6 +504,8 @@ _Last updated: 2026-07-27_
   - **Three-theme system.** `data-theme` tokens in globals.css — light (default), **paper**
     (warm-grey, Claude-style) and dark — with `--brand-rgb` glow re-tinting, anti-flash inline
     script, localStorage persistence, RainbowKit theme sync, and a header switcher.
+    _Superseded 2026-07-27 (D-050): paper became the light theme, the old light palette was
+    deleted, and a system option replaced the third slot._
   - **Hero carousel.** Rotates the top backtested showcases (auto-advance 7s, dots/arrows,
     reduced-motion aware); each slide shows the server-generated chat **prompt** that builds it
     ("Try this prompt" seeds the AI box). `Showcase.prompt` added to `/api/showcases`.

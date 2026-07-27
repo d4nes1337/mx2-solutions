@@ -1,16 +1,16 @@
 "use client";
 
-import { Moon, Newspaper, Sun } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
 import { THEMES, useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/components/ui";
 
 const META: Record<Theme, { label: string; Icon: typeof Sun }> = {
   light: { label: "Light", Icon: Sun },
-  paper: { label: "Paper", Icon: Newspaper },
   dark: { label: "Dark", Icon: Moon },
+  system: { label: "System", Icon: Monitor },
 };
 
-/** Compact header control cycling the three app themes (light / paper / dark). */
+/** Compact header control picking the theme (light / dark / follow the OS). */
 export function ThemeSwitcher() {
   const { theme, setTheme } = useTheme();
   const { Icon, label } = META[theme];

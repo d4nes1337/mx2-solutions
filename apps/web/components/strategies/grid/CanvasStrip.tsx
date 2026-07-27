@@ -107,7 +107,7 @@ export const CanvasStrip = forwardRef<
           itself instead of sitting cropped in the new box. The palette is the
           only way to add GROUPS (nested ANY/ALL), so it rides with the canvas. */}
       <div className={cn("relative overflow-hidden transition-[height]", HEIGHT_CLASS[height])}>
-        <BuilderCanvas key={height} evaluation={evaluation} issues={issues} />
+        <BuilderCanvas key={height} evaluation={evaluation} issues={issues} compact />
         <AddPalette />
       </div>
     </section>

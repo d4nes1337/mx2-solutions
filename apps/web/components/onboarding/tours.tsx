@@ -43,7 +43,7 @@ export function HomeTour() {
         {
           target: "theme-switcher",
           title: "Make it yours",
-          body: "Light, Paper, or Dark — switch anytime. Replay this tour from the ? button.",
+          body: "Light, Dark, or follow your system — switch anytime. Replay this tour from the ? button.",
         },
       ]}
     />

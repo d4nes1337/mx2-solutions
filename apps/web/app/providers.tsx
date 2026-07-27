@@ -6,26 +6,20 @@ import { WagmiProvider } from "wagmi";
 import { RainbowKitProvider, darkTheme, lightTheme } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { wagmiConfig } from "@/lib/wagmi";
-import { ThemeProvider, useTheme, type Theme } from "@/lib/theme";
+import { ThemeProvider, useTheme, type ResolvedTheme } from "@/lib/theme";
 import { MotionProvider } from "@/components/motion/MotionProvider";
 
 // RainbowKit takes a JS theme object, not CSS vars — keep it in step with the
-// app theme. Paper is a light theme with the same brand accent.
-const RK_THEMES: Record<Theme, ReturnType<typeof lightTheme>> = {
+// resolved app palette (accents mirror --brand per theme in globals.css).
+const RK_THEMES: Record<ResolvedTheme, ReturnType<typeof lightTheme>> = {
   light: lightTheme({
     accentColor: "#2a36ff",
     accentColorForeground: "#ffffff",
     borderRadius: "medium",
     fontStack: "system",
   }),
-  paper: lightTheme({
-    accentColor: "#2a36ff",
-    accentColorForeground: "#ffffff",
-    borderRadius: "medium",
-    fontStack: "system",
-  }),
   dark: darkTheme({
-    accentColor: "#4b56ff",
+    accentColor: "#4a55ff",
     accentColorForeground: "#ffffff",
     borderRadius: "medium",
     fontStack: "system",
@@ -54,6 +48,6 @@ export function Providers({ children }: { children: ReactNode }) {
 }
 
 function ThemedRainbowKit({ children }: { children: ReactNode }) {
-  const { theme } = useTheme();
-  return <RainbowKitProvider theme={RK_THEMES[theme]}>{children}</RainbowKitProvider>;
+  const { resolvedTheme } = useTheme();
+  return <RainbowKitProvider theme={RK_THEMES[resolvedTheme]}>{children}</RainbowKitProvider>;
 }
