@@ -4,10 +4,12 @@
  * @market search: type-ahead over the event-grouped search with preview rows
  * (title, YES/NO prices, volume). Multi-market events expand in place so
  * sub-markets — totals/spreads in a match, candidates in an election — are one
- * tap away. Selecting an outcome binds a MarketRef.
+ * tap away. Selecting an outcome binds a MarketRef. Crypto-asset queries pin
+ * the instant-markets series card above the results; `idleContent` (e.g. the
+ * instant-markets rail) renders while the query is empty.
  */
-import { useState } from "react";
-import { ChevronDown, Search } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown, RefreshCw, Search } from "lucide-react";
 import type { MarketRef } from "@mx2/rules";
 import { Spinner, cn } from "@/components/ui";
 import {
@@ -16,12 +18,15 @@ import {
   type MarketSearchResult,
 } from "@/lib/strategies/queries";
 import type { MarketMeta } from "@/lib/strategies/doc";
+import { metaFromResult, refFromResult } from "@/lib/strategies/pick";
+import { SeriesPinnedCard } from "./SeriesPinnedCard";
 
 export function MarketSearch({
   onPick,
   onPickResult,
   autoFocus,
   placeholder = "Search markets — e.g. @election…",
+  idleContent,
 }: {
   /** Per-outcome pick: binds one MarketRef (YES or NO button). */
   onPick?: (ref: MarketRef, meta: MarketMeta) => void;
@@ -32,30 +37,17 @@ export function MarketSearch({
   onPickResult?: (result: MarketSearchResult) => void;
   autoFocus?: boolean;
   placeholder?: string;
+  /** Rendered below the input while the query is empty (instant rail etc.). */
+  idleContent?: ReactNode;
 }) {
   const [q, setQ] = useState("");
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const search = useGroupedMarketSearch(q);
 
   const pick = (r: MarketSearchResult, outcomeIdx: number) => {
-    const tokenId = r.tokenIds[outcomeIdx];
-    if (!tokenId) return;
-    onPick?.(
-      {
-        conditionId: r.conditionId,
-        tokenId,
-        outcome: r.outcomes[outcomeIdx] ?? "YES",
-        title: r.title,
-      },
-      {
-        title: r.title,
-        eventTitle: r.eventTitle,
-        image: r.image,
-        rewardsMinSize: r.rewardsMinSize,
-        rewardsMaxSpread: r.rewardsMaxSpread,
-        currentPrice: r.outcomePrices[outcomeIdx] ? Number(r.outcomePrices[outcomeIdx]) : null,
-      },
-    );
+    const ref = refFromResult(r, outcomeIdx);
+    if (!ref) return;
+    onPick?.(ref, metaFromResult(r, outcomeIdx));
     setQ("");
   };
 
@@ -78,8 +70,16 @@ export function MarketSearch({
         )}
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] font-medium text-fg">{label ?? r.title}</div>
-          <div className="tabular text-[10px] text-faint">
-            Vol ${Number(r.volume).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          <div className="tabular flex items-center gap-1.5 text-[10px] text-faint">
+            <span>
+              Vol ${Number(r.volume).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+            {r.recurrence ? (
+              <span className="inline-flex items-center gap-0.5 text-accent">
+                <RefreshCw size={9} aria-hidden />
+                {r.recurrence}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
@@ -165,6 +165,25 @@ export function MarketSearch({
 
       {q.trim().length >= 2 ? (
         <div className="max-h-64 space-y-1.5 overflow-y-auto">
+          <SeriesPinnedCard
+            q={q}
+            onPick={
+              onPick && !onPickResult
+                ? (ref, meta) => {
+                    onPick(ref, meta);
+                    setQ("");
+                  }
+                : undefined
+            }
+            onPickResult={
+              onPickResult
+                ? (r) => {
+                    onPickResult(r);
+                    setQ("");
+                  }
+                : undefined
+            }
+          />
           {search.isLoading ? (
             <div className="p-2">
               <Spinner label="Searching…" />
@@ -175,7 +194,9 @@ export function MarketSearch({
             <p className="px-2 py-1.5 text-[12px] text-muted">No markets found for “{q}”.</p>
           )}
         </div>
-      ) : null}
+      ) : (
+        (idleContent ?? null)
+      )}
     </div>
   );
 }

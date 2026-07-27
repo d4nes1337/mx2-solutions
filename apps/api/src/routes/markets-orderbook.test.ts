@@ -25,6 +25,9 @@ const snapshotFor = (isStale: boolean): MarketSnapshotRow =>
 const buildHarness = (opts: { snapshot?: MarketSnapshotRow | null; restBook?: "ok" | "err" }) => {
   const gamma = {
     listEvents: async () => ok([]),
+    listEventsPaginated: async () =>
+      ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+    getSeries: async () => ok([]),
     getEvent: async () => err(upstreamErr),
     listMarkets: async () => ok([]),
     getMarket: async () => err({ ...upstreamErr, statusCode: 404 }),

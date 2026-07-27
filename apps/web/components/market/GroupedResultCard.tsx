@@ -8,7 +8,7 @@
  */
 import { useState } from "react";
 import Link from "next/link";
-import { CalendarDays, ChevronDown } from "lucide-react";
+import { CalendarDays, ChevronDown, RefreshCw } from "lucide-react";
 import { cn } from "@/components/ui";
 import { cents, usdCompact } from "@/lib/format";
 import type { EventSearchResult, MarketSearchResult } from "@/lib/strategies/queries";
@@ -99,6 +99,12 @@ export function GroupedResultCard({
                 : `${event.markets.length} markets${event.negRisk ? " · winner-take-all" : ""}`}
             </span>
             {totalVolume > 0 ? <span>{usdCompact(totalVolume)} vol</span> : null}
+            {event.recurrence ? (
+              <span className="inline-flex items-center gap-1 text-accent">
+                <RefreshCw size={10} aria-hidden />
+                {event.recurrence}
+              </span>
+            ) : null}
             {event.endDate ? (
               <span className="inline-flex items-center gap-1">
                 <CalendarDays size={11} aria-hidden />

@@ -15,6 +15,7 @@ import { UNBOUND, findNode } from "@/lib/strategies/doc";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { useFeatureFlags } from "@/lib/queries";
 import { useOutsideClick } from "@/lib/use-outside-click";
+import { InstantMarketsRail } from "./InstantMarketsRail";
 import { MarketSearch } from "./MarketSearch";
 import { defaultCondition } from "./editors/ConditionEditor";
 import { defaultActionFor } from "./editors/ActionEditor";
@@ -179,6 +180,16 @@ export function AddPalette() {
                   s.setActiveTab("market");
                   close();
                 }}
+                idleContent={
+                  <InstantMarketsRail
+                    onPick={(ref, meta) => {
+                      const s = store.getState();
+                      s.addWatchedMarket(ref, meta);
+                      s.setActiveTab("market");
+                      close();
+                    }}
+                  />
+                }
               />
             </div>
           ) : (

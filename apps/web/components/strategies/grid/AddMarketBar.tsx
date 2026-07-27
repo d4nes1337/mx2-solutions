@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { EXPR_LIMITS } from "@mx2/rules";
 import { SheetPanel } from "@/components/ui/SheetPanel";
+import { InstantMarketsRail } from "@/components/builder/InstantMarketsRail";
 import { MarketSearch } from "@/components/builder/MarketSearch";
 import { docMarketRefs } from "@/lib/strategies/doc";
 import { useBuilderStore } from "@/lib/strategies/store";
@@ -51,6 +52,14 @@ export function AddMarketBar() {
             addWatchedMarket(ref, meta);
             setOpen(false);
           }}
+          idleContent={
+            <InstantMarketsRail
+              onPick={(ref, meta) => {
+                addWatchedMarket(ref, meta);
+                setOpen(false);
+              }}
+            />
+          }
         />
       </SheetPanel>
     </>

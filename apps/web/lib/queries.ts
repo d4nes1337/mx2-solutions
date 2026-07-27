@@ -1,7 +1,8 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import { BROWSE_PAGE_SIZE } from "./browse";
 import { FEED_LIMIT, hottestScore, newVolumeScore, sortEventsByScore } from "./feeds";
 import {
   BRIDGE_WITHDRAWAL_TERMINAL_STATES,
@@ -9,6 +10,7 @@ import {
   WALLET_WITHDRAWAL_TERMINAL_STATES,
 } from "./transfers";
 import type {
+  BrowseResponse,
   CreateRuleRequest,
   EquityHistoryResponse,
   EquityWindow,
@@ -106,6 +108,29 @@ export function useHomeFeed() {
     queryFn: () => api.get<HomeFeedResponse>("/api/feed/home"),
     staleTime: 30_000,
     refetchInterval: POLL.homeFeed,
+  });
+}
+
+/**
+ * Polymarket-mirror browse grid: offset-paged infinite scroll over
+ * /api/markets/browse (Gamma /events/pagination pass-through — the same
+ * markets, in the same volume24hr order, as polymarket.com's homepage).
+ */
+export function useBrowseEvents(tag: string | null) {
+  return useInfiniteQuery({
+    queryKey: ["browse", tag ?? "all"],
+    queryFn: ({ pageParam }) =>
+      api.get<BrowseResponse>(
+        `/api/markets/browse?limit=${BROWSE_PAGE_SIZE}&offset=${pageParam}` +
+          (tag ? `&tag=${encodeURIComponent(tag)}` : ""),
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.hasMore ? last.offset + last.events.length : undefined),
+    staleTime: 30_000,
+    // A refetch of an infinite query replays EVERY loaded page sequentially
+    // (TanStack v5), so keep the poll to the single-page state only.
+    refetchInterval: (query) =>
+      (query.state.data?.pages.length ?? 0) <= 1 ? POLL.homeFeed : false,
   });
 }
 

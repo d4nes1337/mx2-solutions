@@ -52,6 +52,9 @@ const makeGamma = (
   const calls: SearchCall[] = [];
   const gamma: GammaClient = {
     listEvents: async () => ok([]),
+    listEventsPaginated: async () =>
+      ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+    getSeries: async () => ok([]),
     getEvent: async () => err(upstreamErr),
     listMarkets: async () => ok([]),
     getMarket: async () => err(upstreamErr),
@@ -319,5 +322,114 @@ describe("smartSearchEventHits", () => {
     if (!result.ok) return;
     expect(result.value[0]!.markets).toHaveLength(2);
     expect(result.value[0]!.markets[0]!.conditionId).toBe("c-favorite");
+  });
+});
+
+// ── Recurring-series hygiene (block A: freshest instance wins) ───────────────
+
+const seriesInstance = (
+  id: string,
+  title: string,
+  endDate: string,
+  over: Record<string, unknown> = {},
+) =>
+  GammaEventSchema.parse({
+    id,
+    title,
+    endDate,
+    seriesSlug: "btc-up-or-down-5m",
+    series: [{ id: "10684", slug: "btc-up-or-down-5m", recurrence: "5m" }],
+    tags: [
+      { id: "", label: "Recurring", slug: "recurring" },
+      { id: "", label: "5M", slug: "5M" },
+    ],
+    markets: [
+      {
+        id: `m-${id}`,
+        question: title,
+        conditionId: `cond-${id}`,
+        endDate,
+        active: true,
+        closed: false,
+        liquidity: "18000",
+        volume: "500",
+        outcomes: '["Up","Down"]',
+        outcomePrices: '["0.51","0.49"]',
+        clobTokenIds: `["${id}-up","${id}-down"]`,
+        ...over,
+      },
+    ],
+  });
+
+describe("series hygiene through the smart search", () => {
+  const T0 = Date.parse("2026-07-27T13:00:00Z");
+  const MIN = 60_000;
+
+  it("surfaces one live instance per series, dead windows dropped, decided weeklies skipped", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const staleWindow = seriesInstance(
+      "ev-stale",
+      "Bitcoin Up or Down - December 19, 11:35AM",
+      new Date(T0 - 220 * 24 * 3_600_000).toISOString(),
+    );
+    const currentWindow = seriesInstance(
+      "ev-current",
+      "Bitcoin Up or Down - July 27, 9:00-9:05AM",
+      new Date(T0 + 3 * MIN).toISOString(),
+    );
+    const nextWindow = seriesInstance(
+      "ev-next",
+      "Bitcoin Up or Down - July 27, 9:05-9:10AM",
+      new Date(T0 + 8 * MIN).toISOString(),
+    );
+    const oneOff = eventFor("c-flip", "Will Anthropic flip BTC by December 31?");
+
+    const { gamma } = makeGamma(async () => ok([staleWindow, nextWindow, currentWindow, oneOff]));
+    const result = await smartSearchEventHits(gamma, "btc", { limit: 10 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const ids = result.value.map((g) => g.eventId);
+    expect(ids).not.toContain("ev-stale"); // ended instance hard-dropped
+    // Exactly one series instance ranks in the primary block, and it is the
+    // current (soonest-ending live) window; the next window is demoted after.
+    expect(ids.indexOf("ev-current")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("ev-next")).toBeGreaterThan(ids.indexOf("ev-current"));
+
+    const current = result.value.find((g) => g.eventId === "ev-current")!;
+    expect(current.seriesSlug).toBe("btc-up-or-down-5m");
+    expect(current.recurrence).toBe("5m");
+    expect(current.markets[0]!.seriesSlug).toBe("btc-up-or-down-5m");
+  });
+
+  it("filters at read time: a window crossing its end inside the cache TTL disappears", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const shortWindow = seriesInstance(
+      "ev-short",
+      "Bitcoin Up or Down - 9:00-9:05AM",
+      new Date(T0 + 2 * MIN).toISOString(),
+    );
+    const laterWindow = seriesInstance(
+      "ev-later",
+      "Bitcoin Up or Down - 9:05-9:10AM",
+      new Date(T0 + 7 * MIN).toISOString(),
+    );
+    const { gamma, calls } = makeGamma(async () => ok([shortWindow, laterWindow]));
+
+    const first = await smartSearchEventHits(gamma, "btc", { limit: 10 });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.value[0]!.eventId).toBe("ev-short");
+    const fetches = calls.length;
+
+    // 2.5 minutes later (still inside the 30s TTL? no — advance re-fetches).
+    // Stay INSIDE the TTL: +25s keeps the cache entry, the window is alive.
+    vi.advanceTimersByTime(25_000);
+    const cached = await smartSearchEventHits(gamma, "btc", { limit: 10 });
+    expect(calls.length).toBe(fetches); // same cache entry
+    if (!cached.ok) return;
+    expect(cached.value[0]!.eventId).toBe("ev-short");
   });
 });

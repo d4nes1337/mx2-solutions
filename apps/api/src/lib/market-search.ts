@@ -1,6 +1,7 @@
 import { ok, err, type Result } from "@mx2/core";
 import type { GammaClient, GammaEvent, GammaMarket, PolymarketError } from "@mx2/polymarket-client";
 import { rankHits, understandQuery, type UnderstoodQuery } from "./query-understanding.js";
+import { applySeriesHygiene } from "./search-hygiene.js";
 
 /**
  * One search candidate in the shape the builder (and the AI generator) needs:
@@ -33,6 +34,11 @@ export interface MarketSearchHit {
   closed: boolean;
   /** Sports market type when Gamma tags it (moneyline/spreads/totals). */
   sportsMarketType: string | null;
+  /** Recurring-series slug ("btc-up-or-down-5m") when this is an instance. */
+  seriesSlug: string | null;
+  /** Series cadence ("5m", "15m", "hourly", "weekly"…) when known. */
+  recurrence: string | null;
+  startDate: string | null;
 }
 
 /**
@@ -47,6 +53,10 @@ export interface EventSearchHit {
   image: string;
   endDate: string | null;
   negRisk: boolean;
+  /** Recurring-series identity, mirrored from Gamma (null = one-off event). */
+  seriesSlug: string | null;
+  recurrence: string | null;
+  startDate: string | null;
   markets: MarketSearchHit[];
 }
 
@@ -71,7 +81,10 @@ export const hitFromGammaMarket = (
     title: string;
     image: string;
     endDate?: string | null;
+    startDate?: string | null;
     marketCount?: number;
+    seriesSlug?: string | null;
+    recurrence?: string | null;
   },
 ): MarketSearchHit => ({
   eventId: event?.id ?? "",
@@ -95,6 +108,9 @@ export const hitFromGammaMarket = (
   active: market.active,
   closed: market.closed,
   sportsMarketType: market.sportsMarketType ?? null,
+  seriesSlug: event?.seriesSlug ?? null,
+  recurrence: event?.recurrence ?? null,
+  startDate: market.startDate ?? event?.startDate ?? null,
 });
 
 /** Display order for sports sub-markets: main line first, then derivatives. */
@@ -119,15 +135,47 @@ const subMarketSortKey = (hit: MarketSearchHit, negRisk: boolean, index: number)
   return open * 1e9 + sport * 1e8 + favorite * 1e7 + index;
 };
 
+/** Tag slugs Gamma uses to mark a recurring event's cadence (case varies). */
+const RECURRENCE_TAG_SLUGS = new Set([
+  "5m",
+  "15m",
+  "hourly",
+  "daily",
+  "weekly",
+  "monthly",
+  "yearly",
+]);
+
+/**
+ * A series instance's cadence: prefer the embedded series stub, fall back to
+ * the cadence tag ("5M"/"15M"/"weekly"…) that /public-search events carry.
+ */
+export const recurrenceFromEvent = (event: GammaEvent): string | null => {
+  const fromSeries = event.series?.find((s) => s.recurrence)?.recurrence;
+  if (fromSeries) return fromSeries;
+  // `?? []` — schema-parsed events always have tags, but callers (tests,
+  // future code paths) may hand in raw objects.
+  for (const tag of event.tags ?? []) {
+    const slug = (tag.slug ?? "").toLowerCase();
+    if (RECURRENCE_TAG_SLUGS.has(slug)) return slug;
+  }
+  return null;
+};
+
 /** One Gamma event → an event-grouped hit with ordered sub-markets. */
 export const eventHitFromGamma = (event: GammaEvent): EventSearchHit | null => {
   if (event.markets.length === 0) return null;
+  const seriesSlug = event.seriesSlug ?? event.series?.[0]?.slug ?? null;
+  const recurrence = recurrenceFromEvent(event);
   const meta = {
     id: event.id,
     title: event.title,
     image: event.image,
     endDate: event.endDate ?? null,
+    startDate: event.startDate ?? null,
     marketCount: event.markets.length,
+    seriesSlug,
+    recurrence,
   };
   const negRisk = event.negRisk ?? false;
   const markets = event.markets
@@ -140,6 +188,9 @@ export const eventHitFromGamma = (event: GammaEvent): EventSearchHit | null => {
     image: event.image,
     endDate: event.endDate ?? null,
     negRisk,
+    seriesSlug,
+    recurrence,
+    startDate: event.startDate ?? null,
     markets,
   };
 };
@@ -307,7 +358,13 @@ export const smartSearchMarketHits = async (
   const result = await smartSearchGroupsCached(gammaClient, q, opts.maxFanOut);
   if (!result.ok) return result;
   const { groups, uq } = result.value;
-  return ok(rankHits(hitsFromGroups(groups), uq).slice(0, opts.limit));
+  const nowMs = Date.now();
+  const { primary, demoted } = applySeriesHygiene(groups, nowMs);
+  const ranked = [
+    ...rankHits(hitsFromGroups(primary), uq, nowMs),
+    ...rankHits(hitsFromGroups(demoted), uq, nowMs),
+  ];
+  return ok(ranked.slice(0, opts.limit));
 };
 
 export interface SmartEventSearchOptions extends SmartSearchOptions {
@@ -328,8 +385,13 @@ export const smartSearchEventHits = async (
   const result = await smartSearchGroupsCached(gammaClient, q, opts.maxFanOut);
   if (!result.ok) return result;
   const { groups, uq } = result.value;
-  const byEventId = new Map(groups.map((g) => [g.eventId, g]));
-  const ranked = rankHits(hitsFromGroups(groups), uq);
+  const nowMs = Date.now();
+  const { primary, demoted } = applySeriesHygiene(groups, nowMs);
+  const byEventId = new Map([...primary, ...demoted].map((g) => [g.eventId, g]));
+  const ranked = [
+    ...rankHits(hitsFromGroups(primary), uq, nowMs),
+    ...rankHits(hitsFromGroups(demoted), uq, nowMs),
+  ];
   const marketsPerEvent = Math.max(opts.marketsPerEvent ?? 20, 1);
   const out: EventSearchHit[] = [];
   for (const rep of ranked) {

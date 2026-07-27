@@ -3,10 +3,14 @@ import { ok, err } from "@mx2/core";
 import {
   GammaEventSchema,
   GammaMarketSchema,
+  GammaPaginatedEventsSchema,
+  GammaSeriesSchema,
   PublicProfileSchema,
   PublicSearchSchema,
   type GammaEvent,
   type GammaMarket,
+  type GammaPaginatedEvents,
+  type GammaSeries,
   type PublicProfile,
 } from "./schema.js";
 import {
@@ -34,6 +38,26 @@ export interface ListMarketsParams {
   closed?: boolean;
 }
 
+/**
+ * Params for /events/pagination (verified live 2026-07-27). Snake_case keys
+ * are Gamma's own (tag_slug, series_id, end_date_min) — passed through as-is.
+ */
+export interface ListEventsPaginatedParams {
+  limit?: number;
+  offset?: number;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  order?: string;
+  ascending?: boolean;
+  tag_slug?: string;
+  series_id?: string;
+  /** ISO timestamp; only events ending at/after this instant. Mandatory when
+   * listing series windows — without it Gamma returns months-old
+   * never-closed instances. */
+  end_date_min?: string;
+}
+
 export interface FindMarketParams {
   conditionId?: string;
   tokenId?: string;
@@ -41,6 +65,16 @@ export interface FindMarketParams {
 
 export interface GammaClient {
   listEvents(params?: ListEventsParams): Promise<Result<GammaEvent[], PolymarketError>>;
+  /**
+   * Offset pagination with a hasMore envelope (Gamma /events/pagination) —
+   * what polymarket.com's homepage grid uses. Prefer this over listEvents
+   * wherever "is there another page?" matters.
+   */
+  listEventsPaginated(
+    params?: ListEventsPaginatedParams,
+  ): Promise<Result<GammaPaginatedEvents, PolymarketError>>;
+  /** Recurring-series lookup by slug (Gamma /series?slug=); [] = not found. */
+  getSeries(params: { slug: string }): Promise<Result<GammaSeries[], PolymarketError>>;
   getEvent(id: string): Promise<Result<GammaEvent, PolymarketError>>;
   listMarkets(params?: ListMarketsParams): Promise<Result<GammaMarket[], PolymarketError>>;
   getMarket(id: string): Promise<Result<GammaMarket, PolymarketError>>;
@@ -144,6 +178,35 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
           }),
         ),
         GammaEventSchema.array(),
+        timeoutMs,
+      ),
+
+    listEventsPaginated: (params) =>
+      fetchJson(
+        buildUrl(
+          baseUrl,
+          "/events/pagination",
+          buildParams({
+            limit: params?.limit ?? 20,
+            offset: params?.offset ?? 0,
+            active: params?.active,
+            closed: params?.closed,
+            archived: params?.archived,
+            order: params?.order,
+            ascending: params?.ascending,
+            tag_slug: params?.tag_slug,
+            series_id: params?.series_id,
+            end_date_min: params?.end_date_min,
+          }),
+        ),
+        GammaPaginatedEventsSchema,
+        timeoutMs,
+      ),
+
+    getSeries: (params) =>
+      fetchJson(
+        buildUrl(baseUrl, "/series", { slug: params.slug }),
+        GammaSeriesSchema.array(),
         timeoutMs,
       ),
 

@@ -194,6 +194,11 @@ export interface MarketSearchResult {
   active: boolean;
   closed: boolean;
   sportsMarketType: string | null;
+  /** Recurring-series slug ("btc-up-or-down-5m") when this is an instance. */
+  seriesSlug: string | null;
+  /** Series cadence ("5m", "15m", "hourly", "weekly"…) when known. */
+  recurrence: string | null;
+  startDate: string | null;
 }
 
 /** Event-granularity search hit: the event plus its ordered sub-markets. */
@@ -203,6 +208,10 @@ export interface EventSearchResult {
   image: string;
   endDate: string | null;
   negRisk: boolean;
+  /** Recurring-series identity (null = one-off event). */
+  seriesSlug: string | null;
+  recurrence: string | null;
+  startDate: string | null;
   markets: MarketSearchResult[];
 }
 
@@ -464,6 +473,49 @@ export function useGroupedMarketSearch(q: string) {
       ),
     enabled: query.length >= 2,
     staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+// ── Instant markets (curated recurring series: BTC 5m up/down et al) ─────────
+
+export interface InstantWindow {
+  eventId: string;
+  slug: string;
+  title: string;
+  /** Window OPEN time (derived server-side; Gamma's startDate is creation time). */
+  startDate: string;
+  endDate: string;
+  status: "live" | "upcoming";
+  market: MarketSearchResult;
+}
+
+export interface InstantSeries {
+  seriesSlug: string;
+  title: string;
+  asset: "BTC" | "ETH" | "SOL" | "XRP" | "DOGE";
+  cadence: "5m" | "15m" | "1h";
+  recurrence: string;
+  windows: InstantWindow[];
+}
+
+export interface InstantMarketsResponse {
+  generatedAt: string;
+  degraded: string[];
+  series: InstantSeries[];
+}
+
+/**
+ * Live + next windows of the curated crypto series. 15s refetch tracks the
+ * server cache TTL; countdowns tick client-side off each window's endDate.
+ */
+export function useInstantMarkets(enabled: boolean) {
+  return useQuery({
+    queryKey: ["instant-markets"],
+    queryFn: () => api.get<InstantMarketsResponse>("/api/markets/instant"),
+    enabled,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
     placeholderData: (prev) => prev,
   });
 }

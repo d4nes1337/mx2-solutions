@@ -62,6 +62,17 @@ export interface EventsResponse {
   count: number;
 }
 
+/** One page of the Polymarket-mirror browse grid (GET /api/markets/browse). */
+export interface BrowseResponse {
+  events: GammaEvent[];
+  hasMore: boolean;
+  totalResults: number;
+  offset: number;
+  limit: number;
+  /** True when the API served a stale cached page because Gamma was down. */
+  degraded: boolean;
+}
+
 export type FeedKind = "now" | "top" | "suggestedFavorites";
 
 export interface FeedMeta {

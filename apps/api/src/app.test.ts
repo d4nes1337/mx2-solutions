@@ -43,6 +43,9 @@ const upstreamErr: PolymarketError = {
 
 const mockGammaClient: GammaClient = {
   listEvents: async () => ok([]),
+  listEventsPaginated: async () =>
+    ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+  getSeries: async () => ok([]),
   getEvent: async () => err(upstreamErr),
   listMarkets: async () => ok([]),
   getMarket: async () => err(upstreamErr),

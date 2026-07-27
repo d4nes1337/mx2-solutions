@@ -77,3 +77,28 @@ as the live source of truth and get smarter around it, or sync markets into a lo
   rate limiter; revisit with any multi-instance deployment.
 - If beta search volume or quality pressure outgrows the pass-through, the local index
   follow-up inherits the query-understanding and re-rank layers unchanged.
+
+## Amendment (2026-07-27) — recurring-series hygiene layer
+
+Crypto queries surfaced the pass-through's blind spot: recurring series ("Bitcoin Up or
+Down" every 5 minutes, weekly strikes) flood results with dead instances — windows already
+ended, or priced 0/100 with nothing left to trade. Gamma itself provides the signal
+(`seriesSlug`, `series[].recurrence`, cadence tags, `endDate` on every `/public-search`
+event), so the fix stays inside the no-local-index posture:
+
+- **`apps/api/src/lib/search-hygiene.ts`** (pure, deterministic) runs at READ time, after
+  the shared cache — the cache keeps the raw unranked superset so `Date.now()`-dependent
+  decisions stay correct within the 30s TTL. Ended **series instances** are hard-dropped
+  (their successor exists); ended one-offs are only demoted (the widening retry's
+  "what happened?" recall is preserved); each series collapses to its soonest-ending live
+  window, skipping ahead once if that window is already decided (≤1¢/≥99¢) with a later
+  instance in the set. Losing siblings are demoted, not deleted.
+- **`rankHits` gains an optional `nowMs`** and two penalties: ended (−2.0) and
+  decided-and-thin — extreme price with < $1k depth (−1.5). The AI `search_markets` tool
+  inherits both through the shared helper.
+- DTOs (`MarketSearchHit`/`EventSearchHit` and their web mirrors) now carry
+  `seriesSlug`/`recurrence`/`startDate`, which also powers the instant-markets surfaces
+  (ADR-0027).
+
+Nothing here needs an index; the local-index follow-up (if ever) inherits the hygiene layer
+unchanged.

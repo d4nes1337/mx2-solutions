@@ -34,6 +34,9 @@ const hit = (over: Partial<MarketSearchHit>): MarketSearchHit => ({
   active: true,
   closed: false,
   sportsMarketType: null,
+  seriesSlug: null,
+  recurrence: null,
+  startDate: null,
   ...over,
 });
 
@@ -203,5 +206,53 @@ describe("rankHits", () => {
     const uq = uqFor("same");
     expect(rankHits([a, b], uq).map((h) => h.conditionId)).toEqual(["c1", "c2"]);
     expect(rankHits([b, a], uq).map((h) => h.conditionId)).toEqual(["c2", "c1"]);
+  });
+
+  it("penalizes already-ended markets below live ones when nowMs is given", () => {
+    const ended = hit({
+      conditionId: "c-ended",
+      title: "Bitcoin above 60k",
+      endDate: new Date(NOW - DAY).toISOString(),
+      liquidity: "50000",
+    });
+    const live = hit({
+      conditionId: "c-live",
+      title: "Bitcoin above 60k",
+      endDate: new Date(NOW + DAY).toISOString(),
+      liquidity: "100",
+    });
+    const uq = uqFor("bitcoin");
+    // Without nowMs the deep ended market outranks; with nowMs it sinks.
+    expect(rankHits([ended, live], uq)[0]!.conditionId).toBe("c-ended");
+    expect(rankHits([ended, live], uq, NOW)[0]!.conditionId).toBe("c-live");
+  });
+
+  it("penalizes decided-and-thin (0/100, <$1k depth) but not decided-and-deep", () => {
+    const decidedThin = hit({
+      conditionId: "c-thin",
+      title: "Bitcoin milestone",
+      outcomePrices: ["0.005", "0.995"],
+      liquidity: "50",
+      volume: "100",
+    });
+    const live = hit({
+      conditionId: "c-open",
+      title: "Bitcoin milestone",
+      outcomePrices: ["0.55", "0.45"],
+      liquidity: "50",
+      volume: "100",
+    });
+    const decidedDeep = hit({
+      conditionId: "c-deep",
+      title: "Bitcoin milestone",
+      outcomePrices: ["0.99", "0.01"],
+      liquidity: "40000",
+      volume: "90000",
+    });
+    const uq = uqFor("bitcoin milestone");
+    const ranked = rankHits([decidedThin, live, decidedDeep], uq, NOW);
+    // Thin decided sinks last; deep decided keeps its depth-earned rank.
+    expect(ranked[ranked.length - 1]!.conditionId).toBe("c-thin");
+    expect(ranked[0]!.conditionId).toBe("c-deep");
   });
 });

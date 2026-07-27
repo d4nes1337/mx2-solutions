@@ -38,7 +38,30 @@ export interface MarketMeta {
    * default (brief §8.1.5).
    */
   currentPrice?: number | null;
+  /** Market end / window close time — drives the expiry default + countdowns. */
+  endDate?: string | null;
+  /** Recurring-series identity when the pick came from an instant market. */
+  seriesSlug?: string | null;
+  /** Series cadence ("5m", "15m", "1h", "weekly"…). */
+  recurrence?: string | null;
 }
+
+/**
+ * Expiry default for instant markets: a strategy bound to a recurring window
+ * should die with the window, not zombie on a resolved market. Only ever
+ * TIGHTENS — a user-set earlier expiry always survives, and non-recurring
+ * picks (no recurrence/endDate, or a window already past) change nothing.
+ */
+export const tightenedExpiry = (
+  currentMs: number | null,
+  meta: MarketMeta | undefined,
+  nowMs: number,
+): number | null => {
+  if (!meta?.recurrence || !meta.endDate) return currentMs;
+  const endMs = Date.parse(meta.endDate);
+  if (!Number.isFinite(endMs) || endMs <= nowMs) return currentMs;
+  return currentMs === null ? endMs : Math.min(currentMs, endMs);
+};
 
 export interface StrategyDoc {
   name: string;

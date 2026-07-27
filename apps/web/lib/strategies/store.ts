@@ -17,6 +17,7 @@ import {
   moveNodeInTree,
   removeNodeFromTree,
   replaceNodeInTree,
+  tightenedExpiry,
   toggleNotInTree,
   type MarketMeta,
   type NodePosition,
@@ -395,6 +396,9 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   bindMarket: (nodeId, ref, meta) =>
     set((s) => {
       const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
+      // Instant markets: default the strategy expiry to the window end so the
+      // strategy dies with the window (only ever tightens — see doc.ts).
+      const expiresAtMs = tightenedExpiry(s.doc.expiresAtMs, meta, Date.now());
       if (nodeId === "action") {
         if (s.doc.action.kind !== "order") return s;
         // Anchor the limit price to the picked outcome's current price (fresh
@@ -404,7 +408,10 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
           typeof cp === "number" && Number.isFinite(cp)
             ? Math.min(0.99, Math.max(0.01, Math.round(cp * 100) / 100))
             : s.doc.action.price;
-        return bump({ ...s.doc, marketMeta, action: { ...s.doc.action, market: ref, price } }, s);
+        return bump(
+          { ...s.doc, marketMeta, expiresAtMs, action: { ...s.doc.action, market: ref, price } },
+          s,
+        );
       }
       const node = findNode(s.doc.expr, nodeId);
       if (!node || node.type !== "condition" || node.condition.kind === "time_window") return s;
@@ -412,6 +419,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
         {
           ...s.doc,
           marketMeta,
+          expiresAtMs,
           expr: replaceNodeInTree(s.doc.expr, nodeId, {
             ...node,
             condition: { ...node.condition, market: ref },
@@ -428,8 +436,10 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     set((s) => {
       if (!isBound(ref) || s.doc.watchedMarkets.some((m) => m.tokenId === ref.tokenId)) return s;
       const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
+      // Same instant-market expiry default as bindMarket (only tightens).
+      const expiresAtMs = tightenedExpiry(s.doc.expiresAtMs, meta, Date.now());
       return {
-        doc: { ...s.doc, marketMeta, watchedMarkets: [...s.doc.watchedMarkets, ref] },
+        doc: { ...s.doc, marketMeta, expiresAtMs, watchedMarkets: [...s.doc.watchedMarkets, ref] },
         focusedMarketToken: ref.tokenId,
         dirty: true,
         pristine: false,

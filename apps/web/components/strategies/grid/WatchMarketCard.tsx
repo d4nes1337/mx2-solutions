@@ -10,7 +10,7 @@
  * governed the whole strategy. The header only carries identity: market name,
  * live price, and a "also traded" tag when this market is the order target.
  */
-import { Clock, Plus, Target, X } from "lucide-react";
+import { Clock, Plus, RefreshCw, Target, X } from "lucide-react";
 import { Badge, Card, CardHeader, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useTokenPricesHistory } from "@/lib/queries";
@@ -103,6 +103,22 @@ export function WatchMarketCard({
   onSelect?: (() => void) | undefined;
 }) {
   const tokenId = card.market?.tokenId ?? null;
+  // Instant-market window identity ("⟳ 5m · ends 9:25 AM"): the card
+  // re-renders on the grid's live polls, so remaining time stays fresh
+  // enough without its own ticker.
+  const meta = tokenId !== null ? doc.marketMeta[tokenId] : undefined;
+  const windowInfo = (() => {
+    if (!meta?.recurrence || !meta.endDate) return null;
+    const endMs = Date.parse(meta.endDate);
+    if (!Number.isFinite(endMs)) return null;
+    const remainingMs = endMs - Date.now();
+    if (remainingMs <= 0) return { text: `${meta.recurrence} · window ended`, ended: true };
+    const when =
+      remainingMs < 3_600_000
+        ? `ends in ${Math.max(1, Math.ceil(remainingMs / 60_000))}m`
+        : `ends ${new Date(endMs).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+    return { text: `${meta.recurrence} · ${when}`, ended: false };
+  })();
   const history = useTokenPricesHistory(tokenId, range);
   const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
   const last = series.length > 0 ? series[series.length - 1]!.v : null;
@@ -163,6 +179,15 @@ export function WatchMarketCard({
       <CardHeader
         right={
           <span className="flex items-center gap-2">
+            {windowInfo ? (
+              <Badge
+                tone={windowInfo.ended ? "neg" : "neutral"}
+                title="Recurring instant market — this strategy is bound to one window"
+              >
+                <RefreshCw size={9} className="mr-0.5 inline" aria-hidden />
+                {windowInfo.text}
+              </Badge>
+            ) : null}
             {isTarget ? (
               <Badge tone="brand" title="This is also the market the order trades">
                 <Target size={9} className="mr-0.5 inline" aria-hidden />

@@ -104,6 +104,16 @@ export function ExpiryField() {
     : Math.max(60_000, Math.round((doc.expiresAtMs! - Date.now()) / 60_000) * 60_000);
   const snapped = EXPIRY_PRESETS.find((p) => Math.abs(p.value - remainingMs) < 60_000);
 
+  // Instant-market default: binding a recurring window tightens the expiry to
+  // the window end (store.ts) — say so, or the auto-set value looks like a bug.
+  const windowMatched =
+    !never &&
+    Object.values(doc.marketMeta).some((meta) => {
+      if (!meta.recurrence || !meta.endDate) return false;
+      const endMs = Date.parse(meta.endDate);
+      return Number.isFinite(endMs) && Math.abs(endMs - doc.expiresAtMs!) < 60_000;
+    });
+
   return (
     <Field label="Stop watching after">
       <div className="space-y-1.5">
@@ -128,6 +138,11 @@ export function ExpiryField() {
             max={365 * DAY_MS}
           />
         )}
+        {windowMatched ? (
+          <p className="text-[11px] text-muted">
+            Set to the market’s window end — this strategy stops with its instant market.
+          </p>
+        ) : null}
       </div>
     </Field>
   );

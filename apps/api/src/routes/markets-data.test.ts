@@ -79,6 +79,9 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
 
   const gamma = {
     listEvents: async () => ok([]),
+    listEventsPaginated: async () =>
+      ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+    getSeries: async () => ok([]),
     getEvent: async () => err(upstreamErr),
     listMarkets: async () => ok([]),
     getMarket: async (id: string) => {

@@ -4,6 +4,9 @@ Date: 2026-06-30
 Status: **Accepted (built after owner approval)**
 Deciders: Owner (PM/BA), Senior Technical Lead
 
+> **Scope note (2026-07-27, ADR-0027):** the ranked feed now serves only the HOME surface
+> (`AutomateNow`). The Markets tab was replaced by the polymarket.com-mirror browse grid.
+
 ---
 
 ## Context

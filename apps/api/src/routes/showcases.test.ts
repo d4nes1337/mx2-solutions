@@ -88,6 +88,9 @@ const buildHarness = () => {
       ]);
     },
     getEvent: async () => err(upstreamErr),
+    listEventsPaginated: async () =>
+      ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+    getSeries: async () => ok([]),
     listMarkets: async () => ok([]),
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
@@ -181,6 +184,9 @@ describe("GET /api/showcases", () => {
   it("502s when upstream fails and there is no cache", async () => {
     const gamma = {
       listEvents: async () => err(upstreamErr),
+      listEventsPaginated: async () =>
+        ok({ data: [], pagination: { hasMore: false, totalResults: 0 } }),
+      getSeries: async () => ok([]),
       getEvent: async () => err(upstreamErr),
       listMarkets: async () => ok([]),
       getMarket: async () => err(upstreamErr),

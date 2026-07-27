@@ -4,6 +4,30 @@ _Last updated: 2026-07-27_
 
 ## Recent
 
+- **Markets tab → polymarket.com mirror + instant markets in the builder (owner request
+  2026-07-27; ADR-0027, ADR-0015 amendment).** The Markets tab now shows the same markets in
+  the same order as polymarket.com's homepage: new `GET /api/markets/browse` pass-through over
+  Gamma `/events/pagination` (verified live; 20s cache, stale-on-error, 60/min limit), hero
+  search bar with `/` shortcut, curated category chips (`?tag=` deep links), and infinite
+  scroll (first `useInfiniteQuery` + sentinel in the repo, manual Load-more fallback). The old
+  ranked feed still powers the home surface only. Builder search hygiene kills the 0/100
+  recurring-instance noise: ended series instances dropped, each series collapsed to its
+  freshest live window (decided windows skipped), dead one-offs rank-penalized; DTOs carry
+  `seriesSlug`/`recurrence` end to end. New instant-markets surface: `GET /api/markets/instant`
+  (curated BTC/ETH/SOL/XRP/DOGE × 5m/15m + BTC hourly; live window + next 2 pre-created future
+  windows, 15s shared cache) feeding an Instant Markets rail in the picker (ticking countdowns,
+  rollover refresh, future windows bindable) and a pinned series card on crypto queries.
+  Binding an instant market tightens the strategy's `expiresAtMs` to the window end (never
+  loosens a user value) so those strategies hit the engine's terminal EXPIRED instead of
+  zombie-ing; ExpiryField and WATCH cards say so. **Block C (auto-rolling SeriesRef) is
+  specced but deferred** — implementation must start with an owner-approved user-path
+  walkthrough (see plan + ADR-0027). Verification: 31 new tests (client contract, browse
+  route, hygiene, instant, expiry) green in the full 807-test suite; typecheck + eslint +
+  prettier clean; live dev-preview walkthrough — browse grid matches polymarket.com's order,
+  3 pages paged in, `?tag=crypto` chip filter, clean "btc" search, rail countdown ticking,
+  future window bound, draft `expiresAtMs` = window end, pinned card rolls to the fresh 5m
+  window on refetch.
+
 - **Theme system reduced to light / dark / system (owner request 2026-07-27; D-050).** The old
   blue-grey light palette is gone. The warm-grey "paper" palette is promoted verbatim into `:root`
   and renamed **light** — now the default when nothing is stored. Dark was re-cut from near-black

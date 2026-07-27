@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   GammaEventSchema,
   GammaMarketSchema,
+  GammaPaginatedEventsSchema,
+  GammaSeriesSchema,
   PricePointSchema,
   PublicProfileSchema,
 } from "./gamma/schema.js";
@@ -113,6 +115,85 @@ describe("GammaEventSchema", () => {
     if (result.success) {
       expect(result.data.tags).toEqual([]);
       expect(result.data.markets).toEqual([]);
+    }
+  });
+
+  it("parses recurring-series fields (seriesSlug + series[].recurrence)", () => {
+    // Shape observed live on /public-search and /events 2026-07-27 for
+    // recurring instances ("Bitcoin Up or Down - July 27, 10:45PM-11:00PM ET").
+    const recurring: unknown = {
+      id: "754165",
+      title: "Bitcoin Up or Down - July 27, 10:45PM-11:00PM ET",
+      slug: "btc-updown-15m-1785206700",
+      seriesSlug: "btc-up-or-down-15m",
+      series: [{ id: "10685", slug: "btc-up-or-down-15m", recurrence: "15m" }],
+      tags: [
+        { id: "", label: "Recurring", slug: "recurring" },
+        { id: "", label: "15M", slug: "15M" },
+      ],
+    };
+    const result = GammaEventSchema.safeParse(recurring);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.seriesSlug).toBe("btc-up-or-down-15m");
+      expect(result.data.series?.[0]?.recurrence).toBe("15m");
+    }
+  });
+});
+
+describe("GammaPaginatedEventsSchema", () => {
+  it("parses the /events/pagination envelope", () => {
+    const result = GammaPaginatedEventsSchema.safeParse({
+      data: [sampleEvent],
+      pagination: { hasMore: true, totalResults: 12082 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.data).toHaveLength(1);
+      expect(result.data.pagination.hasMore).toBe(true);
+      expect(result.data.pagination.totalResults).toBe(12082);
+    }
+  });
+
+  it("defaults a missing pagination block to hasMore=false", () => {
+    // Defensive: the endpoint is undocumented, so shape drift must degrade
+    // to "no more pages", never to a parse failure.
+    const result = GammaPaginatedEventsSchema.safeParse({ data: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pagination.hasMore).toBe(false);
+      expect(result.data.pagination.totalResults).toBe(0);
+    }
+  });
+});
+
+describe("GammaSeriesSchema", () => {
+  it("parses a series entry (live shape 2026-07-27)", () => {
+    const result = GammaSeriesSchema.array().safeParse([
+      {
+        id: "10684",
+        slug: "btc-up-or-down-5m",
+        title: "BTC Up or Down 5m",
+        recurrence: "5m",
+        active: true,
+        events: [sampleEvent],
+      },
+    ]);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data[0]?.id).toBe("10684");
+      expect(result.data[0]?.recurrence).toBe("5m");
+      expect(result.data[0]?.events).toHaveLength(1);
+    }
+  });
+
+  it("coerces a numeric id to string and defaults missing fields", () => {
+    const result = GammaSeriesSchema.safeParse({ id: 10684 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.id).toBe("10684");
+      expect(result.data.active).toBe(false);
+      expect(result.data.events).toEqual([]);
     }
   });
 });

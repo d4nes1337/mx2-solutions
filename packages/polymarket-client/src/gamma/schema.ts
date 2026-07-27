@@ -123,6 +123,10 @@ export const GammaEventSchema = z
     // Winner-take-all event (elections): sub-markets are mutually exclusive
     // candidates — ordered by price (favorite first) in sibling listings.
     negRisk: z.boolean().default(false).optional(),
+    // Recurring-series membership (verified live 2026-07-27): instances of a
+    // recurring market ("BTC Up or Down 5m", weekly strikes) carry the parent
+    // series slug plus a series stub with its cadence ("5m"/"15m"/"weekly"…).
+    seriesSlug: z.string().nullish(),
     series: z
       .array(
         z
@@ -130,6 +134,7 @@ export const GammaEventSchema = z
             id: z.string().optional(),
             title: z.string().optional(),
             slug: z.string().optional(),
+            recurrence: z.string().optional(),
           })
           .passthrough(),
       )
@@ -143,6 +148,40 @@ export const GammaEventSchema = z
  */
 export const PublicSearchSchema = z
   .object({ events: z.array(GammaEventSchema).default([]) })
+  .passthrough();
+
+/**
+ * Gamma /events/pagination response (verified live 2026-07-27) — the endpoint
+ * polymarket.com's homepage grid pages through: { data, pagination }.
+ */
+export const GammaPaginatedEventsSchema = z
+  .object({
+    data: z.array(GammaEventSchema).default([]),
+    pagination: z
+      .object({
+        hasMore: z.boolean().default(false),
+        totalResults: z.number().default(0),
+      })
+      .passthrough()
+      .default({ hasMore: false, totalResults: 0 }),
+  })
+  .passthrough();
+
+/**
+ * Gamma /series entry (verified live 2026-07-27). `recurrence` is free-form
+ * ("5m", "15m", "hourly", "daily", "weekly"…). Embedded `events` are a stale,
+ * capped sample — resolve live windows via /events/pagination?series_id=
+ * instead of trusting them.
+ */
+export const GammaSeriesSchema = z
+  .object({
+    id: z.coerce.string(),
+    slug: z.string().default(""),
+    title: z.string().default(""),
+    recurrence: z.string().nullish(),
+    active: z.boolean().default(false),
+    events: z.array(GammaEventSchema).default([]),
+  })
   .passthrough();
 
 // Each point is {t: Unix seconds, p: probability 0–1}
@@ -165,5 +204,7 @@ export const PublicProfileSchema = z
 export type GammaTag = z.infer<typeof GammaTagSchema>;
 export type GammaMarket = z.infer<typeof GammaMarketSchema>;
 export type GammaEvent = z.infer<typeof GammaEventSchema>;
+export type GammaPaginatedEvents = z.infer<typeof GammaPaginatedEventsSchema>;
+export type GammaSeries = z.infer<typeof GammaSeriesSchema>;
 export type PricePoint = z.infer<typeof PricePointSchema>;
 export type PublicProfile = z.infer<typeof PublicProfileSchema>;

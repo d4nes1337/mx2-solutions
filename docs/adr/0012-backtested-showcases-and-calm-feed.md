@@ -3,6 +3,10 @@
 - Status: Built (2026-07-10)
 - Owner decision: round-2 growth brief approved 2026-07-10 (see DECISIONS D-022)
 
+> **Scope note (2026-07-27, ADR-0027):** the "calm feed" (§4) now serves only the HOME
+> surface. The Markets tab was replaced by the polymarket.com-mirror browse grid with
+> infinite scroll; showcase teasers still decorate its cards.
+
 ## Context
 
 Round-2 owner feedback on the vibe-trading onboarding (ADR-0011): every generic element

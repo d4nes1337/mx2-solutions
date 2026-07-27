@@ -161,12 +161,24 @@ export const understandQuery = (raw: string, nowMs: number): UnderstoodQuery => 
   return { original: raw, cleaned, dateWindow: window, queries };
 };
 
+/** Depth below which a 0/100-priced market is considered dead, not deep. */
+const THIN_DEPTH = 1000;
+const DECIDED_THIN_PENALTY = 1.5;
+const ENDED_PENALTY = 2.0;
+
 /**
  * Deterministic local re-rank: 3·lexicalOverlap + 2·dateFit +
  * log10(liquidity+volume+1)/10 — text fit dominates, a matching end date
  * beats depth, depth breaks ties. Dedups by conditionId (first wins).
+ * With `nowMs`, two liveness penalties apply: already-ended markets (−2.0)
+ * and decided-and-thin ones — ≤1¢/≥99¢ with < $1k depth (−1.5) — sink below
+ * anything actually tradable without being filtered out.
  */
-export const rankHits = (hits: MarketSearchHit[], uq: UnderstoodQuery): MarketSearchHit[] => {
+export const rankHits = (
+  hits: MarketSearchHit[],
+  uq: UnderstoodQuery,
+  nowMs?: number,
+): MarketSearchHit[] => {
   const queryTokens = new Set(uq.queries.flatMap(tokenize));
 
   const scoreOf = (hit: MarketSearchHit): number => {
@@ -199,7 +211,23 @@ export const rankHits = (hits: MarketSearchHit[], uq: UnderstoodQuery): MarketSe
     const depth =
       (Number.isFinite(liquidity) ? liquidity : 0) + (Number.isFinite(volume) ? volume : 0);
 
-    return 3 * lexical + 2 * dateFit + Math.log10(Math.max(depth, 0) + 1) / 10;
+    let penalty = 0;
+    if (nowMs !== undefined) {
+      if (hit.endDate) {
+        const endMs = Date.parse(hit.endDate);
+        if (Number.isFinite(endMs) && endMs < nowMs) penalty += ENDED_PENALTY;
+      }
+      const headPrice = Number(hit.outcomePrices[0]);
+      if (
+        Number.isFinite(headPrice) &&
+        (headPrice <= 0.01 || headPrice >= 0.99) &&
+        depth < THIN_DEPTH
+      ) {
+        penalty += DECIDED_THIN_PENALTY;
+      }
+    }
+
+    return 3 * lexical + 2 * dateFit + Math.log10(Math.max(depth, 0) + 1) / 10 - penalty;
   };
 
   const seen = new Set<string>();
