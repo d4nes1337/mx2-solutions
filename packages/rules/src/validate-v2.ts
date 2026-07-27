@@ -106,7 +106,7 @@ export const validateStrategyDefinition = (
       push("NOT_GROUP_ARITY", "NOT must wrap exactly one condition or group.", g.id);
     const emptyRootGateOk = g.id === def.expr.id && def.action.kind === "quote_loop";
     if (g.children.length === 0 && !emptyRootGateOk)
-      push("GROUP_EMPTY", "Empty logic group.", g.id);
+      push("GROUP_EMPTY", "This ALL/ANY group has no conditions in it yet.", g.id);
   });
 
   // ── Condition parameters ──

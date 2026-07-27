@@ -164,16 +164,18 @@ export function ActionCenterDrawer({
   return (
     <AnimatePresence>
       {open ? (
-        <div className="fixed inset-0 z-50">
-          <m.div
-            className="absolute inset-0 bg-black/50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={reduced ? { duration: 0 } : { duration: 0.15 }}
-            onClick={closeDrawer}
-            aria-hidden
-          />
+        // Keyed motion wrapper: a plain <div> here is invisible to
+        // AnimatePresence, which left the closed drawer mounted over the app
+        // (same defect as SheetShell). The wrapper owns the exit fade.
+        <m.div
+          key="action-center"
+          className="fixed inset-0 z-50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduced ? { duration: 0 } : { duration: 0.15 }}
+        >
+          <div className="absolute inset-0 bg-black/50" onClick={closeDrawer} aria-hidden />
           <m.aside
             role="dialog"
             aria-modal="true"
@@ -184,9 +186,8 @@ export function ActionCenterDrawer({
                 ? "right-0 top-0 h-full w-[380px] border-l"
                 : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl border-t",
             )}
-            initial={from}
+            initial={reduced ? false : from}
             animate={enter}
-            exit={from}
             transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 360, damping: 34 }}
           >
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -225,7 +226,7 @@ export function ActionCenterDrawer({
               <NotificationControls />
             </div>
           </m.aside>
-        </div>
+        </m.div>
       ) : null}
     </AnimatePresence>
   );

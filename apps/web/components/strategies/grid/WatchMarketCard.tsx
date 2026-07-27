@@ -60,6 +60,11 @@ function OpConnector({
         type="button"
         onClick={() => onSetOp(op === "and" ? "or" : "and")}
         title={op === "and" ? "Both must hold — tap for ANY" : "Either can hold — tap for ALL"}
+        aria-label={
+          op === "and"
+            ? "Both conditions must hold. Switch to either one."
+            : "Either condition can hold. Switch to both."
+        }
         className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted transition-colors hover:border-brand/50 hover:text-fg"
       >
         {label}

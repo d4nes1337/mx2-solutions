@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConditionV2, ExprNode, ExprResultNode, GroupNode, MarketRef } from "@mx2/rules";
 import { emptyDoc, type StrategyDoc } from "@/lib/strategies/doc";
 import type { StrategyEvaluation } from "@/lib/strategies/queries";
+import { useBuilderStore } from "@/lib/strategies/store";
 import { StrategyGrid } from "./StrategyGrid";
 
 const m1: MarketRef = {
@@ -170,7 +171,7 @@ describe("StrategyGrid (view mode)", () => {
 
     // Root combinator lives in the IF header spanning every card, not in the
     // first card's header where it read as a per-card control.
-    expect(screen.getByText(/of these 3 markets hold at once/)).toBeInTheDocument();
+    expect(screen.getByText(/of these 3 hold at once/)).toBeInTheDocument();
     // Per-card combinator renders as an inline connector between two rows.
     expect(screen.getByText("and")).toBeInTheDocument();
 
@@ -197,5 +198,28 @@ describe("StrategyGrid (view mode)", () => {
     await waitFor(() =>
       expect(screen.getAllByRole("img", { name: "price chart" }).length).toBeGreaterThanOrEqual(4),
     );
+  });
+});
+
+describe("StrategyGrid (edit mode) — one sheet at a time", () => {
+  it("opening a second editor replaces the first instead of stacking dialogs", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset(doc);
+    render(
+      <QueryClientProvider client={client}>
+        <StrategyGrid doc={doc} edit evaluation={evaluation} />
+      </QueryClientProvider>,
+    );
+
+    // Open the hold-window (settings) sheet.
+    fireEvent.click(screen.getByTitle("Hold window, recurrence, expiry…"));
+    expect(await screen.findByText("Strategy settings")).toBeInTheDocument();
+
+    // Opening the action editor must close settings — never two panels at once.
+    fireEvent.click(screen.getAllByText("Edit order")[0]!);
+    await waitFor(() => expect(screen.queryByText("Strategy settings")).toBeNull());
+    expect(screen.getByText("Edit the action")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 });

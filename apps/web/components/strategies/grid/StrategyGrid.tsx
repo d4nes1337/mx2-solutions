@@ -61,9 +61,14 @@ export function StrategyGrid({
   onDuplicateForMarket?: (() => void) | undefined;
 }) {
   const [range, setRange] = useState("1d");
-  const [editingNode, setEditingNode] = useState<string | null>(null);
-  const [actionOpen, setActionOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * ONE sheet at a time. Independent booleans let two dialogs mount together
+   * and overlap into an unreadable stack; a single tagged value makes that
+   * impossible.
+   */
+  const [sheet, setSheet] = useState<
+    { kind: "row"; nodeId: string } | { kind: "action" } | { kind: "settings" } | null
+  >(null);
 
   const addCondition = useBuilderStore((s) => s.addCondition);
   const setCardOp = useBuilderStore((s) => s.setCardOp);
@@ -72,6 +77,13 @@ export function StrategyGrid({
   const removeWatchedMarket = useBuilderStore((s) => s.removeWatchedMarket);
   const lastAiChangedIds = useBuilderStore((s) => s.lastAiChangedIds);
   const selectedNodeId = useBuilderStore((s) => s.doc.selectedNodeId);
+
+  const closeSheet = () => setSheet(null);
+  /** Selecting the node keeps the canvas in sync with what's being edited. */
+  const openRow = (nodeId: string) => {
+    select(nodeId);
+    setSheet({ kind: "row", nodeId });
+  };
 
   const projection = docToGrid(doc);
   const results = collectConditionResults(evaluation?.root);
@@ -97,7 +109,9 @@ export function StrategyGrid({
       <div className="grid gap-3 lg:grid-cols-[minmax(0,11fr)_auto_minmax(0,9fr)]">
         {/* WATCH zone */}
         <div className="min-w-0 space-y-2">
-          {projection.watch.length > 0 ? (
+          {/* Always present in edit mode: it labels the zone, so a blank
+              builder isn't an unlabelled column facing a labelled THEN. */}
+          {edit || projection.watch.length > 0 ? (
             <IfZoneHeader
               rootOp={projection.rootOp}
               cardCount={projection.watch.length}
@@ -120,10 +134,7 @@ export function StrategyGrid({
                   edit={
                     edit
                       ? {
-                          onEditRow: (nodeId) => {
-                            select(nodeId);
-                            setEditingNode(nodeId);
-                          },
+                          onEditRow: openRow,
                           onAddCondition: () => {
                             const id = addCondition(
                               defaultCondition(
@@ -132,7 +143,7 @@ export function StrategyGrid({
                               ),
                               card.opNodeId ?? undefined,
                             );
-                            setEditingNode(id);
+                            openRow(id);
                           },
                           onSetOp: (op) => setCardOp(card.key, op),
                           onRemove:
@@ -159,7 +170,7 @@ export function StrategyGrid({
         {/* Spine */}
         <LogicSpine
           holdsForMs={doc.holdsForMs}
-          edit={edit ? { onOpenSettings: () => setSettingsOpen(true) } : undefined}
+          edit={edit ? { onOpenSettings: () => setSheet({ kind: "settings" }) } : undefined}
         />
 
         {/* ACT zone */}
@@ -181,7 +192,7 @@ export function StrategyGrid({
                   ? {
                       onEditAction: () => {
                         select("action");
-                        setActionOpen(true);
+                        setSheet({ kind: "action" });
                       },
                       onDuplicateForMarket,
                     }
@@ -195,18 +206,21 @@ export function StrategyGrid({
 
       {edit ? (
         <>
-          <RowEditorSheet nodeId={editingNode} onClose={() => setEditingNode(null)} />
+          <RowEditorSheet
+            nodeId={sheet?.kind === "row" ? sheet.nodeId : null}
+            onClose={closeSheet}
+          />
           <SheetPanel
-            open={actionOpen}
-            onClose={() => setActionOpen(false)}
+            open={sheet?.kind === "action"}
+            onClose={closeSheet}
             title="Edit the action"
             description="What arima does the moment your conditions hold."
           >
             <ActionEditor />
           </SheetPanel>
           <SheetPanel
-            open={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
+            open={sheet?.kind === "settings"}
+            onClose={closeSheet}
             title="Strategy settings"
             description="Hold window, repeats and expiry."
           >

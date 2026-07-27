@@ -42,18 +42,20 @@ export function IfZoneHeader({
               onChange={(v) => onSetRootOp(v as "and" | "or")}
               size="sm"
             />
-            <span className="text-[12px] text-muted">
-              of these {cardCount} markets hold at once
-            </span>
+            {/* No noun: a card can be a market, a schedule, or an unbound
+                placeholder — "markets" would be a lie for some of them. */}
+            <span className="text-[12px] text-muted">of these {cardCount} hold at once</span>
           </>
         ) : (
           <span className="text-[12px] text-muted">
             <span className="font-semibold text-fg">{rootOp === "and" ? "ALL" : "ANY"}</span> of
-            these {cardCount} markets hold at once
+            these {cardCount} hold at once
           </span>
         )
       ) : (
-        <span className="text-[12px] text-muted">these conditions hold</span>
+        <span className="text-[12px] text-muted">
+          {cardCount === 0 ? "you add a market to watch" : "these conditions hold"}
+        </span>
       )}
     </div>
   );

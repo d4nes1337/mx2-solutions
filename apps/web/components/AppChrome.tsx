@@ -32,8 +32,9 @@ export function AppChrome({ children }: { children: ReactNode }) {
       <main className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4 sm:py-5">{children}</main>
       <footer className="mx-auto max-w-[1600px] px-3 pb-8 pt-4 text-[11px] leading-relaxed text-faint sm:px-4">
         <div className="border-t border-border pt-4">
-          <span className="font-semibold text-muted">arima</span> — build smart Polymarket orders
-          visually. Market data from Polymarket Gamma / Data / CLOB APIs. Not investment advice.
+          <span className="font-semibold text-muted">arima</span> — conditional trading strategies
+          for Polymarket. Market data from Polymarket Gamma / Data / CLOB APIs. Not investment
+          advice.
         </div>
       </footer>
       <TerminalDock />

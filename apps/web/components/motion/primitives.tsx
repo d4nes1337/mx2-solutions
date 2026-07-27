@@ -68,13 +68,21 @@ export function SheetShell({
   return (
     <AnimatePresence>
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-          <m.div
+        // The DIRECT child of AnimatePresence must be a keyed motion component:
+        // with a plain <div> here the exit was never tracked and closed sheets
+        // stayed mounted forever, stacking translucent dialogs on screen. The
+        // wrapper owns the exit fade so unmount is guaranteed; the panel keeps
+        // its spring entrance.
+        <m.div
+          key="sheet"
+          className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduced ? INSTANT : { duration: 0.15 }}
+        >
+          <div
             className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={reduced ? INSTANT : { duration: 0.15 }}
             onClick={onClose}
             aria-hidden
           />
@@ -85,14 +93,13 @@ export function SheetShell({
             aria-label={label}
             tabIndex={-1}
             className={cn("relative z-10 outline-none", panelClassName ?? DEFAULT_PANEL)}
-            initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 24 }}
+            initial={reduced ? false : { opacity: 0, scale: 0.96, y: 24 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 12 }}
             transition={reduced ? INSTANT : SPRING}
           >
             {children}
           </m.div>
-        </div>
+        </m.div>
       ) : null}
     </AnimatePresence>
   );
