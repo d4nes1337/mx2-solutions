@@ -295,7 +295,7 @@ describe("rolling series bindings across consecutive windows", () => {
   });
 
   it("never enters the same window twice, even if the condition re-fires", async () => {
-    let current: ResolvedSeriesWindow | null = windowN(0, 0.51);
+    const current: ResolvedSeriesWindow | null = windowN(0, 0.51);
     const h = makeHarness(makeRow(rollingDef()), () => current);
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
