@@ -20,6 +20,8 @@ export interface DraftChatMessage {
   warnings?: string[];
   /** "I assumed / quick questions" chips — tap to prefill the composer. */
   openQuestions?: string[];
+  /** Web pages the AI consulted (hosted web search citations). */
+  sources?: { url: string; title: string }[];
 }
 
 /** A compact API-contract turn (what the generate endpoint receives back). */

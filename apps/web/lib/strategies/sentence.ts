@@ -117,7 +117,13 @@ export const describeStrategy = (doc: StrategyDoc): SentenceSegment[] => {
     case "order": {
       const a = doc.action;
       const verb = a.side === "BUY" ? "buy" : "sell";
-      const where = isBound(a.market) ? ` on ${marketLabel(doc, a.market)}` : "";
+      // A rolling order names its SERIES, never the anchor window — the anchor
+      // is a few minutes from being a resolved market nobody trades (ADR-0028).
+      const where = a.rollingSeries
+        ? ` on the freshest ${a.rollingSeries.title ?? a.rollingSeries.seriesSlug} window`
+        : isBound(a.market)
+          ? ` on ${marketLabel(doc, a.market)}`
+          : "";
       const how =
         a.execution === "auto"
           ? " automatically from my Arima trading wallet"
@@ -170,6 +176,11 @@ export const strategySentence = (doc: StrategyDoc): string =>
 export const suggestStrategyName = (doc: StrategyDoc): string => {
   const shorten = (s: string) => (s.length > 44 ? `${s.slice(0, 41)}…` : s);
   const a = doc.action;
+  if (a.kind === "order" && a.rollingSeries) {
+    const verb = a.side === "BUY" ? "Buy" : "Sell";
+    const series = a.rollingSeries.title ?? a.rollingSeries.seriesSlug;
+    return shorten(`${verb} ${a.rollingSeries.outcome} · rolling ${series}`);
+  }
   if (a.kind === "order" && isBound(a.market)) {
     const verb = a.side === "BUY" ? "Buy" : "Sell";
     return shorten(`${verb} ${marketLabel(doc, a.market)}`);

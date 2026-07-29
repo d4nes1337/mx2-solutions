@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MarketRef } from "@mx2/rules";
-import { humanDuration, strategySentence } from "./sentence";
+import { humanDuration, strategySentence, suggestStrategyName } from "./sentence";
 import { TEMPLATES, templateById } from "./templates";
 import { emptyDoc, freshNodeId } from "./doc";
 import { userStatus } from "./status";
@@ -221,5 +221,50 @@ describe("builder store + compile", () => {
     expect(validateDoc(doc).some((i) => i.code === "AUTO_REQUIRES_LIMITS")).toBe(true);
     doc.limits = { maxNotionalPerOrder: 100, maxDailyNotional: 200, maxTotalNotional: 500 };
     expect(validateDoc(doc).some((i) => i.code === "AUTO_REQUIRES_LIMITS")).toBe(false);
+  });
+});
+
+describe("strategySentence: rolling series bindings (ADR-0028)", () => {
+  const rollingDoc = () => {
+    const doc = emptyDoc();
+    return {
+      ...doc,
+      action: {
+        kind: "order" as const,
+        // The anchor window — a market that will be resolved minutes from now.
+        market: {
+          conditionId: "cond-anchor",
+          tokenId: "tok-anchor",
+          outcome: "Up",
+          title: "Bitcoin Up or Down - July 28, 6:30PM-6:35PM ET",
+        },
+        rollingSeries: {
+          kind: "series" as const,
+          seriesSlug: "btc-up-or-down-5m",
+          outcome: "Up",
+          selector: "current" as const,
+          maxEntryPrice: 0.6,
+          title: "BTC Up or Down 5m",
+        },
+        side: "BUY" as const,
+        price: 0.6,
+        size: 100,
+        orderType: "FAK" as const,
+        execution: "prepare" as const,
+      },
+    };
+  };
+
+  it("names the series, never the anchor window that is about to resolve", () => {
+    const s = strategySentence(rollingDoc());
+    expect(s).toContain("the freshest BTC Up or Down 5m window");
+    // The stale anchor's title must not leak into user-facing copy.
+    expect(s).not.toContain("6:30PM-6:35PM");
+  });
+
+  it("summarizes a rolling strategy as rolling", () => {
+    const name = suggestStrategyName(rollingDoc());
+    expect(name).toContain("rolling");
+    expect(name).toContain("BTC Up or Down 5m");
   });
 });

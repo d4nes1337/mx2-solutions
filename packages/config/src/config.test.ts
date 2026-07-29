@@ -118,7 +118,7 @@ describe("loadConfig", () => {
     const cfg = loadConfig(base);
     expect(cfg.features.aiChat).toBe(false);
     expect(cfg.features.openBeta).toBe(false);
-    expect(cfg.ai.model).toBe("claude-sonnet-5");
+    expect(cfg.ai.model).toBe("claude-haiku-4-5");
     expect(cfg.ai.anthropicApiKey).toBeUndefined();
   });
 
@@ -126,8 +126,55 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, FEATURE_AI_CHAT: "true" })).toThrow(ConfigError);
   });
 
+  it("fails closed if AI web search is enabled without AI chat", () => {
+    expect(() => loadConfig({ ...base, FEATURE_AI_WEB_SEARCH: "true" })).toThrow(ConfigError);
+    const cfg = loadConfig({
+      ...base,
+      FEATURE_AI_CHAT: "true",
+      ANTHROPIC_API_KEY: "sk-ant-test",
+      FEATURE_AI_WEB_SEARCH: "true",
+    });
+    expect(cfg.features.aiWebSearch).toBe(true);
+  });
+
+  it("parses AI_BASE_URL (empty = unset) and blocks it alongside web search", () => {
+    const aiOn = { ...base, FEATURE_AI_CHAT: "true", ANTHROPIC_API_KEY: "sk-ant-test" };
+    expect(loadConfig({ ...aiOn, AI_BASE_URL: "" }).ai.baseUrl).toBeUndefined();
+    expect(
+      loadConfig({ ...aiOn, AI_BASE_URL: "https://api.moonshot.ai/anthropic" }).ai.baseUrl,
+    ).toBe("https://api.moonshot.ai/anthropic");
+    expect(() => loadConfig({ ...aiOn, AI_BASE_URL: "not-a-url" })).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({
+        ...aiOn,
+        FEATURE_AI_WEB_SEARCH: "true",
+        AI_BASE_URL: "https://api.moonshot.ai/anthropic",
+      }),
+    ).toThrow(ConfigError);
+  });
+
   it("fails closed if bridge withdrawals are enabled without wallet withdrawals", () => {
     expect(() => loadConfig({ ...base, FEATURE_BRIDGE_WITHDRAWALS: "true" })).toThrow(ConfigError);
+  });
+
+  it("defaults referrals off with an empty admin set and 5 seats", () => {
+    const cfg = loadConfig(base);
+    expect(cfg.features.referrals).toBe(false);
+    expect(cfg.referrals.adminWallets).toEqual([]);
+    expect(cfg.referrals.defaultMaxUses).toBe(5);
+    expect(cfg.dune.apiKey).toBeUndefined();
+  });
+
+  it("parses admin wallets case-insensitively and drops malformed entries", () => {
+    const cfg = loadConfig({
+      ...base,
+      FEATURE_REFERRALS: "true",
+      ADMIN_WALLET_ADDRESSES: ` 0x${"A".repeat(40)} , 0x${"b".repeat(40)},not-a-wallet, `,
+      REFERRAL_DEFAULT_MAX_USES: "10",
+    });
+    expect(cfg.features.referrals).toBe(true);
+    expect(cfg.referrals.adminWallets).toEqual([`0x${"a".repeat(40)}`, `0x${"b".repeat(40)}`]);
+    expect(cfg.referrals.defaultMaxUses).toBe(10);
   });
 
   it("accepts AI chat when the key is present and honours AI_MODEL", () => {

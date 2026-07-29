@@ -125,13 +125,46 @@ const createInput = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** A valid already-compiled definition, as the builder sends when refining. */
+const currentDefinition = () => ({
+  version: 2,
+  name: "My strategy",
+  templateId: null,
+  expr: {
+    type: "group",
+    id: "root",
+    op: "and",
+    children: [
+      {
+        type: "condition",
+        id: "c1",
+        condition: {
+          kind: "price",
+          market: { conditionId: "cond-btc", tokenId: TOKEN_YES, outcome: "Yes" },
+          source: "ask",
+          comparator: "lte",
+          threshold: 0.45,
+        },
+      },
+    ],
+  },
+  holdsForMs: 0,
+  maxDataAgeMs: 30_000,
+  action: { kind: "alert" },
+  recurrence: { kind: "once" },
+  limits: null,
+  expiresAtMs: null,
+});
+
 // ── Harness (clone of the smart-orders test app with an aiClient) ───────────
 
 const buildAiApp = (opts: {
   aiChat?: boolean;
   responses?: Anthropic.Message[];
   model?: string;
+  webSearch?: boolean;
   findMarket?: GammaClient["findMarket"];
+  searchMarkets?: GammaClient["searchMarkets"];
 }) => {
   const audits: { action: string; metadata: Record<string, unknown> }[] = [];
   const responses = [...(opts.responses ?? [])];
@@ -142,6 +175,7 @@ const buildAiApp = (opts: {
     DATABASE_URL: "postgresql://u:p@localhost:5432/db",
     ...(aiEnabled ? { FEATURE_AI_CHAT: "true", ANTHROPIC_API_KEY: "sk-ant-test" } : {}),
     ...(opts.model ? { AI_MODEL: opts.model } : {}),
+    ...(opts.webSearch ? { FEATURE_AI_WEB_SEARCH: "true" } : {}),
   });
 
   const aiClient: AiClient | null = aiEnabled
@@ -182,7 +216,7 @@ const buildAiApp = (opts: {
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
     findMarket: opts.findMarket ?? (async () => ok(null)),
-    searchMarkets: async () => ok([searchEvent()]),
+    searchMarkets: opts.searchMarkets ?? (async () => ok([searchEvent()])),
   };
   const clob: ClobClient = {
     getOrderbook: async () => err(upstreamErr),
@@ -299,6 +333,7 @@ const buildAiApp = (opts: {
     archive: async () => null,
     unarchive: async () => null,
     addExecutedNotional: async () => {},
+    claimSeriesWindow: async () => true,
     listStuckExecuting: async () => [],
     revertExecuting: async () => null,
     createSuperseding: async () => null,
@@ -414,8 +449,12 @@ describe("POST /api/ai/generate-strategy", () => {
     expect(body.openQuestions).toEqual([]);
     expect(audits.map((a) => a.action)).toContain("ai.strategy_generated");
 
-    // The model must never see real ids: the search tool_result (sent on the
-    // 2nd model call) must not contain the tokenId or conditionId.
+    // Fresh prompts are seeded with pre-searched candidates on call 1.
+    expect(JSON.stringify(aiCalls[0]!.messages)).toContain("Pre-searched candidates");
+
+    // The model must never see real ids: neither the seeded candidates nor the
+    // search tool_result (sent on the 2nd model call) may contain the tokenId
+    // or conditionId.
     const secondCallMessages = JSON.stringify(aiCalls[1]!.messages);
     expect(secondCallMessages).not.toContain(TOKEN_YES);
     expect(secondCallMessages).not.toContain("cond-btc");
@@ -528,18 +567,30 @@ describe("POST /api/ai/generate-strategy", () => {
     await app.close();
   });
 
-  it("422s AI_GENERATION_FAILED when the repair round also fails", async () => {
+  it("falls back to a guaranteed minimal draft when both repair rounds fail", async () => {
     const bad = createInput({ conditions: [conditionNode(1.5)] });
-    const { app } = buildAiApp({
+    const { app, audits } = buildAiApp({
       responses: [
         modelTurn([toolUse("search_markets", { query: "btc" }, "t1")]),
         modelTurn([toolUse("create_strategy", bad, "t2")]),
         modelTurn([toolUse("create_strategy", bad, "t3")]),
+        modelTurn([toolUse("create_strategy", bad, "t4")]),
       ],
     });
     const res = await post(app, { prompt: "buy the dip on btc please" });
-    expect(res.statusCode).toBe(422);
-    expect(res.json()).toMatchObject({ error: "AI_GENERATION_FAILED" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.fallback).toBe(true);
+    // Minimal alert anchored to the verified candidate's current YES price.
+    expect(body.definition.action).toEqual({ kind: "alert" });
+    expect(body.definition.expr.children).toHaveLength(1);
+    expect(body.definition.expr.children[0].condition.threshold).toBe(0.48);
+    expect(body.definition.expr.children[0].condition.market.tokenId).toBe(TOKEN_YES);
+    expect((body.warnings as string[])[0]).toContain("minimal draft");
+    expect(body.openQuestions.length).toBeGreaterThan(0);
+    const audit = audits.find((a) => a.action === "ai.strategy_generated");
+    expect(audit?.metadata.fallback).toBe(true);
     await app.close();
   });
 
@@ -560,10 +611,82 @@ describe("POST /api/ai/generate-strategy", () => {
       responses: [
         modelTurn([toolUse("create_strategy", fabricated, "t1")]),
         modelTurn([toolUse("create_strategy", fabricated, "t2")]),
+        modelTurn([toolUse("create_strategy", fabricated, "t3")]),
       ],
     });
     const res = await post(app, { prompt: "tweak my strategy to watch that evil token" });
-    expect(res.statusCode).toBe(422);
+    // The fabricated id never binds; the guaranteed draft binds the VERIFIED
+    // seeded candidate instead.
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.fallback).toBe(true);
+    expect(JSON.stringify(body.definition)).not.toContain("evil-token");
+    expect(body.definition.expr.children[0].condition.market.tokenId).toBe(TOKEN_YES);
+    await app.close();
+  });
+
+  it("serves get_market_stats from verified candidates and enforces the cap", async () => {
+    const statsCall = (id: string, index = 0) =>
+      toolUse("get_market_stats", { index, outcome: "Yes" }, id);
+    const { app, aiCalls } = buildAiApp({
+      responses: [
+        // 4 stats calls in one turn: 3 served, the 4th refused with STATS_LIMIT.
+        modelTurn([statsCall("s1"), statsCall("s2"), statsCall("s3"), statsCall("s4")]),
+        modelTurn([toolUse("create_strategy", createInput(), "t2")]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy the dip on btc if it looks calm" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
+    const secondCall = JSON.stringify(aiCalls[1]!.messages);
+    // Served payload sections (book from the search snapshot even when CLOB
+    // history/economics upstreams fail) …
+    expect(secondCall).toContain('\\"book\\"');
+    expect(secondCall).toContain('\\"bestAsk\\":0.48');
+    expect(secondCall).toContain('\\"activity\\"');
+    // … and the 4th call hit the per-request cap.
+    expect(secondCall).toContain("STATS_LIMIT");
+    // Ids stay withheld from the model even via stats payloads.
+    expect(secondCall).not.toContain(TOKEN_YES);
+    expect(secondCall).not.toContain("cond-btc");
+    await app.close();
+  });
+
+  it("rejects get_market_stats for an unknown candidate index", async () => {
+    const { app, aiCalls } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("get_market_stats", { index: 99, outcome: "Yes" }, "s1")]),
+        modelTurn([toolUse("create_strategy", createInput(), "t2")]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy the dip on btc" });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.stringify(aiCalls[1]!.messages)).toContain("UNKNOWN_MARKET");
+    await app.close();
+  });
+
+  it("answers product questions via answer_user on the clarify wire shape", async () => {
+    const { app, aiCalls } = buildAiApp({
+      responses: [
+        modelTurn([
+          toolUse(
+            "answer_user",
+            { answer: "Your personal referral code lives on your **Profile** page." },
+            "t1",
+          ),
+        ]),
+      ],
+    });
+    const res = await post(app, { prompt: "how do I issue a ref code?" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      status: "clarify",
+      question: "Your personal referral code lives on your **Profile** page.",
+    });
+    // The product guide is part of the cached system block the model saw.
+    const system = aiCalls[0]!.system as { text: string }[];
+    expect(system[0]!.text).toContain("Product guide");
     await app.close();
   });
 
@@ -588,7 +711,7 @@ describe("POST /api/ai/generate-strategy", () => {
     await app.close();
   });
 
-  it("terminates a runaway loop after the model-call cap (422)", async () => {
+  it("terminates a runaway loop at the seeded call cap and still returns a draft", async () => {
     const searchTurn = () => modelTurn([toolUse("search_markets", { query: "btc" }, "t")]);
     const { app, aiCalls } = buildAiApp({
       responses: [
@@ -601,8 +724,12 @@ describe("POST /api/ai/generate-strategy", () => {
       ],
     });
     const res = await post(app, { prompt: "keep searching forever" });
-    expect(res.statusCode).toBe(422);
-    expect(aiCalls.length).toBeLessThanOrEqual(6);
+    // Budget exhausted → guaranteed draft from the seeded candidate, and the
+    // seeded cap (5) kicked in below the absolute cap (6).
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
+    expect(res.json().fallback).toBe(true);
+    expect(aiCalls.length).toBeLessThanOrEqual(5);
     await app.close();
   });
 
@@ -621,11 +748,59 @@ describe("POST /api/ai/generate-strategy", () => {
     await app.close();
   });
 
-  it("502s AI_UPSTREAM when the model call throws", async () => {
+  it("model outage after seeding still yields a guaranteed draft", async () => {
     const { app } = buildAiApp({ responses: [] }); // empty queue → fake throws
+    const res = await post(app, { prompt: "buy the dip on btc" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
+    expect(res.json().fallback).toBe(true);
+    await app.close();
+  });
+
+  it("502s AI_UPSTREAM when the model throws and no candidates exist", async () => {
+    const { app } = buildAiApp({
+      responses: [], // empty queue → fake throws on call 1
+      searchMarkets: async () => err(upstreamErr), // seeding finds nothing
+    });
     const res = await post(app, { prompt: "buy the dip on btc" });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ error: "AI_UPSTREAM" });
+    await app.close();
+  });
+
+  it("refinement failure clarifies instead of clobbering the user's strategy", async () => {
+    const bad = createInput({ conditions: [conditionNode(1.5)] });
+    const { app, aiCalls } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("create_strategy", bad, "t1")]),
+        modelTurn([toolUse("create_strategy", bad, "t2")]),
+        modelTurn([toolUse("create_strategy", bad, "t3")]),
+      ],
+    });
+    const res = await post(app, {
+      prompt: "make the threshold way higher please",
+      history: [{ role: "user", content: "buy the dip on btc" }],
+      currentDefinition: currentDefinition(),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("clarify");
+    expect(body.question).toContain("couldn't apply that change");
+    // Refinement turns are never seeded.
+    expect(JSON.stringify(aiCalls[0]!.messages)).not.toContain("Pre-searched candidates");
+    await app.close();
+  });
+
+  it("clarifies when no live market can be found at all", async () => {
+    const ref = () => modelTurn([toolUse("create_strategy", createInput(), "t")]);
+    const { app } = buildAiApp({
+      responses: [ref(), ref(), ref()], // index 0 never resolves — no candidates
+      searchMarkets: async () => err(upstreamErr),
+    });
+    const res = await post(app, { prompt: "buy the dip on btc" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("clarify");
+    expect(res.json().question).toContain("couldn't find a live market");
     await app.close();
   });
 
@@ -670,20 +845,194 @@ describe("POST /api/ai/generate-strategy", () => {
   });
 
   // Haiku-tier models reject `effort` with a 400 — the loop must gate it.
-  it("sends output_config.effort on the sonnet default but omits it for haiku", async () => {
+  it("omits output_config.effort on the haiku default but sends it for sonnet", async () => {
     const clarifyTurn = () => modelTurn([toolUse("clarify", { question: "Which market?" }, "t")]);
 
-    const sonnet = buildAiApp({ responses: [clarifyTurn()] });
+    const haiku = buildAiApp({ responses: [clarifyTurn()] });
+    await post(haiku.app, { prompt: "buy the dip on btc" });
+    expect(haiku.aiCalls[0]!.model).toBe("claude-haiku-4-5"); // config default
+    expect(haiku.aiCalls[0]!.output_config).toBeUndefined();
+    await haiku.app.close();
+    resetRateLimits();
+
+    const sonnet = buildAiApp({ responses: [clarifyTurn()], model: "claude-sonnet-5" });
     await post(sonnet.app, { prompt: "buy the dip on btc" });
     expect(sonnet.aiCalls[0]!.output_config).toEqual({ effort: "medium" });
     await sonnet.app.close();
+  });
+
+  it("appends the hosted web_search tool only when the flag is on, versioned by model", async () => {
+    const clarifyTurn = () => modelTurn([toolUse("clarify", { question: "Which market?" }, "t")]);
+    const toolNames = (calls: Anthropic.MessageCreateParamsNonStreaming[]) =>
+      (calls[0]!.tools ?? []).map((t) => ("name" in t ? t.name : ""));
+
+    const off = buildAiApp({ responses: [clarifyTurn()] });
+    await post(off.app, { prompt: "buy the dip on btc" });
+    expect(toolNames(off.aiCalls)).not.toContain("web_search");
+    await off.app.close();
     resetRateLimits();
 
-    const haiku = buildAiApp({ responses: [clarifyTurn()], model: "claude-haiku-4-5" });
+    // Haiku (the default) gets the basic tool version.
+    const haiku = buildAiApp({ responses: [clarifyTurn()], webSearch: true });
     await post(haiku.app, { prompt: "buy the dip on btc" });
-    expect(haiku.aiCalls[0]!.model).toBe("claude-haiku-4-5");
-    expect(haiku.aiCalls[0]!.output_config).toBeUndefined();
+    const haikuTool = haiku.aiCalls[0]!.tools!.find((t) => "name" in t && t.name === "web_search");
+    expect((haikuTool as { type?: string }).type).toBe("web_search_20250305");
     await haiku.app.close();
+    resetRateLimits();
+
+    // Sonnet-tier gets the dynamic-filtering version.
+    const sonnet = buildAiApp({
+      responses: [clarifyTurn()],
+      webSearch: true,
+      model: "claude-sonnet-5",
+    });
+    await post(sonnet.app, { prompt: "buy the dip on btc" });
+    const sonnetTool = sonnet.aiCalls[0]!.tools!.find(
+      (t) => "name" in t && t.name === "web_search",
+    );
+    expect((sonnetTool as { type?: string }).type).toBe("web_search_20260209");
+    await sonnet.app.close();
+  });
+
+  it("resumes pause_turn server-tool rounds and surfaces web citations", async () => {
+    const webBlocks = [
+      { type: "server_tool_use", id: "st1", name: "web_search", input: { query: "fed meeting" } },
+      {
+        type: "web_search_tool_result",
+        tool_use_id: "st1",
+        content: [
+          { type: "web_search_result", url: "https://example.com/fed", title: "Fed schedule" },
+          { type: "web_search_result", url: "https://example.com/fed", title: "duplicate" },
+        ],
+      },
+    ];
+    const { app, aiCalls } = buildAiApp({
+      webSearch: true,
+      responses: [
+        modelTurn(webBlocks, "pause_turn"),
+        modelTurn([toolUse("create_strategy", createInput(), "t2")]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy yes on the fed cutting rates" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.sources).toEqual([{ url: "https://example.com/fed", title: "Fed schedule" }]);
+    // pause_turn was resumed by echoing the assistant turn — no repair burned.
+    expect(aiCalls).toHaveLength(2);
+    const echoed = aiCalls[1]!.messages.at(-1);
+    expect(echoed?.role).toBe("assistant");
+    await app.close();
+  });
+
+  it("skips error-shaped web_search results without failing the draft", async () => {
+    const { app } = buildAiApp({
+      webSearch: true,
+      responses: [
+        modelTurn([
+          {
+            type: "web_search_tool_result",
+            tool_use_id: "st1",
+            content: { error_code: "max_uses_exceeded" },
+          },
+          toolUse("create_strategy", createInput(), "t1"),
+        ]),
+      ],
+    });
+    const res = await post(app, { prompt: "buy the dip on btc" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("ok");
+    expect(res.json().sources).toBeUndefined();
+    await app.close();
+  });
+
+  // The cache mark must sit on a byte-stable block: the volatile time line
+  // rides a SECOND system block, after the cached prefix.
+  it("keeps the timestamp out of the cached system block", async () => {
+    const { app, aiCalls } = buildAiApp({
+      responses: [modelTurn([toolUse("clarify", { question: "Which market?" }, "t")])],
+    });
+    await post(app, { prompt: "buy the dip on btc" });
+    const system = aiCalls[0]!.system as {
+      text: string;
+      cache_control?: { type: string };
+    }[];
+    expect(system).toHaveLength(2);
+    expect(system[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(system[0]!.text).not.toContain("Current time");
+    expect(system[1]!.cache_control).toBeUndefined();
+    expect(system[1]!.text).toContain("Current time");
+    await app.close();
+  });
+});
+
+describe("POST /api/ai/generate-strategy/stream (SSE)", () => {
+  const parseSse = (payload: string) =>
+    payload
+      .split("\n\n")
+      .filter((f) => f.trim().length > 0 && !f.startsWith(":"))
+      .map((f) => {
+        const ev = /event: (\S+)/.exec(f)?.[1] ?? "message";
+        const data = /data: (.*)/.exec(f)?.[1];
+        return { ev, data: data ? (JSON.parse(data) as Record<string, unknown>) : null };
+      });
+
+  it("streams real stage events and a terminal result", async () => {
+    const { app, audits } = buildAiApp({
+      responses: [
+        modelTurn([toolUse("search_markets", { query: "btc 150k" }, "t1")]),
+        modelTurn([toolUse("create_strategy", createInput(), "t2")]),
+      ],
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/ai/generate-strategy/stream",
+      payload: { prompt: "buy yes on btc 150k if it dips below 45 cents" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+
+    const events = parseSse(res.payload);
+    const stages = events.filter((e) => e.ev === "stage").map((e) => e.data?.stage);
+    expect(stages).toContain("searching");
+    expect(stages).toContain("drafting");
+
+    const result = events.find((e) => e.ev === "result");
+    expect(result?.data?.status).toBe("ok");
+    const definition = result?.data?.definition as { action: { market: { tokenId: string } } };
+    expect(definition.action.market.tokenId).toBe(TOKEN_YES);
+    // Audit fires exactly like the JSON route.
+    expect(audits.map((a) => a.action)).toContain("ai.strategy_generated");
+    await app.close();
+  });
+
+  it("400s invalid bodies as plain JSON before hijacking", async () => {
+    const { app } = buildAiApp({ responses: [] });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/ai/generate-strategy/stream",
+      payload: { prompt: "hi" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "INVALID_REQUEST" });
+    await app.close();
+  });
+
+  it("shares the burst rate-limit budget with the JSON route", async () => {
+    const clarifyTurn = () => modelTurn([toolUse("clarify", { question: "Which market?" }, "t")]);
+    const { app } = buildAiApp({
+      responses: [clarifyTurn(), clarifyTurn(), clarifyTurn(), clarifyTurn(), clarifyTurn()],
+    });
+    for (let i = 0; i < 5; i++) {
+      expect((await post(app, { prompt: "buy the dip on btc" })).statusCode).toBe(200);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/api/ai/generate-strategy/stream",
+      payload: { prompt: "buy the dip on btc" },
+    });
+    expect(limited.statusCode).toBe(429);
+    await app.close();
   });
 });
 

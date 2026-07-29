@@ -17,7 +17,7 @@ import { Send, Sparkles, X } from "lucide-react";
 import { Badge, Spinner } from "@/components/ui";
 import { Markdown } from "@/components/ui/Markdown";
 import { ApiError } from "@/lib/api";
-import { useGenerateStrategy, type AiGenerateResponse } from "@/lib/ai/queries";
+import { useGenerateStrategy, type AiGenerateResponse, type AiStage } from "@/lib/ai/queries";
 import { conditionLeavesOf, docFromDefinition, docHasContent } from "@/lib/strategies/doc";
 import { compileDoc } from "@/lib/strategies/compile";
 import { layoutDoc } from "@/lib/strategies/layout";
@@ -27,7 +27,11 @@ import { TEMPLATES } from "@/lib/strategies/templates";
 import { useAutogrowTextarea } from "@/lib/use-autogrow";
 import { MentionDropdown } from "./MentionDropdown";
 
-/** Progress theater: honest-ish stage copy while the model works. */
+/**
+ * Progress copy. The SSE endpoint streams REAL stage events; the timer
+ * sequence below only runs as a cosmetic fallback when no real stage has
+ * arrived (JSON transport, buffering proxy).
+ */
 const STAGES = [
   "Reading your idea…",
   "Scanning live markets…",
@@ -35,6 +39,13 @@ const STAGES = [
   "Double-checking the logic…",
 ];
 const STAGE_AT_MS = [0, 1_800, 5_000, 11_000];
+const STAGE_COPY: Record<AiStage, string> = {
+  searching: "Scanning live markets…",
+  drafting: "Assembling conditions…",
+  analyzing: "Checking price history and fees…",
+  researching: "Checking the news…",
+  repairing: "Double-checking the logic…",
+};
 
 export function AiPanel({
   initialPrompt,
@@ -54,10 +65,15 @@ export function AiPanel({
   const messages = useBuilderStore((s) => s.aiMessages);
   const pushMessage = useBuilderStore((s) => s.pushAiMessage);
   const pushHistory = useBuilderStore((s) => s.pushAiHistory);
-  const generate = useGenerateStrategy();
+  // Real stages from the SSE stream override the cosmetic timers below.
+  const [stageCopy, setStageCopy] = useState<string>(STAGES[0]!);
+  const sawRealStage = useRef(false);
+  const generate = useGenerateStrategy((s: AiStage) => {
+    sawRealStage.current = true;
+    setStageCopy(STAGE_COPY[s] ?? STAGES[0]!);
+  });
 
   const [input, setInput] = useState("");
-  const [stage, setStage] = useState(0);
   const autoFired = useRef(false);
   /** Last submitted prompt — powers the Retry button and deep-link error copy. */
   const lastPrompt = useRef<{ text: string; fromDeepLink: boolean } | null>(null);
@@ -89,7 +105,11 @@ export function AiPanel({
 
   const applyResult = (prompt: string, res: AiGenerateResponse) => {
     if (res.status === "clarify") {
-      pushMessage({ role: "assistant", content: res.question });
+      pushMessage({
+        role: "assistant",
+        content: res.question,
+        ...(res.sources && res.sources.length > 0 ? { sources: res.sources } : {}),
+      });
       pushHistory([{ role: "user", content: prompt.slice(0, 600) }]);
       return;
     }
@@ -133,6 +153,7 @@ export function AiPanel({
       ...(res.openQuestions && res.openQuestions.length > 0
         ? { openQuestions: res.openQuestions }
         : {}),
+      ...(res.sources && res.sources.length > 0 ? { sources: res.sources } : {}),
     });
     pushHistory([
       { role: "user", content: prompt.slice(0, 600) },
@@ -182,13 +203,18 @@ export function AiPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPrompt]);
 
-  // Advance the progress theater while a generation is in flight.
+  // Cosmetic fallback progression — only while no REAL stage event arrived.
   useEffect(() => {
     if (!generate.isPending) {
-      setStage(0);
+      setStageCopy(STAGES[0]!);
+      sawRealStage.current = false;
       return;
     }
-    const timers = STAGE_AT_MS.map((at, i) => setTimeout(() => setStage(i), at));
+    const timers = STAGE_AT_MS.map((at, i) =>
+      setTimeout(() => {
+        if (!sawRealStage.current) setStageCopy(STAGES[i]!);
+      }, at),
+    );
     return () => timers.forEach(clearTimeout);
   }, [generate.isPending]);
 
@@ -281,6 +307,24 @@ export function AiPanel({
                   </div>
                 </div>
               ) : null}
+              {m.sources && m.sources.length > 0 ? (
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-t border-border pt-1.5">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-faint">
+                    Sources
+                  </span>
+                  {m.sources.map((s, j) => (
+                    <a
+                      key={j}
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="max-w-[180px] truncate text-[11px] text-accent underline decoration-accent/40 underline-offset-2 transition-colors hover:decoration-accent"
+                    >
+                      {s.title}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         ))}
@@ -288,7 +332,7 @@ export function AiPanel({
         {generate.isPending ? (
           <div className="flex items-center gap-2 rounded-lg bg-brand-soft px-3 py-2.5">
             <Spinner />
-            <span className="text-[12px] font-medium text-accent">{STAGES[stage]}</span>
+            <span className="text-[12px] font-medium text-accent">{stageCopy}</span>
           </div>
         ) : null}
 

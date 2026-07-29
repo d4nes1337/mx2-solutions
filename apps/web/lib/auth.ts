@@ -3,6 +3,7 @@
 import { useAccount } from "wagmi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "./api";
+import { clearStoredRefCode, getStoredRefCode } from "./referral";
 import type { LoginChallenge, Me } from "./types";
 
 // EIP-1193 provider shape we need for eth_signTypedData_v4.
@@ -58,18 +59,26 @@ export function useSignIn() {
         params: [address, JSON.stringify(challenge.typedData)],
       });
 
+      // Explicit entry wins; otherwise a code captured from a /r/CODE link
+      // rides along silently. The server ignores it for allowlisted wallets,
+      // so a stale stored code can never block a returning user.
+      const inviteCode = opts?.inviteCode ?? getStoredRefCode();
+
       return api.post<{ ok: boolean; address: string }>("/api/auth/verify", {
         address,
         nonce: challenge.nonce,
         signature,
         issuedAt: challenge.typedData.message.issuedAt,
         signedTypedData: challenge.typedData,
-        // Private beta: a one-time invitation code redeems atomically for the
+        // Private beta: an invitation/referral code redeems atomically for the
         // wallet that signed this exact challenge (server-side binding).
-        ...(opts?.inviteCode ? { inviteCode: opts.inviteCode } : {}),
+        ...(inviteCode ? { inviteCode } : {}),
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),
+    onSuccess: () => {
+      clearStoredRefCode();
+      void qc.invalidateQueries({ queryKey: ["me"] });
+    },
   });
 }
 

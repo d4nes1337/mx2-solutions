@@ -1,5 +1,10 @@
 import { ok, err, type Result } from "@mx2/core";
 import type { GammaClient, GammaEvent, PolymarketError } from "@mx2/polymarket-client";
+import {
+  resolveSeriesId,
+  resolveSeriesWindowEvents,
+  windowStartMsOf,
+} from "@mx2/polymarket-client";
 import { eventHitFromGamma, type MarketSearchHit } from "./market-search.js";
 
 /**
@@ -14,8 +19,9 @@ import { eventHitFromGamma, type MarketSearchHit } from "./market-search.js";
  *    series_id + closed=false + order=endDate asc + end_date_min=now —
  *    WITHOUT end_date_min Gamma returns months-old never-closed instances.
  *
- * `resolveSeriesWindows` is exported standalone (gamma injected) on purpose:
- * it is the seam Block C's worker-side rolling resolution will reuse.
+ * Window resolution itself lives in @mx2/polymarket-client (gamma/series.ts)
+ * so the worker's rolling bindings (ADR-0028) resolve windows through exactly
+ * the same code without depending on this app.
  */
 
 export interface CuratedSeries {
@@ -77,63 +83,16 @@ export interface InstantMarketsResponse {
 }
 
 const WINDOWS_PER_SERIES = 3;
-const WINDOWS_FETCH_LIMIT = 4;
 const FRESH_TTL_MS = 15_000;
 const STALE_TTL_MS = 2 * 60_000;
-const SERIES_ID_TTL_MS = 60 * 60_000;
 
-const seriesIdCache = new Map<string, { at: number; id: string; title: string }>();
 let responseCache: { at: number; value: InstantMarketsResponse } | null = null;
 let inflight: Promise<Result<InstantMarketsResponse, PolymarketError>> | null = null;
 
 /** Test hook. */
 export const resetInstantMarketsCache = (): void => {
-  seriesIdCache.clear();
   responseCache = null;
   inflight = null;
-};
-
-const resolveSeriesId = async (
-  gamma: GammaClient,
-  slug: string,
-): Promise<{ id: string; title: string } | null> => {
-  const hit = seriesIdCache.get(slug);
-  if (hit && Date.now() - hit.at < SERIES_ID_TTL_MS) return { id: hit.id, title: hit.title };
-  const result = await gamma.getSeries({ slug });
-  if (!result.ok) return null;
-  const series = result.value[0];
-  if (!series || !series.id) return null;
-  seriesIdCache.set(slug, { at: Date.now(), id: series.id, title: series.title });
-  return { id: series.id, title: series.title };
-};
-
-/**
- * Live + upcoming windows for one series, soonest-ending first. Block C seam:
- * the worker resolves a rolling SeriesRef through this exact function.
- */
-export const resolveSeriesWindows = async (
-  gamma: GammaClient,
-  seriesId: string,
-  nowIso: string,
-  limit: number = WINDOWS_FETCH_LIMIT,
-): Promise<Result<GammaEvent[], PolymarketError>> => {
-  const result = await gamma.listEventsPaginated({
-    series_id: seriesId,
-    closed: false,
-    end_date_min: nowIso, // mandatory — see module docblock
-    order: "endDate",
-    ascending: true,
-    limit,
-  });
-  if (!result.ok) return result;
-  return ok(result.value.data);
-};
-
-/** Window open time: the unix timestamp Polymarket bakes into instance slugs. */
-const windowStartMs = (slug: string, endMs: number, cadenceMs: number): number => {
-  const tail = Number(slug.slice(slug.lastIndexOf("-") + 1));
-  if (Number.isInteger(tail) && tail > 1_500_000_000 && tail * 1000 < endMs) return tail * 1000;
-  return endMs - cadenceMs;
 };
 
 const windowsFromEvents = (
@@ -149,7 +108,7 @@ const windowsFromEvents = (
     const group = eventHitFromGamma(event);
     const head = group?.markets[0];
     if (!head) continue;
-    const startMs = windowStartMs(event.slug, endMs, CADENCE_MS[curated.cadence]);
+    const startMs = windowStartMsOf(event.slug, endMs, CADENCE_MS[curated.cadence]);
     out.push({
       eventId: event.id,
       slug: event.slug,
@@ -184,7 +143,7 @@ const fetchInstantMarkets = async (
         degraded.push(curated.slug);
         return null;
       }
-      const windows = await resolveSeriesWindows(gamma, resolved.id, nowIso);
+      const windows = await resolveSeriesWindowEvents(gamma, resolved.id, nowIso);
       if (!windows.ok) {
         firstError ??= windows.error;
         degraded.push(curated.slug);

@@ -15,6 +15,7 @@ import type {
   TriggerStore,
 } from "@mx2/db";
 import type { ClobClient, GammaClient } from "@mx2/polymarket-client";
+import { listSeriesWindows } from "@mx2/polymarket-client";
 import {
   EXPR_LIMITS,
   conditionLeaves,
@@ -64,6 +65,25 @@ const MarketRefSchema = z.object({
   conditionId: z.string().min(1),
   tokenId: z.string().min(1),
   outcome: z.string().min(1).max(40),
+  title: z.string().max(200).optional(),
+});
+
+/**
+ * Rolling series binding (ADR-0028). Only order ACTIONS may roll; conditions
+ * stay pinned to a fixed market, because history-dependent predicates are
+ * meaningless on an instance that is seconds old.
+ */
+const SeriesRefSchema = z.object({
+  kind: z.literal("series"),
+  seriesSlug: z
+    .string()
+    .min(2)
+    .max(80)
+    .regex(/^[a-z0-9][a-z0-9-]*$/),
+  outcome: z.string().min(1).max(40),
+  selector: z.enum(["current", "next"]),
+  maxEntryPrice: z.number().gt(0).lt(1).optional(),
+  minRemainingMs: z.number().int().min(0).max(300_000).optional(),
   title: z.string().max(200).optional(),
 });
 
@@ -137,6 +157,7 @@ const ActionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("order"),
     market: MarketRefSchema,
+    rollingSeries: SeriesRefSchema.optional(),
     side: z.enum(["BUY", "SELL"]),
     price: z.number().gt(0).lt(1),
     size: z.number().positive(),
@@ -776,6 +797,9 @@ export const registerStrategiesRoutes = (
             size: b.action.size,
             orderType: b.action.orderType,
             execution: b.action.execution,
+            ...(b.action.rollingSeries !== undefined
+              ? { rollingSeries: b.action.rollingSeries }
+              : {}),
             ...(b.action.postOnly !== undefined ? { postOnly: b.action.postOnly } : {}),
             ...(b.action.expiresAfterMs !== undefined
               ? { expiresAfterMs: b.action.expiresAfterMs }
@@ -854,6 +878,31 @@ export const registerStrategiesRoutes = (
       }
     }
 
+    // A rolling binding is only as good as its series: verify upstream knows
+    // the slug AND is currently publishing windows for it, so a typo can't
+    // create a strategy that silently never resolves a target.
+    if (definition.action.kind === "order" && definition.action.rollingSeries) {
+      const slug = definition.action.rollingSeries.seriesSlug;
+      const windows = await listSeriesWindows(deps.gammaClient, slug);
+      if (!windows.ok) {
+        reply.code(windows.error.statusCode === 404 ? 400 : 502);
+        return {
+          error: windows.error.statusCode === 404 ? "UNKNOWN_SERIES" : "MARKET_LOOKUP_FAILED",
+          message:
+            windows.error.statusCode === 404
+              ? `"${slug}" is not a recurring market series.`
+              : windows.error.message,
+        };
+      }
+      if (windows.value.length === 0) {
+        reply.code(400);
+        return {
+          error: "SERIES_NO_WINDOWS",
+          message: `"${slug}" has no upcoming windows right now.`,
+        };
+      }
+    }
+
     // Primary market fills the legacy NOT NULL columns (indexing + v1 tooling).
     const primary =
       definition.action.kind === "order"
@@ -888,6 +937,12 @@ export const registerStrategiesRoutes = (
       name: b.name,
       templateId: b.templateId ?? null,
       tokenIds: referencedTokenIds(definition),
+      // Rolling binding (ADR-0028), denormalized for indexing/display. The
+      // definition stays authoritative and is never rewritten as windows roll.
+      seriesSlug:
+        definition.action.kind === "order"
+          ? (definition.action.rollingSeries?.seriesSlug ?? null)
+          : null,
     };
 
     let rule;

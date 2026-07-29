@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { GammaClient } from "@mx2/polymarket-client";
+import type { ClobClient, GammaClient } from "@mx2/polymarket-client";
 import {
   validateStrategyDefinition,
   type ActionV2,
@@ -15,22 +15,31 @@ import {
   type MarketSearchHit,
 } from "../lib/market-search.js";
 import type { AiClient } from "./client.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { STABLE_SYSTEM_PROMPT, timeBlock } from "./prompt.js";
 import {
+  ANSWER_TOOL,
+  AnswerInputZ,
   CLARIFY_TOOL,
   CREATE_STRATEGY_TOOL,
   ClarifyInputZ,
   CreateStrategyInputZ,
+  GET_MARKET_STATS_TOOL,
+  GetMarketStatsInputZ,
   SEARCH_MARKETS_TOOL,
   SearchMarketsInputZ,
   type AiCondition,
   type AiMarketSelector,
   type CreateStrategyInput,
 } from "./tools.js";
+import { buildMarketStats } from "./stats.js";
 
 // Hard loop caps: a paid upstream on a public endpoint must be bounded.
 const MAX_MODEL_CALLS = 6;
+/** When we pre-searched for the model, the happy path is 1 call — cap lower. */
+const MAX_MODEL_CALLS_SEEDED = 5;
 const MAX_SEARCHES = 4;
+const MAX_STATS_CALLS = 3;
+const MAX_REPAIR_ROUNDS = 2;
 const SEARCH_HITS_PER_QUERY = 8;
 const SEARCH_FAN_OUT = 2;
 
@@ -39,11 +48,32 @@ export interface GenerateLogger {
   warn(obj: unknown, msg?: string): void;
 }
 
+/** Real progress phases surfaced to the SSE route (transport-agnostic). */
+export type GenerateStage = "searching" | "drafting" | "analyzing" | "researching" | "repairing";
+
+/** Thrown when the caller's AbortSignal fires (client disconnected). */
+export class GenerateAborted extends Error {
+  constructor() {
+    super("generation aborted by the caller");
+    this.name = "GenerateAborted";
+  }
+}
+
 export interface GenerateDeps {
   aiClient: AiClient;
   gammaClient: GammaClient;
+  clobClient: ClobClient;
   logger: GenerateLogger;
   model: string;
+  /** Adds Anthropic's hosted web_search tool (FEATURE_AI_WEB_SEARCH). */
+  webSearch?: boolean;
+  /** Set when pointed at an Anthropic-COMPATIBLE endpoint (Kimi experiment) —
+   *  Anthropic-only request params (effort) are omitted then. */
+  baseUrl?: string;
+  /** Real-progress callback; absent on the plain JSON route. */
+  onStage?: (stage: GenerateStage, detail?: string) => void;
+  /** Cooperative cancellation — checked between model calls and tool work. */
+  signal?: AbortSignal;
   nowMs?: number;
 }
 
@@ -82,8 +112,19 @@ export type GenerateResult =
       /** Display metadata for every bound market, keyed by tokenId. */
       markets: Record<string, GeneratedMarketMeta>;
       modelCalls: number;
+      /** Tool-usage counters (audit only — the route strips them). */
+      statsCalls?: number;
+      webSearches?: number;
+      /** True when this is the deterministic guaranteed-draft floor. */
+      fallback?: boolean;
+      /** Web pages the model consulted (hosted web_search citations). */
+      sources?: { url: string; title: string }[];
     }
-  | { status: "clarify"; question: string }
+  | {
+      status: "clarify";
+      question: string;
+      sources?: { url: string; title: string }[];
+    }
   | { status: "error"; code: "AI_UPSTREAM" | "AI_GENERATION_FAILED"; message: string };
 
 // ── Candidate presentation (what the model is allowed to see) ───────────────
@@ -426,13 +467,133 @@ const buildDefinition = (
   return { definition, markets, warnings };
 };
 
+// ── Guaranteed-draft fallback ────────────────────────────────────────────────
+
+/**
+ * Deterministic floor for fresh generations: when the model cannot produce a
+ * valid strategy (repair budget spent, loop exhausted, upstream outage) but we
+ * hold at least one VERIFIED candidate, return the minimum useful draft — an
+ * alert on the top-ranked candidate anchored at its current price — instead of
+ * an error. Refinement turns must never take this path: replacing the user's
+ * existing strategy with a minimal alert would destroy their work.
+ */
+export const buildFallbackDraft = (
+  candidates: MarketSearchHit[],
+  nowMs: number,
+  modelCalls: number,
+): Extract<GenerateResult, { status: "ok" }> | null => {
+  const hit = candidates[0];
+  if (!hit) return null;
+  let pos = hit.outcomes.findIndex((o) => o.toLowerCase() === "yes");
+  if (pos === -1) pos = 0;
+  const tokenId = hit.tokenIds[pos];
+  const outcome = hit.outcomes[pos];
+  if (!tokenId || !outcome) return null;
+  const current = Number(hit.outcomePrices[pos]);
+  if (!Number.isFinite(current)) return null;
+  const threshold = Math.min(0.99, Math.max(0.01, Math.round(current * 100) / 100));
+
+  const definition: StrategyDefinition = {
+    version: 2,
+    name: `${hit.title.slice(0, 100)} alert`,
+    templateId: "ai",
+    expr: {
+      type: "group",
+      id: "root",
+      op: "and",
+      children: [
+        {
+          type: "condition",
+          id: "c1",
+          condition: {
+            kind: "price",
+            market: { conditionId: hit.conditionId, tokenId, outcome, title: hit.title },
+            source: "ask",
+            comparator: "lte",
+            threshold,
+          },
+        },
+      ],
+    },
+    holdsForMs: 300_000,
+    maxDataAgeMs: 5_000,
+    action: { kind: "alert" },
+    recurrence: { kind: "once" },
+    limits: null,
+    expiresAtMs: null,
+  };
+  if (validateStrategyDefinition(definition, nowMs).length > 0) return null;
+
+  const cents = Math.round(threshold * 100);
+  return {
+    status: "ok",
+    definition,
+    summary: `I couldn't finish exactly what you described, so here's a starting point: an alert on “${hit.title}” (${outcome}) when the ask is at or below ${cents}¢ (its current price).`,
+    warnings: ["This is a minimal draft — I anchored it to the closest liquid market I found."],
+    openQuestions: ["Is this the market you meant? Tell me more and I'll refine it."],
+    markets: {
+      [tokenId]: {
+        title: hit.title,
+        eventTitle: hit.eventTitle,
+        image: hit.image,
+        outcome,
+        rewardsMinSize: hit.rewardsMinSize,
+        rewardsMaxSpread: hit.rewardsMaxSpread,
+      },
+    },
+    modelCalls,
+    fallback: true,
+  };
+};
+
 // ── The generation loop ──────────────────────────────────────────────────────
 
-const TOOLS = [
+const BASE_TOOLS = [
   SEARCH_MARKETS_TOOL,
+  GET_MARKET_STATS_TOOL,
   CREATE_STRATEGY_TOOL,
   CLARIFY_TOOL,
+  ANSWER_TOOL,
 ] as unknown as Anthropic.Tool[];
+
+const MAX_WEB_SEARCHES = 3;
+const MAX_SOURCES = 5;
+
+/**
+ * Tool list per configuration. Deterministic per (webSearch, model) pair so
+ * the rendered tools stay byte-stable per process — a flag flip is a
+ * deploy-time prompt-cache invalidation, which is acceptable.
+ */
+const buildTools = (opts: { webSearch: boolean; model: string }): Anthropic.Tool[] => {
+  if (!opts.webSearch) return BASE_TOOLS;
+  // Haiku-tier models only support the basic tool version; Sonnet/Opus tiers
+  // get the dynamic-filtering variant.
+  const type = opts.model.toLowerCase().includes("haiku")
+    ? "web_search_20250305"
+    : "web_search_20260209";
+  return [
+    ...BASE_TOOLS,
+    { type, name: "web_search", max_uses: MAX_WEB_SEARCHES } as unknown as Anthropic.Tool,
+  ];
+};
+
+/**
+ * Pull {url, title} citations out of hosted web_search result blocks. An
+ * error-shaped result (content is an object, not an array) is skipped — the
+ * model sees the error inline and moves on; we just don't cite anything.
+ */
+const collectSources = (content: Anthropic.Message["content"], out: Map<string, string>): void => {
+  for (const block of content) {
+    const b = block as { type?: string; content?: unknown };
+    if (b.type !== "web_search_tool_result" || !Array.isArray(b.content)) continue;
+    for (const r of b.content) {
+      const { url, title } = r as { url?: unknown; title?: unknown };
+      if (typeof url !== "string" || url.length === 0) continue;
+      if (out.size >= MAX_SOURCES || out.has(url)) continue;
+      out.set(url, typeof title === "string" && title.length > 0 ? title : url);
+    }
+  }
+};
 
 const FALLBACK_CLARIFY =
   "I can help turn a trading idea into a live Polymarket strategy — try something like “buy YES on the Fed cutting rates if it dips below 40¢”.";
@@ -442,14 +603,17 @@ export const generateStrategy = async (
   req: GenerateRequest,
 ): Promise<GenerateResult> => {
   const nowMs = deps.nowMs ?? Date.now();
+  const stage = (s: GenerateStage, detail?: string): void => deps.onStage?.(s, detail);
+  const checkAborted = (): void => {
+    if (deps.signal?.aborted) throw new GenerateAborted();
+  };
 
   let userContent = req.currentDefinition
     ? `Current strategy definition (the user is refining this — keep bound markets via source:"current"):\n\`\`\`json\n${JSON.stringify(req.currentDefinition)}\n\`\`\`\n\n${req.prompt}`
     : req.prompt;
 
   const candidates: MarketSearchHit[] = [];
-  let searches = 0;
-  let repairUsed = false;
+  let repairCount = 0;
 
   // @-pinned markets: resolved and verified HERE (never trusted from the
   // client), then seeded as pre-verified candidates so the model can skip
@@ -471,34 +635,104 @@ export const generateStrategy = async (
     }
   }
 
+  // Pre-search seeding: on a fresh generation (no pins, no history, nothing to
+  // refine) run the smart search on the raw prompt server-side and hand the
+  // model pre-verified candidates up front. The common case then finishes in
+  // ONE model call instead of a search round-trip. A seed that ran counts as
+  // a search so the Gamma budget of ADR-0015 §6 still holds.
+  let seeded = false;
+  if (!req.currentDefinition && req.history.length === 0 && candidates.length === 0) {
+    stage("searching", req.prompt.slice(0, 80));
+    const seedRes = await smartSearchMarketHits(deps.gammaClient, req.prompt, {
+      limit: SEARCH_HITS_PER_QUERY,
+      maxFanOut: SEARCH_FAN_OUT,
+    });
+    if (seedRes.ok && seedRes.value.length > 0) {
+      seeded = true;
+      candidates.push(...seedRes.value);
+      userContent += `\n\nPre-searched candidates (live results for this idea — pre-verified; reference by index; call search_markets only if none of these fit):\n${JSON.stringify(presentHits(seedRes.value, 0))}`;
+    }
+  }
+  let searches = seeded ? 1 : 0;
+  let statsCalls = 0;
+  let webSearches = 0;
+  const sources = new Map<string, string>();
+  const maxCalls = seeded ? MAX_MODEL_CALLS_SEEDED : MAX_MODEL_CALLS;
+  const tools = buildTools({ webSearch: deps.webSearch === true, model: deps.model });
+
+  // Decorate every user-facing result with collected citations + counters.
+  const finish = (r: GenerateResult): GenerateResult => {
+    if (r.status === "error") return r;
+    const src = sources.size > 0 ? [...sources].map(([url, title]) => ({ url, title })) : undefined;
+    if (r.status === "ok")
+      return { ...r, statsCalls, webSearches, ...(src ? { sources: src } : {}) };
+    return src ? { ...r, sources: src } : r;
+  };
+
+  // Soft-failure ladder — a genuine trading prompt must never dead-end in a
+  // hard error. Refinement turns clarify (a fallback draft would clobber the
+  // user's strategy); fresh turns get the guaranteed draft whenever a verified
+  // candidate exists, else a clarify that asks for the event by name.
+  const failSoft = (modelCalls: number): GenerateResult => {
+    if (req.currentDefinition) {
+      return {
+        status: "clarify",
+        question:
+          "I couldn't apply that change — try describing it differently, e.g. name the condition or the amount you want to change.",
+      };
+    }
+    const fallback = buildFallbackDraft(candidates, nowMs, modelCalls);
+    if (fallback) return fallback;
+    return {
+      status: "clarify",
+      question:
+        candidates.length === 0
+          ? "I couldn't find a live market for that — can you name the event? For example: “Fed cuts rates by December” or “BTC above $150k”."
+          : "I couldn't turn that into a valid strategy — try naming a market, a price, and what should happen (alert me or prepare an order).",
+    };
+  };
+
   const messages: Anthropic.MessageParam[] = [
     ...req.history.map((h) => ({ role: h.role, content: h.content }) as Anthropic.MessageParam),
     { role: "user", content: userContent },
   ];
 
-  // Haiku-tier models reject the `effort` parameter (400) — only send it on
-  // tiers that support it.
-  const supportsEffort = !deps.model.toLowerCase().includes("haiku");
+  // Haiku-tier models reject the `effort` parameter (400), and non-Anthropic
+  // compatible endpoints may too — only send it where it's known to work.
+  const supportsEffort = !deps.model.toLowerCase().includes("haiku") && !deps.baseUrl;
 
-  for (let call = 1; call <= MAX_MODEL_CALLS; call++) {
+  for (let call = 1; call <= maxCalls; call++) {
+    checkAborted();
+    stage("drafting");
     let resp: Anthropic.Message;
     try {
       resp = await deps.aiClient.create({
         model: deps.model,
         max_tokens: 4096,
         ...(supportsEffort ? { output_config: { effort: "medium" as const } } : {}),
+        // Two system blocks: the stable prefix carries the cache mark; the
+        // current-time line sits AFTER it so the timestamp can't invalidate
+        // the cache on every request.
         system: [
           {
             type: "text",
-            text: buildSystemPrompt(new Date(nowMs).toISOString()),
+            text: STABLE_SYSTEM_PROMPT,
             cache_control: { type: "ephemeral" },
           },
+          { type: "text", text: timeBlock(new Date(nowMs).toISOString()) },
         ],
-        tools: TOOLS,
+        tools,
         messages,
       });
     } catch (err) {
       deps.logger.warn({ err, call }, "ai.generate upstream error");
+      // A mid-generation outage still yields a draft when verified candidates
+      // are already in hand (common once seeding ran). Refinements and
+      // candidate-less requests keep the honest 502.
+      if (!req.currentDefinition) {
+        const fallback = buildFallbackDraft(candidates, nowMs, call - 1);
+        if (fallback) return finish(fallback);
+      }
       return {
         status: "error",
         code: "AI_UPSTREAM",
@@ -507,7 +741,25 @@ export const generateStrategy = async (
     }
 
     if (resp.stop_reason === "refusal") {
-      return { status: "clarify", question: FALLBACK_CLARIFY };
+      return finish({ status: "clarify", question: FALLBACK_CLARIFY });
+    }
+
+    // Hosted web_search runs server-side at Anthropic: citations arrive as
+    // result blocks in the SAME response; a long server-tool turn may pause.
+    collectSources(resp.content, sources);
+    let sawWebSearch = false;
+    for (const b of resp.content) {
+      const t = b as { type?: string; name?: string };
+      if (t.type === "server_tool_use" && t.name === "web_search") {
+        webSearches++;
+        sawWebSearch = true;
+      }
+    }
+    if (sawWebSearch) stage("researching");
+    if (resp.stop_reason === "pause_turn") {
+      // Resume the server-tool loop: echo the assistant turn, no user message.
+      messages.push({ role: "assistant", content: resp.content });
+      continue;
     }
 
     const toolUses = resp.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
@@ -519,67 +771,144 @@ export const generateStrategy = async (
         .map((b) => b.text)
         .join("\n")
         .trim();
-      return { status: "clarify", question: text || FALLBACK_CLARIFY };
+      return finish({ status: "clarify", question: text || FALLBACK_CLARIFY });
     }
 
     const clarify = toolUses.find((t) => t.name === CLARIFY_TOOL.name);
     if (clarify) {
       const parsed = ClarifyInputZ.safeParse(clarify.input);
-      return {
+      return finish({
         status: "clarify",
         question: parsed.success ? parsed.data.question : FALLBACK_CLARIFY,
-      };
+      });
     }
 
-    // Execute searches first so a same-turn create_strategy failure can still
-    // answer every tool_use block in ONE user message (API requirement).
+    // Product Q&A rides the clarify wire shape: the panel already renders it
+    // as an assistant markdown bubble, so no client change is needed.
+    const answer = toolUses.find((t) => t.name === ANSWER_TOOL.name);
+    if (answer) {
+      const parsed = AnswerInputZ.safeParse(answer.input);
+      return finish({
+        status: "clarify",
+        question: parsed.success ? parsed.data.answer.slice(0, 1500) : FALLBACK_CLARIFY,
+      });
+    }
+
+    // Execute searches and stats lookups first so a same-turn create_strategy
+    // failure can still answer every tool_use block in ONE user message (API
+    // requirement).
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
-      if (tu.name !== SEARCH_MARKETS_TOOL.name) continue;
-      const parsed = SearchMarketsInputZ.safeParse(tu.input);
-      const query = parsed.success ? parsed.data.query.trim().slice(0, 80) : "";
-      if (!parsed.success || query.length < 2) {
+      if (tu.name === SEARCH_MARKETS_TOOL.name) {
+        const parsed = SearchMarketsInputZ.safeParse(tu.input);
+        const query = parsed.success ? parsed.data.query.trim().slice(0, 80) : "";
+        if (!parsed.success || query.length < 2) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({
+              error: "INVALID_QUERY",
+              message: "query must be 2–80 chars",
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+        if (searches >= MAX_SEARCHES) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({
+              error: "SEARCH_LIMIT",
+              message: "No more searches — use the candidates you already have, or clarify.",
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+        searches++;
+        checkAborted();
+        stage("searching", query);
+        const hits = await smartSearchMarketHits(deps.gammaClient, query, {
+          limit: SEARCH_HITS_PER_QUERY,
+          maxFanOut: SEARCH_FAN_OUT,
+        });
+        if (!hits.ok) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({ error: "SEARCH_FAILED", message: "market search failed" }),
+            is_error: true,
+          });
+          continue;
+        }
+        const base = candidates.length;
+        candidates.push(...hits.value);
         results.push({
           type: "tool_result",
           tool_use_id: tu.id,
-          content: JSON.stringify({ error: "INVALID_QUERY", message: "query must be 2–80 chars" }),
-          is_error: true,
+          content: JSON.stringify({ candidates: presentHits(hits.value, base) }),
         });
         continue;
       }
-      if (searches >= MAX_SEARCHES) {
+
+      if (tu.name === GET_MARKET_STATS_TOOL.name) {
+        const parsed = GetMarketStatsInputZ.safeParse(tu.input);
+        const hit = parsed.success ? candidates[parsed.data.index] : undefined;
+        if (!parsed.success || !hit) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({
+              error: "UNKNOWN_MARKET",
+              message: "only candidate indexes you were shown are valid.",
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+        if (statsCalls >= MAX_STATS_CALLS) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({
+              error: "STATS_LIMIT",
+              message: "No more stats lookups — decide with what you have.",
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+        let pos = hit.outcomes.findIndex(
+          (o) => o.toLowerCase() === parsed.data.outcome.toLowerCase(),
+        );
+        if (pos === -1) pos = 0;
+        if (!hit.tokenIds[pos]) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: JSON.stringify({
+              error: "UNKNOWN_MARKET",
+              message: `candidate ${parsed.data.index} has no token for that outcome.`,
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+        statsCalls++;
+        checkAborted();
+        stage("analyzing", hit.title.slice(0, 80));
+        const stats = await buildMarketStats(
+          { clobClient: deps.clobClient, gammaClient: deps.gammaClient, logger: deps.logger },
+          hit,
+          pos,
+        );
         results.push({
           type: "tool_result",
           tool_use_id: tu.id,
-          content: JSON.stringify({
-            error: "SEARCH_LIMIT",
-            message: "No more searches — use the candidates you already have, or clarify.",
-          }),
-          is_error: true,
+          content: JSON.stringify(stats),
         });
-        continue;
       }
-      searches++;
-      const hits = await smartSearchMarketHits(deps.gammaClient, query, {
-        limit: SEARCH_HITS_PER_QUERY,
-        maxFanOut: SEARCH_FAN_OUT,
-      });
-      if (!hits.ok) {
-        results.push({
-          type: "tool_result",
-          tool_use_id: tu.id,
-          content: JSON.stringify({ error: "SEARCH_FAILED", message: "market search failed" }),
-          is_error: true,
-        });
-        continue;
-      }
-      const base = candidates.length;
-      candidates.push(...hits.value);
-      results.push({
-        type: "tool_result",
-        tool_use_id: tu.id,
-        content: JSON.stringify({ candidates: presentHits(hits.value, base) }),
-      });
     }
 
     const create = toolUses.find((t) => t.name === CREATE_STRATEGY_TOOL.name);
@@ -591,7 +920,7 @@ export const generateStrategy = async (
           const built = buildDefinition(parsed.data, candidates, req.currentDefinition);
           const validation = validateStrategyDefinition(built.definition, nowMs);
           if (validation.length === 0) {
-            return {
+            return finish({
               status: "ok",
               definition: built.definition,
               summary: parsed.data.summary,
@@ -600,7 +929,7 @@ export const generateStrategy = async (
               openQuestions: parsed.data.open_questions.slice(0, 3).map((s) => s.slice(0, 200)),
               markets: built.markets,
               modelCalls: call,
-            };
+            });
           }
           issues = validation.map((i) => ({ code: i.code, message: i.message }));
         } catch (err) {
@@ -611,15 +940,12 @@ export const generateStrategy = async (
         issues = [{ code: "MALFORMED_INPUT", message: "create_strategy input did not parse" }];
       }
 
-      if (repairUsed) {
-        deps.logger.warn({ issues }, "ai.generate failed after repair round");
-        return {
-          status: "error",
-          code: "AI_GENERATION_FAILED",
-          message: "The AI couldn't produce a valid strategy for that — try rephrasing.",
-        };
+      if (repairCount >= MAX_REPAIR_ROUNDS) {
+        deps.logger.warn({ issues }, "ai.generate failed after repair rounds");
+        return finish(failSoft(call));
       }
-      repairUsed = true;
+      repairCount++;
+      stage("repairing");
       results.push({
         type: "tool_result",
         tool_use_id: create.id,
@@ -644,9 +970,6 @@ export const generateStrategy = async (
     messages.push({ role: "user", content: results });
   }
 
-  return {
-    status: "error",
-    code: "AI_GENERATION_FAILED",
-    message: "The AI took too many steps for that request — try a simpler phrasing.",
-  };
+  deps.logger.warn({ maxCalls }, "ai.generate model-call budget exhausted");
+  return finish(failSoft(maxCalls));
 };

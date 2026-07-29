@@ -180,6 +180,61 @@ describe("AiPanel", () => {
     expect(useBuilderStore.getState().doc.expr.children).toHaveLength(0);
   });
 
+  it("consumes the SSE stream end-to-end: result applies, sources render, no JSON fallback", async () => {
+    const sse =
+      `event: stage\ndata: {"stage":"searching"}\n\n` +
+      `:ka\n\n` +
+      `event: result\ndata: ${JSON.stringify({
+        ...okResponse,
+        sources: [{ url: "https://example.com/fed", title: "Fed schedule" }],
+      })}\n\n`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/markets/search")) {
+          return new Response(JSON.stringify(searchResults), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.includes("/generate-strategy/stream")) {
+          return new Response(sse, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        throw new Error(`unexpected JSON fallback call: ${url}`);
+      }),
+    );
+    renderPanel("buy the dip on btc");
+
+    await waitFor(() => {
+      expect(useBuilderStore.getState().doc.expr.children).toHaveLength(1);
+    });
+    // Citations row from the result's sources.
+    expect(await screen.findByText("Sources")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Fed schedule" })).toHaveAttribute(
+      "href",
+      "https://example.com/fed",
+    );
+    // Exactly one generate call — the stream; the JSON fallback never fired.
+    expect(genCalls()).toHaveLength(1);
+  });
+
+  it("falls back to the JSON route when the stream comes back as plain JSON", async () => {
+    mockFetch(200, okResponse); // both URLs answer JSON — stream attempt degrades
+    renderPanel("buy the dip on btc");
+
+    await waitFor(() => {
+      expect(useBuilderStore.getState().doc.expr.children).toHaveLength(1);
+    });
+    // Stream attempt + JSON fallback = two generate calls, result still applied.
+    expect(genCalls()).toHaveLength(2);
+    expect(String(genCalls()[0]![0])).toContain("/stream");
+    expect(String(genCalls()[1]![0])).not.toContain("/stream");
+  });
+
   it("shows the daily-limit copy and template fallback on 429", async () => {
     mockFetch(429, { error: "RATE_LIMITED", message: "Too many requests" });
     renderPanel("buy the dip on btc");

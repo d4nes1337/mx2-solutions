@@ -1,6 +1,9 @@
 # ADR-0011 — AI natural-language strategy generation ("vibe-trading" onboarding)
 
-- Status: Built (2026-07-10); enabled per-environment behind `FEATURE_AI_CHAT` (fail-closed)
+- Status: Built (2026-07-10); enabled per-environment behind `FEATURE_AI_CHAT` (fail-closed).
+  Amended by ADR-0029 (2026-07-28): guaranteed-draft floor, pre-search seeding, 2 repair rounds,
+  prompt-cache split, Haiku default, `get_market_stats` + hosted web search + product Q&A tools,
+  SSE progress endpoint.
 - Owner decision: growth/onboarding brief approved 2026-07-10 (see DECISIONS D-021)
 
 ## Context

@@ -60,6 +60,8 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
         staleSince: null,
         supersedes: null,
         supersededBy: null,
+        seriesSlug: o.seriesSlug ?? null,
+        lastSeriesWindowStart: null,
         definition: o.definition,
         definitionHash: o.definitionHash,
         status: "ACTIVE_WAITING",
@@ -142,6 +144,7 @@ const makeRuleStore = (): RuleStore & { rows: ConditionalRuleRow[] } => {
       return r;
     },
     addExecutedNotional: async () => {},
+    claimSeriesWindow: async () => true,
     listStuckExecuting: async () => [],
     revertExecuting: async () => null,
     // Mirrors the real transactional carry: tags, starredAt and lifetime spend

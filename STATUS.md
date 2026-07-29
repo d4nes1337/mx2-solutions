@@ -1,8 +1,72 @@
 # Project Status
 
-_Last updated: 2026-07-27_
+_Last updated: 2026-07-28_
 
 ## Recent
+
+- **Referral system + admin panel + volume stats (owner decisions 2026-07-28; ADR-0028,
+  D-051, migration 0022).** Beta access is now referral-driven: every allowlisted user gets a
+  personal 6-char multi-use code with an admin-set seat cap (the per-user invite quota);
+  admin can mint vanity/VIP (`ANSEM`) and campaign codes. Join flow is zero-typing —
+  `/r/CODE` share links (and `?ref=`) stash the code in localStorage and auto-attach it to
+  the next EIP-712 sign-in; the manual field remains. Codes are PLAINTEXT handles by
+  decision (rate-limited verify, caps, audit; R-045); legacy hashed invitations still
+  redeem through the same input. New `/admin` panel (Overview / Codes / Users / Waitlist)
+  behind `ADMIN_WALLET_ADDRESSES` wallet sessions — mint/caps/disable, revoke/re-grant
+  access (sessions cut immediately), waitlist view; x-admin-secret curl routes untouched.
+  Volume: hourly worker rollups from Data-API `/activity` per derived proxy wallet
+  (`user_volume_daily`/`user_volume_stats`), volume columns in admin, public `/leaderboard`
+  page + cached `GET /api/referrals/leaderboard`, and a daily Dune uploads-API push of the
+  pseudonymous wallet↔code mapping for an on-chain-verifiable public dashboard
+  (docs/dune/README.md; runs only with `DUNE_API_KEY`; R-046). All behind
+  `FEATURE_REFERRALS` (default off); grandfathered wallets unaffected; rewards deliberately
+  deferred (redemption edges preserve the tree). Tests: referral store + auth redemption
+  paths (incl. cap-race semantics, already-referred lockout, rate limit), admin panel authz
+  - validation, volume-sync cursor/pagination/fail-soft, Dune CSV/upload — all green.
+
+- **AI builder upgrade: guaranteed drafts, analyst grounding, real progress, 3–6× cheaper
+  (owner-approved 2026-07-28; ADR-0029, D-051…D-053).** A genuine trading prompt can no longer
+  dead-end: 2 repair rounds, then a deterministic minimal alert draft anchored to the top
+  verified candidate (refinement turns clarify instead — they never clobber the user's
+  strategy). Fresh prompts are pre-searched server-side so the common path is ONE model call;
+  the fake progress timers are replaced by a real SSE stage stream
+  (`POST /api/ai/generate-strategy/stream`, shared rate-limit budget, JSON fallback for
+  buffering proxies). Fixed a prompt-cache bug (timestamp inside the cached system block — the
+  cache never hit) and switched the default model to `claude-haiku-4-5`. New grounding: a
+  strict `get_market_stats` tool (book, 7-day range, typical move, 24h drift, fees/rewards,
+  top-2 backtested scenarios — all from existing cached services, ≤3 calls/generation), the
+  Anthropic hosted web_search tool behind `FEATURE_AI_WEB_SEARCH` (off by default, ≤3
+  searches/generation, citations rendered as a Sources row), and a Product-guide section +
+  `answer_user` tool so the AI answers "how do I get started / get an invite or referral code"
+  truthfully. `AI_BASE_URL` added as the Kimi/Moonshot experiment knob (never default; web
+  search boot-blocked with it). Verification: 31 AI route tests (SSE, fallback, seeding, stats,
+  web search, product Q&A), stats + config unit tests, 16 AiPanel tests including a real SSE
+  stream fixture — all green. Still owed in staging: cache-hit check on Haiku
+  (`usage.cache_read_input_tokens`, 4096-token floor) and SSE pass-through behind the deployed
+  proxy.
+
+- **Rolling series bindings — Block C built (owner-approved 2026-07-28 after the mandated
+  walkthrough; ADR-0028).** A strategy can now target "whichever BTC 5-minute window is live"
+  instead of one market that dies in five minutes. `OrderActionV2.rollingSeries` is additive, so
+  the definition keeps a concrete anchor market and is **never rewritten** as windows roll
+  (definition hash stable, D-020 intact); the worker resolves the window at trigger time and
+  writes a concrete order into `evidence.preparedAction`. Guards at entry: live ask ≤ the price
+  ceiling, ≥30s left in the window, never the same window twice — an unresolvable window or empty
+  book is a skip, never a guess. **A skipped window refunds the repeat** (it cost nothing and
+  entered nothing) and re-arms after 15s. One-entry-per-window is a database compare-and-set
+  (`conditional_rules.last_series_window_start`, migration 0023) plus a window-keyed idempotency
+  key on the order ledger. Rolling entries must be immediate (FOK/FAK) — a resting fill would
+  land after the guard was checked; repeating signed orders are allowed only when rolling,
+  because those confirmations expire with their window (submitting late is refused with
+  `WINDOW_CLOSED`). Fixed a real-money hazard found on the way: the auto-executor built orders
+  from `rule.def.action`, which on a rolling strategy would have traded the stale anchor — it now
+  builds from the trigger's prepared action. Per owner decision 4, caps stay optional but the arm
+  sheet shows exact modeled outcomes at the ceiling price — best/worst case, per-window win/loss,
+  max spend, and the break-even win rate. Owner decision 1 keeps conditions fixed for now (seams
+  exported for rolling instantaneous conditions later); decision 2 keeps unattended auto behind
+  its existing flag and a later gate. Verification: 411 tests green across worker/rules/client/web
+  (24 new), including an end-to-end acceptance test that replays the approved three-window
+  walkthrough through the real evaluator; typecheck clean on every package I own.
 
 - **Markets tab → polymarket.com mirror + instant markets in the builder (owner request
   2026-07-27; ADR-0027, ADR-0015 amendment).** The Markets tab now shows the same markets in

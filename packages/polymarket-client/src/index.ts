@@ -1,6 +1,7 @@
 export * from "./errors.js";
 export * from "./gamma/schema.js";
 export * from "./gamma/client.js";
+export * from "./gamma/series.js";
 export * from "./clob/schema.js";
 export * from "./clob/client.js";
 export * from "./clob/economics.js";

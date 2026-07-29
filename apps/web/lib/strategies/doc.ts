@@ -56,7 +56,14 @@ export const tightenedExpiry = (
   currentMs: number | null,
   meta: MarketMeta | undefined,
   nowMs: number,
+  /**
+   * True when the strategy's ACTION rolls (ADR-0028). A rolling strategy
+   * outlives every individual window, so pinning its expiry to the window
+   * that happens to be live while building would kill it within minutes.
+   */
+  actionIsRolling = false,
 ): number | null => {
+  if (actionIsRolling) return currentMs;
   if (!meta?.recurrence || !meta.endDate) return currentMs;
   const endMs = Date.parse(meta.endDate);
   if (!Number.isFinite(endMs) || endMs <= nowMs) return currentMs;

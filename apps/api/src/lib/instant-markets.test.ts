@@ -2,18 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ok, err } from "@mx2/core";
 import {
   GammaEventSchema,
+  resetSeriesIdCache,
+  resolveSeriesWindowEvents,
   type GammaClient,
   type GammaEvent,
   type GammaSeries,
   type ListEventsPaginatedParams,
   type PolymarketError,
 } from "@mx2/polymarket-client";
-import {
-  CURATED_SERIES,
-  getInstantMarkets,
-  resetInstantMarketsCache,
-  resolveSeriesWindows,
-} from "./instant-markets.js";
+import { CURATED_SERIES, getInstantMarkets, resetInstantMarketsCache } from "./instant-markets.js";
 
 const upstreamErr: PolymarketError = { code: "UPSTREAM_ERROR", message: "x", statusCode: 502 };
 
@@ -88,16 +85,17 @@ const buildGamma = (opts?: { failWindows?: Set<string> }) => {
 
 beforeEach(() => {
   resetInstantMarketsCache();
+  resetSeriesIdCache(); // the series-id cache lives in @mx2/polymarket-client now
   vi.useFakeTimers();
   vi.setSystemTime(T0);
 });
 
 afterEach(() => vi.useRealTimers());
 
-describe("resolveSeriesWindows", () => {
+describe("resolveSeriesWindowEvents", () => {
   it("always sends end_date_min (stale never-closed instances otherwise)", async () => {
     const { gamma, windowCalls } = buildGamma();
-    await resolveSeriesWindows(gamma, "id-btc-up-or-down-5m", new Date(T0).toISOString());
+    await resolveSeriesWindowEvents(gamma, "id-btc-up-or-down-5m", new Date(T0).toISOString());
     expect(windowCalls[0]).toMatchObject({
       series_id: "id-btc-up-or-down-5m",
       closed: false,

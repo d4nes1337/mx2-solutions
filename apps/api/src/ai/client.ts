@@ -10,9 +10,15 @@ export interface AiClient {
   create(params: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message>;
 }
 
-export const createAnthropicAiClient = (opts: { apiKey: string; timeoutMs?: number }): AiClient => {
+export const createAnthropicAiClient = (opts: {
+  apiKey: string;
+  /** Anthropic-compatible endpoint override (Kimi/Moonshot experiment). */
+  baseUrl?: string;
+  timeoutMs?: number;
+}): AiClient => {
   const client = new Anthropic({
     apiKey: opts.apiKey,
+    ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
     timeout: opts.timeoutMs ?? 60_000,
     maxRetries: 1,
   });

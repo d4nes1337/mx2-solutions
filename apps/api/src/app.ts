@@ -4,6 +4,7 @@ import fastifyCors from "@fastify/cors";
 import type { AppConfig } from "@mx2/config";
 import type { Logger } from "@mx2/observability";
 import type {
+  AdminViewsStore,
   AuditStore,
   MarketSnapshotStore,
   ChallengeStore,
@@ -11,6 +12,8 @@ import type {
   SessionStore,
   AllowlistStore,
   InvitationStore,
+  ReferralStore,
+  VolumeStore,
   WaitlistStore,
   ClobCredentialStore,
   TradingAccountStore,
@@ -55,6 +58,8 @@ import { registerTradingWalletRoutes } from "./routes/trading-wallet.js";
 import { registerTradingAccountsRoutes } from "./routes/trading-accounts.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerAdminInvitesRoutes } from "./routes/admin-invites.js";
+import { registerReferralsRoutes } from "./routes/referrals.js";
+import { registerAdminPanelRoutes } from "./routes/admin-panel.js";
 import { registerWaitlistRoutes } from "./routes/waitlist.js";
 import { enforceAllowlistOnSessions } from "./auth/allowlist-sessions.js";
 import { registerRulesRoutes } from "./routes/rules.js";
@@ -108,6 +113,12 @@ export interface AppDeps {
   invitations?: InvitationStore;
   /** Public waitlist; enables POST /api/waitlist + the admin queue view. */
   waitlistStore?: WaitlistStore;
+  /** Referral codes (FEATURE_REFERRALS); enables redemption + /api/referrals. */
+  referralStore?: ReferralStore;
+  /** Admin panel read joins; required alongside referralStore for /api/admin/panel. */
+  adminViews?: AdminViewsStore;
+  /** Volume rollups (leaderboard + admin volume columns). */
+  volumeStore?: VolumeStore;
   /** Discord OAuth linking client (FEATURE_DISCORD_BOT). */
   discordOauth?: DiscordOauthClient;
   gammaClient: GammaClient;
@@ -248,7 +259,27 @@ export const buildApp = (deps: AppDeps) => {
     ...(deps.notificationChannels ? { notificationChannels: deps.notificationChannels } : {}),
     ...(deps.invitations ? { invitations: deps.invitations } : {}),
     ...(deps.waitlistStore ? { waitlist: deps.waitlistStore } : {}),
+    ...(deps.referralStore ? { referrals: deps.referralStore } : {}),
   });
+  if (deps.referralStore) {
+    registerReferralsRoutes(fastifyApp, {
+      config: deps.config,
+      sessions,
+      referrals: deps.referralStore,
+      ...(deps.volumeStore ? { volume: deps.volumeStore } : {}),
+    });
+  }
+  if (deps.referralStore && deps.adminViews) {
+    registerAdminPanelRoutes(fastifyApp, {
+      config: deps.config,
+      sessions,
+      auditStore: deps.auditStore,
+      referrals: deps.referralStore,
+      adminViews: deps.adminViews,
+      allowlist: deps.allowlist,
+      ...(deps.waitlistStore ? { waitlist: deps.waitlistStore } : {}),
+    });
+  }
   if (deps.waitlistStore) {
     registerWaitlistRoutes(fastifyApp, {
       auditStore: deps.auditStore,
@@ -426,6 +457,7 @@ export const buildApp = (deps: AppDeps) => {
     config: deps.config,
     auditStore: deps.auditStore,
     gammaClient: deps.gammaClient,
+    clobClient: deps.clobClient,
     aiClient: deps.aiClient ?? null,
   });
 

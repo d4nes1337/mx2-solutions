@@ -263,6 +263,7 @@ const mockRuleStore: RuleStore = {
   archive: async () => null,
   unarchive: async () => null,
   addExecutedNotional: async () => {},
+  claimSeriesWindow: async () => true,
   listStuckExecuting: async () => [],
   revertExecuting: async () => null,
   createSuperseding: async () => null,

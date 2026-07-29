@@ -17,7 +17,9 @@ import {
   createNotificationChannelStore,
   createNotificationOutboxStore,
   createLinkCodeStore,
+  createReferralStore,
   createSignLinkTokenStore,
+  createVolumeStore,
   type NotificationOutboxStore,
 } from "@mx2/db";
 import {
@@ -25,7 +27,11 @@ import {
   createBridgeClient,
   createClobClient,
   createConfiguredDepositWalletRelayer,
+  createDataClient,
+  createGammaClient,
   createPusdBalanceReader,
+  outcomeIndexOf,
+  resolveSeriesWindow,
 } from "@mx2/polymarket-client";
 import { createConfiguredTradingSigner } from "@mx2/trading-signer";
 import { createBridgePoller, type BridgePoller } from "./bridge-poller.js";
@@ -36,6 +42,8 @@ import {
   type MarketFeedManager,
 } from "./market-feed.js";
 import { createOrderSyncLoop, type OrderSyncLoop } from "./order-sync.js";
+import { createVolumeSyncLoop, type VolumeSyncLoop } from "./volume-sync.js";
+import { createDunePushLoop, type DunePushLoop } from "./dune-push.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
 import { createAutoRetrySweeper, type AutoRetrySweeper } from "./auto-retry-sweeper.js";
@@ -181,6 +189,44 @@ const main = async (): Promise<void> => {
         );
       return view;
     };
+    // Rolling series bindings (ADR-0028): resolve the window a rolling order
+    // targets at trigger time, and price the entry side off the LIVE book —
+    // Gamma's indicative prices are a display convenience, not something to
+    // commit money against. A failure anywhere here returns null, which the
+    // evaluator treats as "skip this window" (fail-closed).
+    const seriesGammaClient = createGammaClient({ baseUrl: config.polymarket.gammaBaseUrl });
+    const resolveRollingWindow = async (ref: {
+      seriesSlug: string;
+      selector: "current" | "next";
+      outcome: string;
+    }) => {
+      const resolved = await resolveSeriesWindow(seriesGammaClient, {
+        seriesSlug: ref.seriesSlug,
+        selector: ref.selector,
+      });
+      if (!resolved.ok || !resolved.value) return null;
+      const w = resolved.value;
+      const idx = outcomeIndexOf(w, ref.outcome);
+      const tokenId = idx >= 0 ? w.tokenIds[idx] : undefined;
+      if (tokenId === undefined) return null;
+      const book = await publicClobClient.getOrderbook(tokenId);
+      const bestAsk = book.ok
+        ? (orderbookToView(book.value, Date.now()).asks[0]?.price ?? null)
+        : null;
+      return {
+        market: {
+          conditionId: w.conditionId,
+          tokenId,
+          outcome: w.outcomes[idx] ?? ref.outcome,
+          title: w.title,
+        },
+        windowStartMs: w.windowStartMs,
+        windowEndMs: w.windowEndMs,
+        bestAsk,
+        slug: w.slug,
+      };
+    };
+
     evaluator = createRuleEvaluatorManager({
       logger,
       ruleStore,
@@ -192,6 +238,7 @@ const main = async (): Promise<void> => {
       isFeedConnected: () => feedRef.current?.state() === "connected",
       refreshIntervalMs: config.worker.restRefreshIntervalMs,
       refreshMaxPerPass: config.worker.restRefreshMaxPerPass,
+      resolveRollingWindow,
       ...(autoExecutor ? { autoExecutor } : {}),
       ...(outbox ? { outbox } : {}),
     });
@@ -478,6 +525,25 @@ const main = async (): Promise<void> => {
     });
   }
 
+  // Per-user traded-volume rollups for the referral leaderboard + admin panel.
+  let volumeSync: VolumeSyncLoop | null = null;
+  let dunePush: DunePushLoop | null = null;
+  if (config.features.referrals) {
+    volumeSync = createVolumeSyncLoop({
+      logger,
+      volumeStore: createVolumeStore(dbHandle.db),
+      dataClient: createDataClient({ baseUrl: config.polymarket.dataBaseUrl }),
+    });
+    // Public Dune dashboard feed — only with an API key configured.
+    if (config.dune.apiKey) {
+      dunePush = createDunePushLoop({
+        logger,
+        referrals: createReferralStore(dbHandle.db),
+        apiKey: config.dune.apiKey,
+      });
+    }
+  }
+
   evaluator?.start();
   executingRecovery?.start();
   autoRetrySweeper?.start();
@@ -487,6 +553,8 @@ const main = async (): Promise<void> => {
   bridgePoller?.start();
   telegramBot?.start();
   notificationDispatcher?.start();
+  volumeSync?.start();
+  dunePush?.start();
 
   const heartbeat = setInterval(() => {
     logger.debug("worker heartbeat");
@@ -504,6 +572,8 @@ const main = async (): Promise<void> => {
     bridgePoller?.stop();
     telegramBot?.stop();
     notificationDispatcher?.stop();
+    volumeSync?.stop();
+    dunePush?.stop();
     marketFeed.close();
     await dbHandle.close();
     process.exit(0);

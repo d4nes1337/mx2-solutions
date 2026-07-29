@@ -24,7 +24,10 @@ import {
   createNotificationChannelStore,
   createLinkCodeStore,
   createSignLinkTokenStore,
+  createAdminViewsStore,
   createInvitationStore,
+  createReferralStore,
+  createVolumeStore,
   createWaitlistStore,
 } from "@mx2/db";
 import {
@@ -72,6 +75,11 @@ const main = async (): Promise<void> => {
   const signTokens = createSignLinkTokenStore(dbHandle.db);
   const invitations = createInvitationStore(dbHandle.db);
   const waitlistStore = createWaitlistStore(dbHandle.db);
+  // Flag-gated: without FEATURE_REFERRALS the redemption path and the
+  // /api/referrals routes simply don't exist (legacy invitations still work).
+  const referralStore = config.features.referrals ? createReferralStore(dbHandle.db) : undefined;
+  const adminViews = config.features.referrals ? createAdminViewsStore(dbHandle.db) : undefined;
+  const volumeStore = config.features.referrals ? createVolumeStore(dbHandle.db) : undefined;
   const discordOauth =
     config.features.discordBot &&
     config.notifications.discordClientId &&
@@ -103,7 +111,10 @@ const main = async (): Promise<void> => {
   // the pairing); otherwise the AI route serves 503 AI_DISABLED.
   const aiClient =
     config.features.aiChat && config.ai.anthropicApiKey
-      ? createAnthropicAiClient({ apiKey: config.ai.anthropicApiKey })
+      ? createAnthropicAiClient({
+          apiKey: config.ai.anthropicApiKey,
+          ...(config.ai.baseUrl ? { baseUrl: config.ai.baseUrl } : {}),
+        })
       : null;
 
   const app = buildApp({
@@ -131,6 +142,9 @@ const main = async (): Promise<void> => {
     signTokens,
     invitations,
     waitlistStore,
+    ...(referralStore ? { referralStore } : {}),
+    ...(adminViews ? { adminViews } : {}),
+    ...(volumeStore ? { volumeStore } : {}),
     ...(discordOauth ? { discordOauth } : {}),
     triggerStore,
     privyWallets,

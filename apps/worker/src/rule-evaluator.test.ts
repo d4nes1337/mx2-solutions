@@ -81,6 +81,8 @@ const makeRow = (
   tags: [],
   archivedAt: null,
   starredAt: null,
+  seriesSlug: null,
+  lastSeriesWindowStart: null,
   createdAt: new Date(0),
   updatedAt: new Date(0),
   ...over,

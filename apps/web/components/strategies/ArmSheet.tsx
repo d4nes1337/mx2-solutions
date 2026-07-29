@@ -21,6 +21,7 @@ import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
 import type { AutoReadiness } from "@/lib/strategies/queries";
 import { Field, NumberInput } from "@/components/builder/editors/fields";
 import { ExpiryField, RecurrenceFields } from "@/components/builder/editors/RecurrenceFields";
+import { RollingOutcomes } from "@/components/strategies/RollingOutcomes";
 import { NotificationControls } from "@/components/action-center/NotificationControls";
 
 const ARM_PREFS_KEY = "arima.strategies.arm-prefs.v1";
@@ -237,6 +238,15 @@ export function ArmSheet({
           <RecurrenceFields />
           <ExpiryField />
         </div>
+
+        {/* Rolling strategies fire once per window, so the honest question is
+            not "what could this make" but "how often must it be right". */}
+        {order?.rollingSeries ? (
+          <RollingOutcomes
+            action={order}
+            windows={doc.recurrence.kind === "repeat" ? doc.recurrence.maxRepeats : 1}
+          />
+        ) : null}
 
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-faint">

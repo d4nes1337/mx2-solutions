@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
 import { Button } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 import type { useSignIn } from "@/lib/auth";
+import { getStoredRefCode } from "@/lib/referral";
 import { useWaitlistUi } from "@/lib/waitlist-ui";
 
 /** Sign-in error codes that mean "beta access required", not "sign-in broke". */
@@ -29,6 +30,14 @@ export function InviteCodeForm({
   heading?: string;
 }) {
   const [code, setCode] = useState("");
+
+  // Pre-fill a code captured from a /r/CODE or ?ref= link (effect, not
+  // initializer: localStorage must not influence the hydration pass).
+  useEffect(() => {
+    const stored = getStoredRefCode();
+    if (stored) setCode((prev) => (prev === "" ? stored : prev));
+  }, []);
+
   const invalidCode =
     signIn.error instanceof ApiError && signIn.error.code === "INVITE_INVALID"
       ? signIn.error.message

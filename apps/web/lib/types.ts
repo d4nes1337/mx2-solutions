@@ -198,6 +198,7 @@ export interface FeatureFlags {
   privySigning: boolean;
   aiChat: boolean;
   openBeta: boolean;
+  referrals: boolean;
   walletWithdraw: boolean;
   bridgeFunding: boolean;
   bridgeWithdrawals: boolean;
@@ -556,6 +557,111 @@ export interface Me {
   allowlisted: boolean;
   /** Derived Polymarket deposit (Gnosis Safe) wallet; null if derivation failed. */
   depositWallet: string | null;
+  /** Drives admin nav visibility only — every admin route re-checks server-side. */
+  isAdmin: boolean;
+}
+
+// ── Referrals ────────────────────────────────────────────────────────────────
+
+export interface ReferralCodeItem {
+  id: string;
+  code: string;
+  status: "active" | "disabled" | "expired" | "exhausted";
+  usedCount: number;
+  maxUses: number;
+  createdAt: string;
+  redemptions: { walletAddress: string; redeemedAt: string }[];
+  /** Lifetime traded volume of everyone who joined with this code. */
+  attributedVolumeUsd: string;
+}
+
+export interface LeaderboardEntryItem {
+  rank: number;
+  code: string;
+  ownerWallet: string | null;
+  refereeCount: number;
+  attributedVolumeUsd: string;
+}
+
+export interface LeaderboardResponse {
+  entries: LeaderboardEntryItem[];
+  updatedAt: string;
+}
+
+export interface ReferralsMe {
+  codes: ReferralCodeItem[];
+  /** Public web origin; share links are `${shareBaseUrl}/r/${code}`. */
+  shareBaseUrl: string;
+  referredBy: { redeemedAt: string } | null;
+}
+
+// ── Admin panel ──────────────────────────────────────────────────────────────
+
+export interface AdminCodeItem {
+  id: string;
+  code: string;
+  status: "active" | "disabled" | "expired" | "exhausted";
+  ownerWallet: string | null;
+  usedCount: number;
+  maxUses: number;
+  note: string | null;
+  createdBy: string;
+  expiresAt: string | null;
+  disabledAt: string | null;
+  createdAt: string;
+  refereeCount: number;
+  attributedVolumeUsd: string;
+}
+
+export interface AdminUserItem {
+  walletAddress: string;
+  createdAt: string;
+  lastSeenAt: string;
+  allowlisted: boolean;
+  allowlistAddedBy: string | null;
+  referredByCode: string | null;
+  referrerWallet: string | null;
+  referredAt: string | null;
+  lifetimeVolumeUsd: string;
+  tradeCount: number;
+  lastTradeAt: string | null;
+}
+
+export interface AdminOverviewResponse {
+  totalUsers: number;
+  allowlistedActive: number;
+  totalCodes: number;
+  seatsUsed: number;
+  seatsTotal: number;
+  redemptionsByDay: { day: string; count: number }[];
+  waitlistWaiting: number;
+}
+
+export interface AdminWaitlistEntry {
+  id: string;
+  email: string | null;
+  socialHandle: string | null;
+  walletAddress: string | null;
+  tradingFrequency: string | null;
+  useCase: string | null;
+  referral: string | null;
+  status: string;
+  createdAt: string;
+}
+
+export interface AdminMintCodeRequest {
+  code?: string;
+  ownerWallet?: string;
+  maxUses: number;
+  note?: string;
+  expiresInDays?: number;
+}
+
+export interface AdminPatchCodeRequest {
+  maxUses?: number;
+  note?: string | null;
+  disabled?: boolean;
+  ownerWallet?: string | null;
 }
 
 export interface Position {

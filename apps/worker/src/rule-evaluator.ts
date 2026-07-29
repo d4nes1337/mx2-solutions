@@ -11,14 +11,20 @@ import {
   isTerminal,
   normalizeDefinition,
   referencedTokenIds,
+  resolvedOrderAction,
+  revertRepeatForSkip,
+  seriesGuardDecision,
   staleGraceMsOf,
   transitionV2,
   type EvalEventV2,
   type MarketDataView,
+  type ResolvedSeriesWindow,
   type RuleDefinition,
+  type SeriesRef,
   type StrategyDefinition,
   type StrategyRuntime,
   type TransitionResultV2,
+  type TriggerEvidenceV2,
   type ViewsByToken,
   type WatermarksByNode,
 } from "@mx2/rules";
@@ -125,6 +131,14 @@ export interface RuleEvaluatorOptions {
   refreshMaxPerPass?: number;
   /** Min gap between audited churn events per (rule, reason). Default 60 s. */
   churnAuditMinIntervalMs?: number;
+  /**
+   * Rolling series bindings (ADR-0028): resolve the window a rolling order
+   * should target RIGHT NOW, with the entry side's live book attached.
+   * Injected so the evaluator stays free of Gamma/CLOB wiring (and testable
+   * with a fake). Absent → rolling strategies never enter, and every trigger
+   * is skipped with `series_unresolved` rather than trading a stale anchor.
+   */
+  resolveRollingWindow?: (ref: SeriesRef) => Promise<ResolvedSeriesWindow | null>;
 }
 
 interface ActiveRule {
@@ -142,6 +156,12 @@ interface ActiveRule {
   /** Hash of the ORIGINAL stored definition (ties evidence to the stored JSON). */
   readonly defHash: string;
   runtime: StrategyRuntime;
+  /**
+   * Window start (unix ms) of the last window a rolling strategy traded.
+   * First-line check only — `ruleStore.claimSeriesWindow` is the real
+   * guarantee, since it compare-and-sets in the database.
+   */
+  lastSeriesWindowStartMs: number | null;
   /** Serializes DB writes per rule so persisted status reflects event order. */
   writeChain: Promise<void>;
 }
@@ -156,6 +176,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     unsubscribe,
     autoExecutor,
     outbox,
+    resolveRollingWindow,
   } = opts;
   const reloadIntervalMs = opts.reloadIntervalMs ?? 5_000;
   const tickIntervalMs = opts.tickIntervalMs ?? 1_000;
@@ -248,6 +269,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       def,
       defHash: row.definitionHash,
       runtime,
+      lastSeriesWindowStartMs: row.lastSeriesWindowStart ?? null,
       writeChain: Promise.resolve(),
     });
     for (const token of tokens) {
@@ -313,11 +335,109 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     return views;
   };
 
+  /**
+   * Rolling bindings (ADR-0028): resolve the window this trigger should enter
+   * and run the guards. Returns the concrete trigger to record, or null when
+   * the window must be skipped — in which case the repeat is refunded and the
+   * skip is audited, because a skip costs no money and enters no market.
+   *
+   * Runs BEFORE the runtime is persisted so a skip writes the reverted state
+   * once, rather than writing a trigger and trying to walk it back.
+   */
+  const resolveRollingTrigger = async (
+    ar: ActiveRule,
+    trigger: TriggerEvidenceV2,
+    ref: SeriesRef,
+    nowMs: number,
+  ): Promise<TriggerEvidenceV2 | null> => {
+    const action = ar.def.action;
+    if (action.kind !== "order") return trigger;
+
+    const window = resolveRollingWindow
+      ? await resolveRollingWindow(ref).catch((e: unknown) => {
+          logger.warn({ err: e, ruleId: ar.id }, "Rolling window resolution failed");
+          return null;
+        })
+      : null;
+
+    const decision = seriesGuardDecision({
+      action,
+      window,
+      nowMs,
+      lastTradedWindowStartMs: ar.lastSeriesWindowStartMs,
+    });
+
+    // One entry per window, guaranteed by a compare-and-set in the database so
+    // it survives restarts and concurrent evaluations — not by the read above.
+    let claimed = false;
+    if (decision.ok && window) {
+      claimed = await ruleStore.claimSeriesWindow(ar.id, window.windowStartMs);
+      if (claimed) ar.lastSeriesWindowStartMs = window.windowStartMs;
+    }
+
+    if (!decision.ok || !window || !claimed) {
+      const reason = decision.ok ? "series_window_already_traded" : decision.reason;
+      const detail = decision.ok ? { slug: window?.slug ?? null } : decision.detail;
+      await auditStore.emit({
+        actor: ar.walletAddress,
+        action: "rule.execution.skipped",
+        subject: `rule:${ar.id}`,
+        metadata: {
+          reason,
+          seriesSlug: ref.seriesSlug,
+          triggerNumber: trigger.triggerNumber,
+          ...detail,
+        },
+      });
+      logger.info({ ruleId: ar.id, reason, seriesSlug: ref.seriesSlug }, "Rolling window skipped");
+      return null;
+    }
+
+    // The prepared action is now a plain, executable order against the live
+    // window — every downstream consumer (preview, signing, submission) reads
+    // it and never touches the definition's stale anchor market.
+    return {
+      ...trigger,
+      preparedAction: resolvedOrderAction(action, window, decision.entryPrice),
+      seriesWindow: {
+        seriesSlug: ref.seriesSlug,
+        slug: window.slug,
+        windowStartMs: window.windowStartMs,
+        windowEndMs: window.windowEndMs,
+      },
+      // v1-compat flat fields must describe the market actually traded.
+      tokenId: window.market.tokenId,
+      conditionId: window.market.conditionId,
+      bestAsk: window.bestAsk,
+    };
+  };
+
   const persist = async (
     ar: ActiveRule,
-    result: TransitionResultV2,
+    incoming: TransitionResultV2,
     nowMs: number,
   ): Promise<void> => {
+    let result = incoming;
+
+    // Rolling target resolution happens first: a skipped window must never
+    // reach the trigger/notification/execution path below.
+    const rollingRef =
+      incoming.trigger && ar.def.action.kind === "order" ? ar.def.action.rollingSeries : undefined;
+    if (incoming.trigger && rollingRef) {
+      const resolved = await resolveRollingTrigger(ar, incoming.trigger, rollingRef, nowMs);
+      if (!resolved) {
+        const runtime = revertRepeatForSkip(
+          incoming.runtime,
+          incoming.trigger.triggerNumber - 1,
+          nowMs,
+        );
+        ar.runtime = runtime;
+        result = { runtime, transition: null, trigger: null };
+      } else {
+        result = { ...incoming, trigger: resolved };
+      }
+    }
+
     const updated = await ruleStore.updateEvaluationState(ar.id, {
       status: result.runtime.status,
       trueSinceMs: result.runtime.trueSinceMs,
@@ -339,6 +459,10 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       const duplicate = ar.def.recurrence.kind === "once" && (await triggerStore.hasForRule(ar.id));
       if (!duplicate) {
         const action = ar.def.action;
+        // For a rolling strategy the definition's action still points at the
+        // stale anchor window; the trigger's prepared action is the resolved,
+        // executable one. Everything user-facing below reads `prepared`.
+        const prepared = result.trigger.preparedAction;
         const isAuto =
           autoExecutor !== undefined && action.kind === "order" && action.execution === "auto";
         const trig = await triggerStore.create({
@@ -382,7 +506,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
                   bestAsk: result.trigger.bestAsk ?? null,
                 },
               });
-            } else {
+            } else if (prepared.kind === "order") {
               await outbox.enqueue({
                 walletAddress: ar.walletAddress,
                 kind: "order_awaiting_signature",
@@ -391,10 +515,12 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
                   triggerId: trig.id,
                   ruleId: ar.id,
                   ruleName: ar.name,
-                  side: action.side,
-                  price: action.price,
-                  size: action.size,
-                  orderType: action.orderType,
+                  // Prepared, not defined: for a rolling strategy these are
+                  // the resolved window's terms, not the stale anchor's.
+                  side: prepared.side,
+                  price: prepared.price,
+                  size: prepared.size,
+                  orderType: prepared.orderType,
                   bestBid: result.trigger.bestBid ?? null,
                   bestAsk: result.trigger.bestAsk ?? null,
                 },

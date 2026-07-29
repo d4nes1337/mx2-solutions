@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Providers } from "./providers";
 import { AppChrome } from "@/components/AppChrome";
+import { RefCodeCatcher } from "@/components/RefCodeCatcher";
 import { THEME_INIT_SCRIPT } from "@/lib/theme-constants";
 
 export const metadata: Metadata = {
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Applies the persisted theme to <html> before first paint. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <Providers>
+          <RefCodeCatcher />
           <AppChrome>{children}</AppChrome>
         </Providers>
       </body>

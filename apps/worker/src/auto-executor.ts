@@ -205,7 +205,12 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       }
 
       // ── 8. Per-strategy limits (required for auto — no limits, no execution). ──
-      const action = rule.def.action;
+      // The ORDER COMES FROM THE TRIGGER, never from the definition. For a
+      // rolling strategy (ADR-0028) the definition's action still points at
+      // the anchor window that was live when the strategy was built, while
+      // `preparedAction` is the window the guards actually approved at trigger
+      // time. For every other strategy the two are identical.
+      const action = "preparedAction" in evidence ? evidence.preparedAction : rule.def.action;
       if (action.kind !== "order" || action.execution !== "auto") {
         return skip(rule, triggerId, "not_auto_action");
       }
@@ -307,7 +312,13 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
 
       // ── 11. Build + POLY_1271-sign + submit (W4, shared path with the
       // manual route). Deterministic idempotency key — restart-safe. ──
-      const idempotencyKey = `auto:${rule.id}:${triggerId}`;
+      // Rolling strategies additionally key on the window, so "at most one
+      // entry per window" is enforced at the order ledger too (the unique
+      // constraint), independently of the rule-row window claim.
+      const seriesWindow = "seriesWindow" in evidence ? evidence.seriesWindow : undefined;
+      const idempotencyKey = seriesWindow
+        ? `auto:${rule.id}:${seriesWindow.seriesSlug}:${seriesWindow.windowStartMs}`
+        : `auto:${rule.id}:${triggerId}`;
       const existingIntent = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
       if (existingIntent) {
         deps.logger.info(

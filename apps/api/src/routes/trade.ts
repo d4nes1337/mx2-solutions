@@ -461,6 +461,28 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
         }
       }
 
+      // A rolling strategy's confirmation dies with its window (ADR-0028).
+      // These markets resolve minutes after they open, so a late signature
+      // would buy into a market that is already settling — refuse it rather
+      // than let a stale tap place a real order.
+      const triggerScopedId = /^trigger:(.+)$/.exec(idempotencyKey)?.[1] ?? null;
+      if (triggerScopedId && deps.triggerStore) {
+        const trigger = await deps.triggerStore.findByIdForWallet(
+          triggerScopedId,
+          user.walletAddress,
+        );
+        const window = (
+          trigger?.evidence as { seriesWindow?: { windowEndMs?: number } } | undefined
+        )?.seriesWindow;
+        if (window?.windowEndMs !== undefined && window.windowEndMs <= Date.now()) {
+          reply.code(409);
+          return {
+            error: "WINDOW_CLOSED",
+            message: "That market's window has closed — the strategy will target the next one.",
+          };
+        }
+      }
+
       // Rate-limit guardrail (shared with the auto-execution path via the same
       // order_intents count). Caps runaway submission from any one wallet.
       const recentOrders = await deps.orderIntents.countRecentByWallet(

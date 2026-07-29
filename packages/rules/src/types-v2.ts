@@ -29,6 +29,41 @@ export interface MarketRef {
   readonly title?: string | undefined;
 }
 
+/**
+ * A rolling binding to a RECURRING series (ADR-0028) instead of one fixed
+ * market: "whichever BTC 5-minute window is live when this fires". The
+ * concrete instance is resolved by the worker AT TRIGGER TIME and recorded in
+ * the trigger's evidence — the stored definition is never rewritten, so the
+ * definition hash stays stable across windows (D-020).
+ *
+ * Only order ACTIONS may roll in this version; conditions still bind a fixed
+ * MarketRef, because history-dependent predicates (price_move, trailing) are
+ * meaningless on an instance that is seconds old. The union seam is here for
+ * a later revision that adds rolling to instantaneous conditions.
+ */
+export interface SeriesRef {
+  readonly kind: "series";
+  /** Gamma recurring-series slug, e.g. "btc-up-or-down-5m". */
+  readonly seriesSlug: string;
+  /** Outcome label to buy, matched case-insensitively ("Up"/"Down"). */
+  readonly outcome: string;
+  /** "current" = the live window; "next" = the following (pre-created) one. */
+  readonly selector: "current" | "next";
+  /** Skip the window when the entry side trades above this (0–1). */
+  readonly maxEntryPrice?: number | undefined;
+  /** Skip when the window closes sooner than this. Defaults to 30s. */
+  readonly minRemainingMs?: number | undefined;
+  /** Display-only series title ("BTC Up or Down 5m"); never evaluated. */
+  readonly title?: string | undefined;
+}
+
+/** Default "don't enter in the dying seconds of a window" floor. */
+export const SERIES_DEFAULT_MIN_REMAINING_MS = 30_000;
+
+export type MarketBinding = MarketRef | SeriesRef;
+
+export const isSeriesRef = (m: MarketBinding): m is SeriesRef => (m as SeriesRef).kind === "series";
+
 // ── Conditions ──────────────────────────────────────────────────────────────
 
 export interface PriceConditionV2 {
@@ -171,7 +206,23 @@ export interface AlertAction {
  */
 export interface OrderActionV2 {
   readonly kind: "order";
+  /**
+   * The market this order trades. When `rollingSeries` is set this is the
+   * ANCHOR window — the instance that was live when the strategy was built.
+   * It keeps every downstream consumer (preview, summaries, the denormalized
+   * rule columns) working against a concrete market, but it goes stale within
+   * minutes.
+   *
+   * EXECUTION MUST NEVER READ THIS FIELD ON A ROLLING STRATEGY. The window to
+   * trade is resolved at trigger time and written to the trigger's
+   * `evidence.preparedAction` — that is the only authority for placing an order.
+   */
   readonly market: MarketRef;
+  /**
+   * Rolling binding (ADR-0028): re-resolve the target window each time this
+   * strategy fires, instead of trading the anchor above forever.
+   */
+  readonly rollingSeries?: SeriesRef;
   readonly side: Side;
   readonly price: number;
   readonly size: number;
@@ -403,6 +454,17 @@ export interface TriggerEvidenceV2 {
   readonly resultTree: ExprResultNode;
   readonly reasonCodes: readonly ReasonCode[];
   readonly preparedAction: ActionV2;
+  /**
+   * Set when a rolling binding (ADR-0028) resolved this trigger's target: the
+   * window that was actually entered. `preparedAction` above is already the
+   * concrete order for it.
+   */
+  readonly seriesWindow?: {
+    readonly seriesSlug: string;
+    readonly slug: string;
+    readonly windowStartMs: number;
+    readonly windowEndMs: number;
+  };
   /** 1-based index of this trigger within the strategy's recurrence. */
   readonly triggerNumber: number;
   /** Trailing watermarks at trigger time (absent for non-trailing strategies). */

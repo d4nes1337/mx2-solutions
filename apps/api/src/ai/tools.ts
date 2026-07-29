@@ -292,10 +292,50 @@ export const CREATE_STRATEGY_TOOL = {
   },
 } as const;
 
+export const GET_MARKET_STATS_TOOL = {
+  name: "get_market_stats",
+  description:
+    "Live analytics for ONE candidate market: best bid/ask/spread, 7-day price range, typical movement, 24h drift, volume/liquidity, fees and maker-rewards, plus up to two backtested entry scenarios. Call it before finalizing thresholds or order prices when volatility, fees, rewards or backtested entries would change your answer — at most 3 calls per request. All prices are probabilities 0–1.",
+  strict: true,
+  input_schema: {
+    type: "object" as const,
+    additionalProperties: false,
+    required: ["index", "outcome"],
+    properties: {
+      index: {
+        type: "integer",
+        description: "Candidate index from search_markets / pinned / pre-searched lists.",
+      },
+      outcome: {
+        type: "string",
+        description: 'Outcome label exactly as listed, e.g. "Yes" or "No".',
+      },
+    },
+  },
+} as const;
+
+export const ANSWER_TOOL = {
+  name: "answer_user",
+  description:
+    "Use INSTEAD of create_strategy when the message is a question about arima itself — getting started, invite or referral codes, arming, wallets, how the builder works. Answer in a few friendly sentences grounded ONLY in the Product guide section of your instructions; never invent features.",
+  strict: true,
+  input_schema: {
+    type: "object" as const,
+    additionalProperties: false,
+    required: ["answer"],
+    properties: {
+      answer: {
+        type: "string",
+        description: "The short answer shown to the user (markdown allowed).",
+      },
+    },
+  },
+} as const;
+
 export const CLARIFY_TOOL = {
   name: "clarify",
   description:
-    "Use INSTEAD of create_strategy ONLY when the message is gibberish, empty, or clearly not about a prediction-market strategy — never merely because details are missing. Ask exactly one question, or politely explain what you can help with.",
+    "Use INSTEAD of create_strategy ONLY when the message is gibberish, empty, or clearly about neither a prediction-market strategy nor arima itself (product questions go to answer_user) — never merely because details are missing. Ask exactly one question, or politely explain what you can help with.",
   strict: true,
   input_schema: {
     type: "object" as const,
@@ -386,3 +426,5 @@ export type CreateStrategyInput = z.infer<typeof CreateStrategyInputZ>;
 
 export const SearchMarketsInputZ = z.object({ query: z.string() });
 export const ClarifyInputZ = z.object({ question: z.string() });
+export const AnswerInputZ = z.object({ answer: z.string() });
+export const GetMarketStatsInputZ = z.object({ index: z.number().int(), outcome: z.string() });

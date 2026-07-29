@@ -41,7 +41,9 @@ export interface ValidationIssue {
     | "QUOTE_LOOP_RECURRENCE"
     | "STALE_GRACE_OUT_OF_RANGE"
     | "TRAILING_OFFSET_OUT_OF_RANGE"
-    | "QUOTE_LOOP_TRAILING_GATE";
+    | "QUOTE_LOOP_TRAILING_GATE"
+    | "SERIES_PARAMS_INVALID"
+    | "SERIES_REQUIRES_IMMEDIATE";
   readonly message: string;
   /** Node id the issue anchors to, when it concerns a specific node. */
   readonly nodeId: string | null;
@@ -64,6 +66,10 @@ export const GTD_MAX_EXPIRES_AFTER_MS = 86_400_000;
 // never fire on a 0–1 probability market you'd realistically trail.
 export const TRAILING_OFFSET_MIN = 0.01;
 export const TRAILING_OFFSET_MAX = 0.5;
+// Rolling series (ADR-0028): a window may be as short as 5 minutes, so the
+// "don't enter in the dying seconds" floor is capped well inside one window.
+export const SERIES_MAX_MIN_REMAINING_MS = 300_000;
+const SERIES_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,79}$/;
 
 /** Expression depth (a condition counts 1). Exported for builder-side guards. */
 export const depthOf = (node: ExprNode): number =>
@@ -207,6 +213,34 @@ export const validateStrategyDefinition = (
       }
     }
 
+    // ── Rolling series binding (ADR-0028) ──
+    if (a.rollingSeries !== undefined) {
+      const s = a.rollingSeries;
+      const minRemaining = s.minRemainingMs;
+      const paramsOk =
+        SERIES_SLUG_RE.test(s.seriesSlug) &&
+        s.outcome.trim() !== "" &&
+        (s.selector === "current" || s.selector === "next") &&
+        (s.maxEntryPrice === undefined || (s.maxEntryPrice > 0 && s.maxEntryPrice < 1)) &&
+        (minRemaining === undefined ||
+          (Number.isInteger(minRemaining) &&
+            minRemaining >= 0 &&
+            minRemaining <= SERIES_MAX_MIN_REMAINING_MS));
+      if (!paramsOk)
+        push(
+          "SERIES_PARAMS_INVALID",
+          "Rolling markets need a valid series, an outcome, a price ceiling between 0¢ and 100¢, and a time floor under 5 minutes.",
+        );
+      // A resting order can fill minutes after the price guard was checked —
+      // on a market that resolves in five minutes that defeats the guard
+      // entirely, so rolling entries must be immediate.
+      if (a.orderType !== "FOK" && a.orderType !== "FAK")
+        push(
+          "SERIES_REQUIRES_IMMEDIATE",
+          "Rolling markets enter immediately — choose Immediate (FAK) or All-or-none (FOK).",
+        );
+    }
+
     if (a.execution === "auto") {
       if (def.limits === null) {
         push("AUTO_REQUIRES_LIMITS", "Auto mode requires spending limits before arming.");
@@ -261,8 +295,14 @@ export const validateStrategyDefinition = (
       push("REPEAT_COUNT_OUT_OF_RANGE", `Repeat count must be between 2 and ${MAX_REPEATS}.`);
     if (!(r.cooldownMs >= 0 && r.cooldownMs <= MAX_COOLDOWN_MS))
       push("COOLDOWN_OUT_OF_RANGE", "Cooldown must be between 0 and 24 hours.");
+    // Signed orders normally trigger once: repeating them would pile up stale
+    // confirmations the user must sift through. A ROLLING order is the
+    // exception (ADR-0028) — each confirmation is tied to a window that closes
+    // within minutes, so it expires by construction instead of piling up, and
+    // repeat-per-window is the whole point of the binding.
     const prepared = def.action.kind === "order" && def.action.execution === "prepare";
-    if (prepared)
+    const rolling = def.action.kind === "order" && def.action.rollingSeries !== undefined;
+    if (prepared && !rolling)
       push(
         "REPEAT_REQUIRES_ALERT_OR_AUTO",
         "Repeat works with alerts or auto execution — signed orders trigger once.",

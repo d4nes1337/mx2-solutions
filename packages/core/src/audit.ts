@@ -92,6 +92,12 @@ export const AUDIT_ACTIONS = [
   "invite.redeemed",
   "invite.redemption_rejected",
   "invite.revoked",
+  // Referral system (migration 0022):
+  "referral.code_created",
+  "referral.code_updated",
+  "referral.redeemed",
+  "referral.redemption_rejected",
+  "referral.access_revoked",
   "system.startup",
 ] as const;
 

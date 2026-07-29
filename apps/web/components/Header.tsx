@@ -8,6 +8,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { ActionCenterBell } from "@/components/action-center/ActionCenterBell";
 import { HelpButton } from "@/components/onboarding/HelpButton";
 import { useFeatureFlags } from "@/lib/queries";
+import { useSession } from "@/lib/auth";
 import { cn } from "./ui";
 
 const NAV = [
@@ -66,7 +67,12 @@ function Logo() {
 
 export function Header() {
   const flags = useFeatureFlags();
-  const nav = flags.data?.makerLoop ? [...NAV, FARMING] : NAV;
+  const session = useSession();
+  const nav = [
+    ...(flags.data?.makerLoop ? [...NAV, FARMING] : NAV),
+    // Cosmetic only — /admin re-checks the wallet server-side on every call.
+    ...(session.data?.isAdmin ? [{ href: "/admin", label: "Admin", tour: null }] : []),
+  ];
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-bg/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-3 py-2.5 sm:px-4">

@@ -9,8 +9,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Zap } from "lucide-react";
-import type { MarketRef } from "@mx2/rules";
+import { ChevronDown, Repeat2, Zap } from "lucide-react";
+import type { MarketRef, SeriesRef } from "@mx2/rules";
 import { Spinner, cn } from "@/components/ui";
 import type { MarketMeta } from "@/lib/strategies/doc";
 import { metaFromResult, refFromResult } from "@/lib/strategies/pick";
@@ -38,9 +38,16 @@ const clockTime = (iso: string): string =>
 function OutcomeButtons({
   window: win,
   onPick,
+  onPickRolling,
+  seriesSlug,
+  seriesTitle,
 }: {
   window: InstantWindow;
   onPick: (ref: MarketRef, meta: MarketMeta) => void;
+  /** Present → each outcome also offers a rolling bind (ADR-0028). */
+  onPickRolling?: ((ref: SeriesRef, anchor: MarketRef, meta: MarketMeta) => void) | undefined;
+  seriesSlug?: string;
+  seriesTitle?: string;
 }) {
   return (
     <div className="flex shrink-0 gap-1.5">
@@ -48,22 +55,46 @@ function OutcomeButtons({
         const ref = refFromResult(win.market, i);
         if (!ref) return null;
         return (
-          <button
-            key={o}
-            type="button"
-            onClick={() => onPick(ref, metaFromResult(win.market, i, { endDate: win.endDate }))}
-            className={cn(
-              "rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
-              i === 0
-                ? "border-pos/30 bg-pos/10 text-pos hover:bg-pos/20"
-                : "border-neg/30 bg-neg/10 text-neg hover:bg-neg/20",
-            )}
-          >
-            {o}
-            {win.market.outcomePrices[i]
-              ? ` · ${Math.round(Number(win.market.outcomePrices[i]) * 100)}¢`
-              : ""}
-          </button>
+          <div key={o} className="flex flex-col items-stretch gap-0.5">
+            <button
+              type="button"
+              onClick={() => onPick(ref, metaFromResult(win.market, i, { endDate: win.endDate }))}
+              className={cn(
+                "rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
+                i === 0
+                  ? "border-pos/30 bg-pos/10 text-pos hover:bg-pos/20"
+                  : "border-neg/30 bg-neg/10 text-neg hover:bg-neg/20",
+              )}
+            >
+              {o}
+              {win.market.outcomePrices[i]
+                ? ` · ${Math.round(Number(win.market.outcomePrices[i]) * 100)}¢`
+                : ""}
+            </button>
+            {onPickRolling && seriesSlug ? (
+              <button
+                type="button"
+                title={`Always trade the freshest ${seriesTitle ?? seriesSlug} window on ${o}`}
+                onClick={() =>
+                  onPickRolling(
+                    {
+                      kind: "series",
+                      seriesSlug,
+                      outcome: o,
+                      selector: "current",
+                      title: seriesTitle ?? seriesSlug,
+                    },
+                    ref,
+                    metaFromResult(win.market, i, { endDate: win.endDate }),
+                  )
+                }
+                className="inline-flex items-center justify-center gap-0.5 rounded-md border border-brand/40 bg-brand-soft px-2 py-0.5 text-[10px] font-semibold text-accent transition-colors hover:bg-brand-soft/70"
+              >
+                <Repeat2 size={9} aria-hidden />
+                rolling
+              </button>
+            ) : null}
+          </div>
         );
       })}
     </div>
@@ -74,10 +105,12 @@ function SeriesRow({
   series,
   nowMs,
   onPick,
+  onPickRolling,
 }: {
   series: InstantSeries;
   nowMs: number;
   onPick: (ref: MarketRef, meta: MarketMeta) => void;
+  onPickRolling?: ((ref: SeriesRef, anchor: MarketRef, meta: MarketMeta) => void) | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const live = series.windows.find((w) => Date.parse(w.endDate) > nowMs);
@@ -116,7 +149,15 @@ function SeriesRow({
             </div>
           )}
         </div>
-        {live ? <OutcomeButtons window={live} onPick={onPick} /> : null}
+        {live ? (
+          <OutcomeButtons
+            window={live}
+            onPick={onPick}
+            onPickRolling={onPickRolling}
+            seriesSlug={series.seriesSlug}
+            seriesTitle={series.title}
+          />
+        ) : null}
       </div>
 
       {upcoming.length > 0 ? (
@@ -156,8 +197,11 @@ function SeriesRow({
 
 export function InstantMarketsRail({
   onPick,
+  onPickRolling,
 }: {
   onPick?: (ref: MarketRef, meta: MarketMeta) => void;
+  /** Bind the ORDER to the whole series instead of one window (ADR-0028). */
+  onPickRolling?: ((ref: SeriesRef, anchor: MarketRef, meta: MarketMeta) => void) | undefined;
 }) {
   const [cadence, setCadence] = useState<Cadence>("5m");
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -231,7 +275,13 @@ export function InstantMarketsRail({
       ) : (
         <div className="max-h-64 space-y-1.5 overflow-y-auto">
           {visible.map((s) => (
-            <SeriesRow key={s.seriesSlug} series={s} nowMs={nowMs} onPick={onPick} />
+            <SeriesRow
+              key={s.seriesSlug}
+              series={s}
+              nowMs={nowMs}
+              onPick={onPick}
+              onPickRolling={onPickRolling}
+            />
           ))}
         </div>
       )}

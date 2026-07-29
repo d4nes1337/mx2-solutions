@@ -8,6 +8,7 @@ import type {
   AuditStore,
   InvitationStore,
   NotificationChannelStore,
+  ReferralStore,
   SignLinkTokenStore,
   WaitlistStore,
 } from "@mx2/db";
@@ -42,6 +43,11 @@ export interface AuthRoutesDeps {
   invitations?: InvitationStore;
   /** Waitlist queue; a redeemed invitation marks its linked entry accepted. */
   waitlist?: WaitlistStore;
+  /**
+   * Referral codes (FEATURE_REFERRALS): verify tries these before legacy
+   * invitations, and every allowlisted login lazily gets a personal code.
+   */
+  referrals?: ReferralStore;
 }
 
 /** Restricted-session lifetime: long enough to open, review, and sign. */
@@ -92,7 +98,10 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
   });
 
   // Verify a signed challenge; create a session if the address is allowlisted.
-  app.post("/api/auth/verify", async (req, reply) => {
+  // Rate-limited per IP: the plaintext referral-code namespace must not be
+  // enumerable, and 20/min never throttles a human login.
+  const verifyRateLimit = makeRateLimit({ limit: 20, windowMs: 60_000, scope: "auth-verify" });
+  app.post("/api/auth/verify", { preHandler: [verifyRateLimit] }, async (req, reply) => {
     const body = req.body as Record<string, unknown>;
     const address = typeof body["address"] === "string" ? body["address"].toLowerCase() : null;
     const nonce = typeof body["nonce"] === "string" ? body["nonce"] : null;
@@ -197,31 +206,92 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
     // a mid-login retry cannot strand the user between "code consumed" and
     // "allowlisted"; anything else is rejected without detail.
     const inviteCode = typeof body["inviteCode"] === "string" ? body["inviteCode"].trim() : null;
-    if (!allowed && inviteCode && deps.invitations) {
-      const result = await deps.invitations.redeem(hashInviteCode(inviteCode), address);
-      if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
-        await deps.allowlist.add(address, `invite:${result.invitation.id}`, result.invitation.note);
-        await deps.auditStore.emit({
-          actor: address,
-          action: "invite.redeemed",
-          subject: `invitation:${result.invitation.id}`,
-          metadata: { idempotentReplay: result.outcome === "already_redeemed_by_wallet" },
-        });
-        if (result.invitation.waitlistEntryId && deps.waitlist) {
-          await deps.waitlist.updateStatus(result.invitation.waitlistEntryId, "accepted");
+    if (!allowed && inviteCode && (deps.referrals || deps.invitations)) {
+      // Referral codes first (plaintext handles); legacy hashed invitations
+      // remain redeemable through the same field so outstanding one-time
+      // codes keep working. Both paths bind to the signature-verified wallet.
+      let redeemedVia: string | null = null;
+      if (deps.referrals) {
+        const result = await deps.referrals.redeem(inviteCode, address);
+        if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
+          await deps.allowlist.add(address, `referral:${result.code.id}`, result.code.code);
+          await deps.auditStore.emit({
+            actor: address,
+            action: "referral.redeemed",
+            subject: `referral_code:${result.code.id}`,
+            metadata: {
+              code: result.code.code,
+              referrerWallet: result.redemption.referrerWallet,
+              idempotentReplay: result.outcome === "already_redeemed_by_wallet",
+            },
+          });
+          redeemedVia = "referral";
+          allowed = true;
+        } else if (result.reason !== "not_found") {
+          // A real referral code that cannot be redeemed (exhausted, disabled,
+          // expired, or the wallet was already referred) — report precisely
+          // enough to act on, without confirming seat counts.
+          await deps.auditStore.emit({
+            actor: address,
+            action: "referral.redemption_rejected",
+            subject: `wallet:${address}`,
+            metadata: { reason: result.reason },
+          });
+          reply.code(403);
+          return {
+            error: "INVITE_INVALID",
+            message:
+              result.reason === "wallet_already_referred"
+                ? "This wallet has already used a referral code. Contact support if you lost access."
+                : "This referral code is no longer available.",
+          };
         }
-        allowed = true;
-      } else {
+        // not_found falls through to the legacy invitation path.
+      }
+      if (!redeemedVia && !allowed && deps.invitations) {
+        const result = await deps.invitations.redeem(hashInviteCode(inviteCode), address);
+        if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
+          await deps.allowlist.add(
+            address,
+            `invite:${result.invitation.id}`,
+            result.invitation.note,
+          );
+          await deps.auditStore.emit({
+            actor: address,
+            action: "invite.redeemed",
+            subject: `invitation:${result.invitation.id}`,
+            metadata: { idempotentReplay: result.outcome === "already_redeemed_by_wallet" },
+          });
+          if (result.invitation.waitlistEntryId && deps.waitlist) {
+            await deps.waitlist.updateStatus(result.invitation.waitlistEntryId, "accepted");
+          }
+          allowed = true;
+        } else {
+          await deps.auditStore.emit({
+            actor: address,
+            action: "invite.redemption_rejected",
+            subject: `wallet:${address}`,
+            metadata: { reason: result.reason },
+          });
+          reply.code(403);
+          return {
+            error: "INVITE_INVALID",
+            message: "This invitation code is invalid, expired, or already used.",
+          };
+        }
+      }
+      if (!allowed) {
+        // Referral-only deployment and the code matched nothing.
         await deps.auditStore.emit({
           actor: address,
-          action: "invite.redemption_rejected",
+          action: "referral.redemption_rejected",
           subject: `wallet:${address}`,
-          metadata: { reason: result.reason },
+          metadata: { reason: "not_found" },
         });
         reply.code(403);
         return {
           error: "INVITE_INVALID",
-          message: "This invitation code is invalid, expired, or already used.",
+          message: "This referral code is invalid.",
         };
       }
     }
@@ -257,6 +327,17 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
 
     // Upsert user record.
     await deps.users.upsert(address);
+
+    // Every allowlisted user gets a personal referral code (grandfathered
+    // wallets included — this is the lazy creation point for them). Fail-soft:
+    // login must never break because code minting hiccuped.
+    if (deps.referrals) {
+      try {
+        await deps.referrals.ensurePersonalCode(address, deps.config.referrals.defaultMaxUses);
+      } catch (error) {
+        req.log.warn({ event: "referral.personal_code_failed", address, error }, "personal code");
+      }
+    }
 
     // Create session.
     const token = generateSessionToken();
@@ -447,6 +528,8 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       address: user.walletAddress,
       allowlisted: entry?.isActive === true,
       depositWallet,
+      // Admin-panel gate is server-enforced; this only drives nav visibility.
+      isAdmin: deps.config.referrals.adminWallets.includes(user.walletAddress),
     };
   });
 };

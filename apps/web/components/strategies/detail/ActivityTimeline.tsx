@@ -67,6 +67,12 @@ const fallbackReasonLabel = (reason: string): string =>
 const usd = (v: unknown): string | null =>
   typeof v === "number" && Number.isFinite(v) ? `$${v.toFixed(2)}` : null;
 
+const cents = (v: unknown): string | null =>
+  typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}¢` : null;
+
+const seconds = (v: unknown): string | null =>
+  typeof v === "number" && Number.isFinite(v) ? `${Math.max(0, Math.round(v / 1000))}s` : null;
+
 /** Actionable copy for auto-execution skip reasons (audit `reason` codes). */
 const skipDetail = (meta: Record<string, unknown>): string => {
   const reason = typeof meta["reason"] === "string" ? (meta["reason"] as string) : "";
@@ -94,6 +100,27 @@ const skipDetail = (meta: Record<string, unknown>): string => {
       return "Order rate limit hit — will not auto-place this trigger";
     case "limits_missing":
       return "Strategy has no spend limits set — auto needs per-order/daily caps";
+    // ── Rolling series bindings (ADR-0028): a skipped window costs nothing
+    // and does not consume the repeat budget. ──
+    case "series_price_above_ceiling": {
+      const ask = cents(meta["bestAsk"]);
+      const ceiling = cents(meta["ceiling"]);
+      return ask && ceiling
+        ? `Skipped this window — ${ask} is above your ${ceiling} limit`
+        : "Skipped this window — the entry price was above your limit";
+    }
+    case "series_window_too_short": {
+      const remaining = seconds(meta["remainingMs"]);
+      return remaining
+        ? `Skipped this window — only ${remaining} left to trade`
+        : "Skipped this window — too little time left to trade";
+    }
+    case "series_window_already_traded":
+      return "Already traded this window — waiting for the next one";
+    case "series_no_book":
+      return "Skipped this window — no order book to price the entry";
+    case "series_unresolved":
+      return "Couldn’t find the live window — will retry on the next trigger";
     default:
       return fallbackReasonLabel(reason);
   }

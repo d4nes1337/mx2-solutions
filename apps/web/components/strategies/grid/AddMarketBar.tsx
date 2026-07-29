@@ -19,6 +19,7 @@ export function AddMarketBar() {
   const [open, setOpen] = useState(false);
   const doc = useBuilderStore((s) => s.doc);
   const addWatchedMarket = useBuilderStore((s) => s.addWatchedMarket);
+  const bindRollingSeries = useBuilderStore((s) => s.bindRollingSeries);
   const count = docMarketRefs(doc).length;
   const atCap = count >= EXPR_LIMITS.maxMarkets;
 
@@ -56,6 +57,10 @@ export function AddMarketBar() {
             <InstantMarketsRail
               onPick={(ref, meta) => {
                 addWatchedMarket(ref, meta);
+                setOpen(false);
+              }}
+              onPickRolling={(ref, anchor, meta) => {
+                bindRollingSeries(ref, anchor, meta);
                 setOpen(false);
               }}
             />

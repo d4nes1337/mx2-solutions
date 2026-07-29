@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type {
   ReasonCode,
   RuleDefinition,
@@ -57,6 +57,11 @@ export interface CreateRuleOpts {
   templateId?: string | null;
   /** Every tokenId the strategy reads — the worker's subscription set. */
   tokenIds?: readonly string[];
+  /**
+   * Rolling series binding (ADR-0028), denormalized from the definition for
+   * indexing/display. Null/omitted for ordinary fixed-market strategies.
+   */
+  seriesSlug?: string | null;
 }
 
 export interface RuleEvaluationUpdate {
@@ -140,6 +145,13 @@ export interface RuleStore {
   markExecutionFailed(id: string, errorMessage: string): Promise<ConditionalRuleRow | null>;
   /** Accumulate lifetime auto-executed notional (checked against maxTotalNotional). */
   addExecutedNotional(id: string, amountUsd: number): Promise<void>;
+  /**
+   * Claim a window for a rolling strategy (ADR-0028). Compare-and-set: only
+   * writes when the strategy has not already traded this window, so the
+   * one-entry-per-window guarantee holds even if two evaluations race.
+   * Returns false when the window was already claimed.
+   */
+  claimSeriesWindow(id: string, windowStartMs: number): Promise<boolean>;
   /** Rules stuck in EXECUTING since before `cutoff` — crash-recovery sweep input. */
   listStuckExecuting(cutoff: Date): Promise<ConditionalRuleRow[]>;
   /**
@@ -180,6 +192,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
         name: opts.name ?? null,
         templateId: opts.templateId ?? null,
         tokenIds: [...(opts.tokenIds ?? [opts.tokenId])],
+        seriesSlug: opts.seriesSlug ?? null,
       })
       .returning();
     if (!row) throw new Error("Failed to create conditional rule");
@@ -414,6 +427,25 @@ export const createRuleStore = (db: Database): RuleStore => ({
       .where(eq(conditionalRules.id, id));
   },
 
+  async claimSeriesWindow(id, windowStartMs) {
+    // CAS on the window marker: the WHERE clause is the guarantee, not the
+    // read that preceded it.
+    const rows = await db
+      .update(conditionalRules)
+      .set({ lastSeriesWindowStart: windowStartMs, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(conditionalRules.id, id),
+          or(
+            isNull(conditionalRules.lastSeriesWindowStart),
+            ne(conditionalRules.lastSeriesWindowStart, windowStartMs),
+          ),
+        ),
+      )
+      .returning({ id: conditionalRules.id });
+    return rows.length > 0;
+  },
+
   async listStuckExecuting(cutoff) {
     return db
       .select()
@@ -461,10 +493,14 @@ export const createRuleStore = (db: Database): RuleStore => ({
           name: opts.name ?? null,
           templateId: opts.templateId ?? null,
           tokenIds: [...(opts.tokenIds ?? [opts.tokenId])],
+          seriesSlug: opts.seriesSlug ?? null,
           supersedes: oldId,
           totalNotionalExecuted: old.totalNotionalExecuted,
           tags: old.tags,
           starredAt: old.starredAt,
+          // Carried over so an edit can't hand a rolling strategy a second
+          // entry into a window it already traded.
+          lastSeriesWindowStart: old.lastSeriesWindowStart,
         })
         .returning();
       if (!created) throw new Error("Failed to create superseding rule");

@@ -113,7 +113,16 @@ const EnvSchema = z.object({
   // Secret API key for the NL→Smart Order endpoint. Required when
   // FEATURE_AI_CHAT=true (validated below). Never exposed to the browser.
   ANTHROPIC_API_KEY: z.string().optional(),
-  AI_MODEL: z.string().default("claude-sonnet-5"),
+  AI_MODEL: z.string().default("claude-haiku-4-5"),
+  // Anthropic-COMPATIBLE endpoint override (e.g. Moonshot/Kimi experiment:
+  // https://api.moonshot.ai/anthropic with a Moonshot key in
+  // ANTHROPIC_API_KEY). Anthropic-hosted server tools (web search) do not
+  // exist off-Anthropic — validated below. Empty string = unset, so the
+  // .env.example placeholder line can't brick boot.
+  AI_BASE_URL: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
 
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
@@ -130,9 +139,27 @@ const EnvSchema = z.object({
   // generated orders are always execution:"prepare" — but it calls a paid
   // upstream API, so it fails closed without a key (validated below).
   FEATURE_AI_CHAT: boolFromEnv(false),
+  // Anthropic hosted web-search tool inside AI generation ($10/1k searches,
+  // ≤3 per generation). Extra paid capability on top of FEATURE_AI_CHAT —
+  // separate flag so the owner opts into the spend explicitly.
+  FEATURE_AI_WEB_SEARCH: boolFromEnv(false),
   // Open beta: auto-allowlist every wallet that completes EIP-712 sign-in.
   // Allowlist table stays the source of truth (per-wallet revocation intact).
   FEATURE_OPEN_BETA: boolFromEnv(false),
+  // Referral system: plaintext multi-use codes gate beta access, every
+  // allowlisted user gets a personal code, /admin panel manages them.
+  FEATURE_REFERRALS: boolFromEnv(false),
+  // Wallets allowed into the /api/admin/panel/* routes (comma-separated EOAs).
+  // Authenticated with the normal wallet session — NOT the header secret.
+  ADMIN_WALLET_ADDRESSES: z.string().default(""),
+  // Seats on an auto-issued personal referral code (admin can raise per code).
+  REFERRAL_DEFAULT_MAX_USES: z.coerce.number().int().min(0).default(5),
+
+  // ── Dune public referral dashboard (Slice D) ──────────────────────────────
+  // API key for pushing the referral mapping via the Dune uploads API. The
+  // push job only runs when the key is present. Secret — never logged.
+  DUNE_API_KEY: z.string().optional(),
+  DUNE_TABLE_NAMESPACE: z.string().optional(),
 
   // Trading-wallet withdrawals — deposit-wallet USDC.e back to the OWNER's
   // login wallet only (destination is never client input). Cross-checked
@@ -229,6 +256,7 @@ export type AppConfig = {
   ai: {
     model: string;
     anthropicApiKey: string | undefined;
+    baseUrl: string | undefined;
   };
   limits: {
     sessionSignerTtlSeconds: number;
@@ -250,6 +278,15 @@ export type AppConfig = {
     discordClientSecret: string | undefined;
     discordGuildInviteUrl: string | undefined;
   };
+  referrals: {
+    defaultMaxUses: number;
+    /** Lowercased EOAs allowed into the admin panel routes. */
+    adminWallets: string[];
+  };
+  dune: {
+    apiKey: string | undefined;
+    tableNamespace: string | undefined;
+  };
   features: {
     liveTrading: boolean;
     conditionalRules: boolean;
@@ -258,7 +295,9 @@ export type AppConfig = {
     relayer: boolean;
     privySigning: boolean;
     aiChat: boolean;
+    aiWebSearch: boolean;
     openBeta: boolean;
+    referrals: boolean;
     walletWithdraw: boolean;
     bridgeFunding: boolean;
     bridgeWithdrawals: boolean;
@@ -354,6 +393,15 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
   // half-configured rather than 500 at request time.
   if (e.FEATURE_AI_CHAT && !e.ANTHROPIC_API_KEY) {
     throw new ConfigError("FEATURE_AI_CHAT=true requires ANTHROPIC_API_KEY.");
+  }
+  if (e.FEATURE_AI_WEB_SEARCH && !e.FEATURE_AI_CHAT) {
+    throw new ConfigError("FEATURE_AI_WEB_SEARCH=true requires FEATURE_AI_CHAT=true.");
+  }
+  if (e.FEATURE_AI_WEB_SEARCH && e.AI_BASE_URL) {
+    throw new ConfigError(
+      "FEATURE_AI_WEB_SEARCH=true is incompatible with AI_BASE_URL — Anthropic's hosted " +
+        "web-search tool only exists on Anthropic's own API.",
+    );
   }
 
   // Fail-closed ladder for external notifications: a delivery channel needs the
@@ -462,6 +510,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     ai: {
       model: e.AI_MODEL,
       anthropicApiKey: e.ANTHROPIC_API_KEY,
+      baseUrl: e.AI_BASE_URL,
     },
     limits: {
       sessionSignerTtlSeconds: e.SESSION_SIGNER_TTL_SECONDS,
@@ -483,6 +532,16 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       discordClientSecret: e.DISCORD_CLIENT_SECRET,
       discordGuildInviteUrl: e.DISCORD_GUILD_INVITE_URL,
     },
+    referrals: {
+      defaultMaxUses: e.REFERRAL_DEFAULT_MAX_USES,
+      adminWallets: e.ADMIN_WALLET_ADDRESSES.split(",")
+        .map((w) => w.trim().toLowerCase())
+        .filter((w) => /^0x[0-9a-f]{40}$/.test(w)),
+    },
+    dune: {
+      apiKey: e.DUNE_API_KEY,
+      tableNamespace: e.DUNE_TABLE_NAMESPACE,
+    },
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
       conditionalRules: e.FEATURE_CONDITIONAL_RULES,
@@ -491,7 +550,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       relayer: e.FEATURE_RELAYER,
       privySigning: e.FEATURE_PRIVY_SIGNING,
       aiChat: e.FEATURE_AI_CHAT,
+      aiWebSearch: e.FEATURE_AI_WEB_SEARCH,
       openBeta: e.FEATURE_OPEN_BETA,
+      referrals: e.FEATURE_REFERRALS,
       walletWithdraw: e.FEATURE_WALLET_WITHDRAW,
       bridgeFunding: e.FEATURE_BRIDGE_FUNDING,
       bridgeWithdrawals: e.FEATURE_BRIDGE_WITHDRAWALS,

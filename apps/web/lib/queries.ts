@@ -64,6 +64,14 @@ import type {
   NotificationChannelItem,
   NotificationChannelsResponse,
   NotificationKind,
+  ReferralsMe,
+  LeaderboardResponse,
+  AdminCodeItem,
+  AdminMintCodeRequest,
+  AdminOverviewResponse,
+  AdminPatchCodeRequest,
+  AdminUserItem,
+  AdminWaitlistEntry,
   SignLinkExchangeResponse,
 } from "./types";
 
@@ -310,6 +318,107 @@ export function useFeatureFlags() {
     queryKey: ["feature-flags"],
     queryFn: () => api.get<FeatureFlags>("/api/feature-flags"),
     staleTime: 5 * 60_000,
+  });
+}
+
+export function useReferralsMe(enabled: boolean) {
+  return useQuery({
+    queryKey: ["referrals", "me"],
+    queryFn: () => api.get<ReferralsMe>("/api/referrals/me"),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useReferralLeaderboard() {
+  return useQuery({
+    queryKey: ["referrals", "leaderboard"],
+    queryFn: () => api.get<LeaderboardResponse>("/api/referrals/leaderboard"),
+    staleTime: 60_000,
+  });
+}
+
+// ── Admin panel ──────────────────────────────────────────────────────────────
+
+export function useAdminOverview(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "overview"],
+    queryFn: () => api.get<AdminOverviewResponse>("/api/admin/panel/overview"),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useAdminCodes(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "codes"],
+    queryFn: () => api.get<{ codes: AdminCodeItem[] }>("/api/admin/panel/codes"),
+    enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminUsers(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "users"],
+    queryFn: () => api.get<{ users: AdminUserItem[] }>("/api/admin/panel/users"),
+    enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminWaitlist(enabled: boolean) {
+  return useQuery({
+    queryKey: ["admin", "waitlist"],
+    queryFn: () => api.get<{ entries: AdminWaitlistEntry[] }>("/api/admin/panel/waitlist"),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useMintAdminCode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AdminMintCodeRequest) =>
+      api.post<{ code: AdminCodeItem }>("/api/admin/panel/codes", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+}
+
+export function usePatchAdminCode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: AdminPatchCodeRequest & { id: string }) =>
+      api.patch<{ code: AdminCodeItem }>(`/api/admin/panel/codes/${id}`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+}
+
+export function useAdminRevokeAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (wallet: string) =>
+      api.post<{ ok: boolean; sessionsRevoked: number }>(
+        `/api/admin/panel/users/${wallet}/revoke-access`,
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+}
+
+export function useAdminGrantAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (wallet: string) =>
+      api.post<{ ok: boolean }>(`/api/admin/panel/users/${wallet}/grant-access`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin"] });
+    },
   });
 }
 

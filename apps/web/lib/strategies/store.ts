@@ -6,7 +6,14 @@
  * this one document.
  */
 import { create } from "zustand";
-import type { ActionV2, ConditionV2, MarketRef, RecurrenceV2, StrategyLimits } from "@mx2/rules";
+import type {
+  ActionV2,
+  ConditionV2,
+  MarketRef,
+  RecurrenceV2,
+  SeriesRef,
+  StrategyLimits,
+} from "@mx2/rules";
 import {
   docHasContent,
   emptyDoc,
@@ -138,6 +145,13 @@ export interface BuilderState {
   /** Remove a watched market — refused while a condition/action references it. */
   removeWatchedMarket: (tokenId: string) => void;
   setAction: (action: ActionV2) => void;
+  /**
+   * Bind the ORDER to a recurring series (ADR-0028) instead of one fixed
+   * market: the strategy re-targets the live window every time it fires.
+   * `anchor` is the window that is live right now — it fills the display and
+   * the denormalized columns, and is never what actually gets traded.
+   */
+  bindRollingSeries: (ref: SeriesRef, anchor: MarketRef, meta?: MarketMeta) => void;
   setLimits: (limits: StrategyLimits | null) => void;
   setRecurrence: (recurrence: RecurrenceV2) => void;
   setHoldsFor: (ms: number) => void;
@@ -398,7 +412,12 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
       // Instant markets: default the strategy expiry to the window end so the
       // strategy dies with the window (only ever tightens — see doc.ts).
-      const expiresAtMs = tightenedExpiry(s.doc.expiresAtMs, meta, Date.now());
+      const expiresAtMs = tightenedExpiry(
+        s.doc.expiresAtMs,
+        meta,
+        Date.now(),
+        s.doc.action.kind === "order" && s.doc.action.rollingSeries !== undefined,
+      );
       if (nodeId === "action") {
         if (s.doc.action.kind !== "order") return s;
         // Anchor the limit price to the picked outcome's current price (fresh
@@ -437,7 +456,12 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       if (!isBound(ref) || s.doc.watchedMarkets.some((m) => m.tokenId === ref.tokenId)) return s;
       const marketMeta = meta ? { ...s.doc.marketMeta, [ref.tokenId]: meta } : s.doc.marketMeta;
       // Same instant-market expiry default as bindMarket (only tightens).
-      const expiresAtMs = tightenedExpiry(s.doc.expiresAtMs, meta, Date.now());
+      const expiresAtMs = tightenedExpiry(
+        s.doc.expiresAtMs,
+        meta,
+        Date.now(),
+        s.doc.action.kind === "order" && s.doc.action.rollingSeries !== undefined,
+      );
       return {
         doc: { ...s.doc, marketMeta, expiresAtMs, watchedMarkets: [...s.doc.watchedMarkets, ref] },
         focusedMarketToken: ref.tokenId,
@@ -463,6 +487,38 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     }),
 
   setAction: (action) => set((s) => bump({ ...s.doc, action }, s)),
+
+  bindRollingSeries: (ref, anchor, meta) =>
+    set((s) => {
+      const marketMeta = meta ? { ...s.doc.marketMeta, [anchor.tokenId]: meta } : s.doc.marketMeta;
+      const prev = s.doc.action.kind === "order" ? s.doc.action : null;
+      const ceiling = ref.maxEntryPrice ?? prev?.price ?? 0.5;
+      return bump(
+        {
+          ...s.doc,
+          marketMeta,
+          // A rolling strategy outlives every window, so it must NOT inherit
+          // the window-end expiry that a fixed instant-market bind sets.
+          expiresAtMs: s.doc.expiresAtMs,
+          action: {
+            kind: "order",
+            market: anchor,
+            rollingSeries: ref,
+            side: prev?.side ?? "BUY",
+            // The ceiling IS the limit price: an immediate order fills at the
+            // best price up to it, so the user never pays above their guard.
+            price: ceiling,
+            size: prev?.size ?? 10,
+            // Resting orders can fill after the guard was checked; on a market
+            // that resolves in minutes that defeats the guard (validation
+            // enforces this too).
+            orderType: "FAK",
+            execution: prev?.execution ?? "prepare",
+          },
+        },
+        s,
+      );
+    }),
 
   setLimits: (limits) => set((s) => bump({ ...s.doc, limits }, s)),
 

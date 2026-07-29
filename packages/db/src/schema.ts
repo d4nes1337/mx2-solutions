@@ -361,6 +361,19 @@ export const conditionalRules = pgTable(
      */
     supersedes: uuid("supersedes"),
     supersededBy: uuid("superseded_by"),
+    /**
+     * Rolling series binding (migration 0023, ADR-0028). Denormalized from
+     * `definition.action.rollingSeries.seriesSlug` for indexing and display —
+     * the definition stays the source of truth and is never rewritten as
+     * windows roll.
+     */
+    seriesSlug: text("series_slug"),
+    /**
+     * Window-start (unix ms) of the last window a rolling strategy actually
+     * traded. The one-entry-per-window guarantee is enforced against this, so
+     * it must survive worker restarts.
+     */
+    lastSeriesWindowStart: bigint("last_series_window_start", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -992,3 +1005,103 @@ export const invitations = pgTable(
 );
 
 export type InvitationRow = typeof invitations.$inferSelect;
+
+/**
+ * Referral codes (migration 0022). Unlike legacy invitations these are stored
+ * in PLAINTEXT by design (owner decision 2026-07-28): a referral code is a
+ * shareable marketing handle that must stay re-displayable in the profile and
+ * admin panel. Guessing is mitigated by redemption rate limits, per-code caps,
+ * and audit — a guessed code buys at most one capped, revocable beta seat.
+ * `code` is canonical uppercase; lookups normalize first. owner_wallet NULL =
+ * campaign code; set = a user's personal (or admin-granted vanity) code.
+ * used_count is a denormalized guard for the atomic cap check; the
+ * referral_redemptions table is the source of truth.
+ */
+export const referralCodes = pgTable(
+  "referral_codes",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    code: text("code").notNull().unique(),
+    ownerWallet: text("owner_wallet"),
+    maxUses: integer("max_uses").notNull(),
+    usedCount: integer("used_count").notNull().default(0),
+    note: text("note"),
+    /** Issuing actor: "system:auto" (personal code at login) or "admin:<wallet>". */
+    createdBy: text("created_by").notNull(),
+    /** NULL = never expires (personal codes); campaign codes may set one. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** Pause switch — never deleted, mirroring the append-ish invitation rows. */
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    disabledBy: text("disabled_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("referral_codes_owner_wallet_idx").on(t.ownerWallet)],
+);
+
+export type ReferralCodeRow = typeof referralCodes.$inferSelect;
+
+/**
+ * Referrer → referee edges. wallet_address is UNIQUE: a wallet can be
+ * referred exactly once, ever — this both blocks multi-seat farming and keeps
+ * attribution unambiguous for volume stats. referrer_wallet snapshots the code
+ * owner at redemption time so later ownership reassignment never rewrites
+ * history.
+ */
+export const referralRedemptions = pgTable(
+  "referral_redemptions",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    codeId: uuid("code_id").notNull(),
+    walletAddress: text("wallet_address").notNull().unique(),
+    referrerWallet: text("referrer_wallet"),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("referral_redemptions_code_id_idx").on(t.codeId)],
+);
+
+export type ReferralRedemptionRow = typeof referralRedemptions.$inferSelect;
+
+/**
+ * Per-user, per-day traded volume (migration 0022), aggregated from the
+ * Polymarket Data API /activity TRADE entries by the worker's volume-sync
+ * loop. Keyed by the signer EOA (joins users/allowlist); the proxy wallet
+ * used for the upstream query lives on user_volume_stats.
+ */
+export const userVolumeDaily = pgTable(
+  "user_volume_daily",
+  {
+    walletAddress: text("wallet_address").notNull(),
+    /** UTC day bucket, "YYYY-MM-DD". */
+    day: text("day").notNull(),
+    volumeUsd: numeric("volume_usd").notNull().default("0"),
+    tradeCount: integer("trade_count").notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex("user_volume_daily_wallet_day_idx").on(t.walletAddress, t.day),
+    index("user_volume_daily_day_idx").on(t.day),
+  ],
+);
+
+export type UserVolumeDailyRow = typeof userVolumeDaily.$inferSelect;
+
+/**
+ * Materialized lifetime rollup + incremental-sync cursor per user. last_synced
+ * timestamp is the Data API activity `timestamp` (unix seconds) of the newest
+ * trade already counted; the sync loop only requests newer activity.
+ */
+export const userVolumeStats = pgTable("user_volume_stats", {
+  walletAddress: text("wallet_address").primaryKey(),
+  /** Derived Polymarket deposit (proxy) wallet actually queried upstream. */
+  proxyWallet: text("proxy_wallet").notNull(),
+  lifetimeVolumeUsd: numeric("lifetime_volume_usd").notNull().default("0"),
+  tradeCount: integer("trade_count").notNull().default(0),
+  lastTradeAt: timestamp("last_trade_at", { withTimezone: true }),
+  lastSyncedTimestamp: bigint("last_synced_timestamp", { mode: "number" }).notNull().default(0),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type UserVolumeStatsRow = typeof userVolumeStats.$inferSelect;

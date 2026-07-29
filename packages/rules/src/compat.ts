@@ -105,7 +105,11 @@ export const referencedTokenIds = (def: StrategyDefinition): readonly string[] =
     for (const child of node.children) walk(child);
   };
   walk(def.expr);
-  if (def.action.kind === "order") tokens.add(def.action.market.tokenId);
+  // A rolling order has no fixed target: its anchor window dies within minutes,
+  // so subscribing to it would burn a slot (and a WS subscription) on a market
+  // nobody reads. The live window is resolved at trigger time instead.
+  if (def.action.kind === "order" && def.action.rollingSeries === undefined)
+    tokens.add(def.action.market.tokenId);
   if (def.action.kind === "quote_loop") {
     tokens.add(def.action.market.yesTokenId);
     tokens.add(def.action.market.noTokenId);

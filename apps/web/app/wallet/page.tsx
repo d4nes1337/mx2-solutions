@@ -7,6 +7,7 @@ import { useTradingAccounts, useTradingWallet } from "@/lib/queries";
 import { Empty, Spinner } from "@/components/ui";
 import { WalletsSection } from "@/components/profile/WalletsSection";
 import { NotificationsSection } from "@/components/profile/NotificationsSection";
+import { ReferralsSection } from "@/components/profile/ReferralsSection";
 import { TradingSetupPanel } from "@/components/wallet/TradingModes";
 import { EnableArimaWalletDialog } from "@/components/wallet/EnableArimaWalletDialog";
 
@@ -57,6 +58,7 @@ function WalletPageInner() {
             onEnableArima={() => setEnableArimaOpen(true)}
           />
           {optedIn ? <TradingSetupPanel account={internal} privyEnabled={privyEnabled} /> : null}
+          <ReferralsSection signedIn={signedIn} />
           <NotificationsSection signedIn={signedIn} />
           <EnableArimaWalletDialog
             open={enableArimaOpen}

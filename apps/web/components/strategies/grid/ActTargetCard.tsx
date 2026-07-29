@@ -16,7 +16,7 @@
  * the card says so and offers the duplicate path instead of pretending.
  */
 import Link from "next/link";
-import { Copy, Pencil } from "lucide-react";
+import { Copy, Pencil, Repeat2 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
@@ -86,8 +86,25 @@ function OrderTarget({
         }
       >
         <span className="text-faint">Trade · </span>
-        {marketLabel(doc, action.market)}
+        {action.rollingSeries ? (
+          <span className="inline-flex items-center gap-1">
+            <Repeat2 size={12} className="text-accent" aria-hidden />
+            {action.rollingSeries.title ?? action.rollingSeries.seriesSlug} ·{" "}
+            {action.rollingSeries.outcome}
+          </span>
+        ) : (
+          marketLabel(doc, action.market)
+        )}
       </CardHeader>
+      {action.rollingSeries ? (
+        <p className="px-3 pt-1.5 text-[11px] text-muted">
+          Rolling: re-targets whichever window is live when this fires — never expires with one
+          market.
+          {action.rollingSeries.maxEntryPrice !== undefined
+            ? ` Skips the window above ${cents(action.rollingSeries.maxEntryPrice)}.`
+            : ""}
+        </p>
+      ) : null}
       {history.isLoading ? (
         <div className="p-2" style={{ height: chartHeight + 8 }}>
           <Skeleton className="h-full w-full rounded-lg" />

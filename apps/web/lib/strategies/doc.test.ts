@@ -42,3 +42,16 @@ describe("tightenedExpiry", () => {
     expect(tightenedExpiry(null, undefined, NOW)).toBe(null);
   });
 });
+
+describe("tightenedExpiry — rolling strategies", () => {
+  it("never pins a rolling strategy to the window that was live while building", () => {
+    // The trap: bind BTC 5m as a WATCHED market on a rolling strategy and the
+    // expiry would otherwise kill the whole thing within minutes.
+    expect(tightenedExpiry(null, instantMeta(4 * MIN), NOW, true)).toBe(null);
+    expect(tightenedExpiry(NOW + 60 * MIN, instantMeta(4 * MIN), NOW, true)).toBe(NOW + 60 * MIN);
+  });
+
+  it("still tightens when the strategy does not roll", () => {
+    expect(tightenedExpiry(null, instantMeta(4 * MIN), NOW, false)).toBe(NOW + 4 * MIN);
+  });
+});
