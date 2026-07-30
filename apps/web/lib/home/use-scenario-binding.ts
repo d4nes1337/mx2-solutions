@@ -9,7 +9,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import type { TokenPricesHistoryResponse } from "../types";
+import { useTokenPricesHistory } from "../queries";
 import type { MarketSearchResult } from "../strategies/queries";
 import type { ChartPoint } from "@/components/charts/AreaChart";
 import type { DemoScenario } from "./demo-scenarios";
@@ -37,16 +37,10 @@ export function useScenarioBinding(scenario: DemoScenario, enabled = true): Scen
   const hit = search.data?.results[0] ?? null;
   const tokenId = hit?.tokenIds[0] ?? null;
 
-  const history = useQuery({
-    queryKey: ["home-demo-history", tokenId],
-    queryFn: () =>
-      api.get<TokenPricesHistoryResponse>(
-        `/api/markets/prices-history?tokenId=${encodeURIComponent(tokenId!)}&interval=1w`,
-      ),
-    enabled: enabled && Boolean(tokenId),
-    staleTime: STALE_MS,
-    retry: 1,
-  });
+  // Shared chart hook: same interval→fidelity mapping (1w → 15-min candles)
+  // and 10s poll as every other chart surface, plus a shared cache key with
+  // any market page already watching this token.
+  const history = useTokenPricesHistory(enabled ? tokenId : null, "1w");
 
   if (!hit || !tokenId || !history.data) return { status: "synthetic" };
 
