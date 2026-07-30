@@ -29,6 +29,8 @@ export const AUDIT_ACTIONS = [
   "rule.triggered",
   "rule.trigger.confirmed",
   "rule.trigger.dismissed",
+  /** User dismissed an auto-executed card from the bell (seen, not undone). */
+  "rule.trigger.acknowledged",
   "rule.executed_auto",
   "rule.execution.failed",
   "rule.execution.skipped",

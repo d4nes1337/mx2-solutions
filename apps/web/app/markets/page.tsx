@@ -17,6 +17,7 @@ import { BrowseGrid } from "@/components/market/BrowseGrid";
 import { CategoryChips } from "@/components/market/CategoryChips";
 import { GroupedResultCard } from "@/components/market/GroupedResultCard";
 import { MarketsHero } from "@/components/market/MarketsHero";
+import { SubFilterChips } from "@/components/market/SubFilterChips";
 import { Empty, ErrorNote, LiveDot, Skeleton } from "@/components/ui";
 import { useGroupedMarketSearch } from "@/lib/strategies/queries";
 
@@ -25,8 +26,10 @@ function MarketsBrowse() {
   const params = useSearchParams();
   const paramQ = (params.get("q") ?? "").trim();
   const paramTag = params.get("tag");
+  const paramSub = params.get("sub");
   const [q, setQ] = useState(paramQ);
   const [tag, setTag] = useState<string | null>(paramTag);
+  const [sub, setSub] = useState<string | null>(paramSub);
 
   // Keep the filter in sync with ?q= navigations (e.g. hero search) that
   // happen while this page is already mounted.
@@ -35,14 +38,32 @@ function MarketsBrowse() {
   const searching = q.trim().length >= 2;
   const search = useGroupedMarketSearch(searching ? q : "");
 
+  // Deep-linkable like ?q= — replace (not push) so chip-hopping doesn't
+  // pollute history.
+  const syncUrl = (nextTag: string | null, nextSub: string | null) => {
+    const qs = new URLSearchParams();
+    if (nextTag) qs.set("tag", nextTag);
+    if (nextSub) qs.set("sub", nextSub);
+    const query = qs.toString();
+    router.replace(query ? `/markets?${query}` : "/markets", { scroll: false });
+  };
+
   const changeTag = (next: string | null) => {
     setTag(next);
-    // Deep-linkable like ?q= — replace (not push) so chip-hopping doesn't
-    // pollute history.
-    router.replace(next ? `/markets?tag=${encodeURIComponent(next)}` : "/markets", {
-      scroll: false,
-    });
+    // A sub-filter only exists inside its own category — switching category
+    // drops it rather than carrying a Politics chip into Crypto.
+    setSub(null);
+    syncUrl(next, null);
   };
+
+  const changeSub = (next: string | null) => {
+    setSub(next);
+    syncUrl(tag, next);
+  };
+
+  // Both chip rows narrow the same grid, and a sub-filter is a plain tag_slug
+  // filter upstream — so the grid just filters by the most specific selection.
+  const gridTag = sub ?? tag;
 
   return (
     <div className="space-y-4">
@@ -76,7 +97,8 @@ function MarketsBrowse() {
       ) : (
         <>
           <CategoryChips tag={tag} onChange={changeTag} />
-          <BrowseGrid tag={tag} />
+          {tag ? <SubFilterChips tag={tag} sub={sub} onChange={changeSub} /> : null}
+          <BrowseGrid tag={gridTag} />
         </>
       )}
     </div>

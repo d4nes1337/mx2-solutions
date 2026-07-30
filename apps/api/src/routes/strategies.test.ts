@@ -291,6 +291,8 @@ const buildSmartOrdersApp = (opts: {
     findMarket:
       opts.findMarket ??
       (async (p) => ok(p.tokenId ? gammaMarketFor(p.tokenId, `cond-${p.tokenId}`) : null)),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
     searchMarkets: opts.searchMarkets ?? (async () => ok([])),
   };
   const clob: ClobClient = {
@@ -394,6 +396,10 @@ const buildSmartOrdersApp = (opts: {
       clearAutoRetry: async () => {},
       listAutoRetryable: async () => [],
       listAutoRetryLapsed: async () => [],
+      markAutoExecuted: async () => {},
+      markAutoFailed: async () => {},
+      acknowledge: async () => null,
+      listUnacknowledgedAutoExecuted: async () => [],
     } satisfies TriggerStore,
     privyWallets: {
       upsert: async () => {
@@ -943,6 +949,10 @@ describe("GET /api/strategies/:id/timeline", () => {
     triggeredAt: new Date("2026-01-01T00:15:00Z"),
     autoRetryUntil: null,
     autoRetryReason: null,
+    autoExecutedAt: null,
+    autoFailedAt: null,
+    autoFailureReason: null,
+    acknowledgedAt: null,
     evidence: {},
     reasonCodes: ["PRICE_OK"],
     status: "confirmed",
@@ -1479,6 +1489,10 @@ describe("GET /api/strategies/overview", () => {
       triggeredAt: new Date("2026-07-19T10:00:00Z"),
       autoRetryUntil: null,
       autoRetryReason: null,
+      autoExecutedAt: null,
+      autoFailedAt: null,
+      autoFailureReason: null,
+      acknowledgedAt: null,
       evidence: { bestAsk: 0.45, bestBid: 0.44 },
       reasonCodes: ["PRICE_OK"],
       status: "awaiting_user",
@@ -1532,6 +1546,10 @@ describe("GET /api/strategies/overview", () => {
           triggeredAt: new Date(),
           autoRetryUntil: null,
           autoRetryReason: null,
+          autoExecutedAt: null,
+          autoFailedAt: null,
+          autoFailureReason: null,
+          acknowledgedAt: null,
           evidence: { bestAsk: 0.45, bestBid: 0.44 },
           reasonCodes: ["PRICE_OK"],
           status: "awaiting_user",
@@ -1602,6 +1620,10 @@ describe("GET /api/strategies/overview", () => {
           triggeredAt: new Date(),
           autoRetryUntil: null,
           autoRetryReason: null,
+          autoExecutedAt: null,
+          autoFailedAt: null,
+          autoFailureReason: null,
+          acknowledgedAt: null,
           evidence: { bestAsk: 0.62, bestBid: 0.61 },
           reasonCodes: ["PRICE_OK"],
           status: "awaiting_user",

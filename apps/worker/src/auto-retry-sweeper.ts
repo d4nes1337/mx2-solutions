@@ -77,6 +77,9 @@ export const createAutoRetrySweeper = (deps: AutoRetrySweeperDeps): AutoRetrySwe
     reason: string,
   ): Promise<void> => {
     await deps.triggerStore.clearAutoRetry(trigger.id);
+    // The retry window closed without executing — the trigger degrades to
+    // manual; stamp the failure so the bell explains why auto never fired.
+    await deps.triggerStore.markAutoFailed(trigger.id, reason);
     await deps.auditStore.emit({
       actor: trigger.walletAddress,
       action: "rule.execution.retry_abandoned",

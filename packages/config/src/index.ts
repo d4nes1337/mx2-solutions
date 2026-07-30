@@ -126,6 +126,11 @@ const EnvSchema = z.object({
 
   // Feature flags. All risk-bearing features default OFF (fail-closed).
   FEATURE_LIVE_TRADING: boolFromEnv(false),
+  // IP geoblock enforcement on money routes. Default OFF by explicit owner
+  // decision (2026-07-29, D-055): the middleware and audit trail stay in the
+  // code path — re-enable with FEATURE_GEOBLOCK=true, no code change. Every
+  // skipped check is still audited as geoblock.checked/disabled_by_flag.
+  FEATURE_GEOBLOCK: boolFromEnv(false),
   FEATURE_CONDITIONAL_RULES: boolFromEnv(true),
   // Smart Order DSL v2 API surface (builder, draft evaluation, market search).
   // Not a spend-risk feature by itself — execution risk stays behind the flags
@@ -289,6 +294,7 @@ export type AppConfig = {
   };
   features: {
     liveTrading: boolean;
+    geoblock: boolean;
     conditionalRules: boolean;
     smartOrdersV2: boolean;
     conditionalLiveExecution: boolean;
@@ -544,6 +550,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
     },
     features: {
       liveTrading: e.FEATURE_LIVE_TRADING,
+      geoblock: e.FEATURE_GEOBLOCK,
       conditionalRules: e.FEATURE_CONDITIONAL_RULES,
       smartOrdersV2: e.FEATURE_SMART_ORDERS_V2,
       conditionalLiveExecution: e.FEATURE_CONDITIONAL_LIVE_EXECUTION,

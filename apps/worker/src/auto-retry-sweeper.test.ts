@@ -93,6 +93,7 @@ interface HarnessOpts {
 const makeHarness = (opts: HarnessOpts = {}) => {
   const executed: AutoExecuteInput[] = [];
   const cleared: string[] = [];
+  const autoFailed: { id: string; reason: string }[] = [];
   const audits: { action: string; metadata: Record<string, unknown> }[] = [];
   const notified: string[] = [];
   const rule = {
@@ -113,6 +114,9 @@ const makeHarness = (opts: HarnessOpts = {}) => {
       clearAutoRetry: async (id: string) => {
         cleared.push(id);
       },
+      markAutoFailed: async (id: string, reason: string) => {
+        autoFailed.push({ id, reason });
+      },
     } as unknown as TriggerStore,
     auditStore: {
       emit: async (e: { action: string; metadata: Record<string, unknown> }) => {
@@ -132,7 +136,7 @@ const makeHarness = (opts: HarnessOpts = {}) => {
       },
     } as unknown as NotificationOutboxStore,
   });
-  return { sweeper, executed, cleared, audits, notified };
+  return { sweeper, executed, cleared, autoFailed, audits, notified };
 };
 
 const abandonReasons = (h: ReturnType<typeof makeHarness>): string[] =>
@@ -147,6 +151,8 @@ describe("auto-retry sweeper", () => {
     expect(h.cleared).toEqual(["trig-1"]);
     expect(abandonReasons(h)).toEqual(["retry_window_expired"]);
     expect(h.notified).toEqual(["retry-abandoned:trig-1"]);
+    // W5: the failure is stamped on the trigger so the bell can explain it.
+    expect(h.autoFailed).toEqual([{ id: "trig-1", reason: "retry_window_expired" }]);
     expect(h.executed).toHaveLength(0);
   });
 

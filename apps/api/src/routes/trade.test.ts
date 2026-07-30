@@ -54,6 +54,15 @@ const config = loadConfig({
   TRADING_ADMIN_SECRET: "test-admin-secret-123",
 });
 
+// Geoblock enforcement defaults OFF (D-055) — this variant turns it on so the
+// enforcement paths stay tested and re-enabling is a one-env-var change.
+const configGeoblockOn = loadConfig({
+  DATABASE_URL: "postgresql://u:p@localhost:5432/db",
+  APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
+  TRADING_ADMIN_SECRET: "test-admin-secret-123",
+  FEATURE_GEOBLOCK: "true",
+});
+
 const configTradingEnabled = loadConfig({
   DATABASE_URL: "postgresql://u:p@localhost:5432/db",
   APP_ENCRYPTION_MASTER_KEY: ENCRYPTION_KEY,
@@ -133,6 +142,8 @@ const mockGammaClient: GammaClient = {
   getMarket: async () => err(upstreamErr),
   getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
+  getTag: async () => ok(null),
+  listRelatedTags: async () => ok([]),
   searchMarkets: async () => ok([]),
 };
 
@@ -280,6 +291,10 @@ const mockTriggerStore: TriggerStore = {
   clearAutoRetry: async () => {},
   listAutoRetryable: async () => [],
   listAutoRetryLapsed: async () => [],
+  markAutoExecuted: async () => {},
+  markAutoFailed: async () => {},
+  acknowledge: async () => null,
+  listUnacknowledgedAutoExecuted: async () => [],
   listAwaiting: async () => [],
   hasForRule: async () => false,
   listByRule: async () => [],
@@ -528,8 +543,24 @@ describe("GET /api/trade/status", () => {
     await app.close();
   });
 
-  it("includes geoblock result for allowed IP", async () => {
-    const app = buildTestApp();
+  it("reports geoblock 'disabled' by default without calling upstream (D-055)", async () => {
+    let checked = 0;
+    const spyGeoblock: GeoblockClient = {
+      check: async (ip) => {
+        checked++;
+        return ok({ status: "allowed", country: "AE", region: null, ip });
+      },
+    };
+    const app = buildTestApp({ geoblockClient: spyGeoblock });
+    const res = await app.inject({ method: "GET", url: "/api/trade/status" });
+    const body = res.json() as Record<string, unknown>;
+    expect(body.geoblock).toMatchObject({ status: "disabled" });
+    expect(checked).toBe(0);
+    await app.close();
+  });
+
+  it("includes geoblock result for allowed IP when enforcement is on", async () => {
+    const app = buildTestApp({ cfg: configGeoblockOn });
     const res = await app.inject({ method: "GET", url: "/api/trade/status" });
     const body = res.json() as Record<string, unknown>;
     expect(body.geoblock).toMatchObject({ status: "allowed" });
@@ -2173,14 +2204,18 @@ describe("Admin kill switch", () => {
 
 // ── Geoblock integration ───────────────────────────────────────────────────────
 
-// TODO(geoblock): route-level geoblock is TEMPORARILY DISABLED for local testing
-// (see trade.ts). Re-enable these tests together with the geoblockCheck preHandlers.
-describe.skip("Geoblock enforcement on trading routes", () => {
+// FEATURE_GEOBLOCK=true here: enforcement defaults OFF (D-055) but the code
+// path must stay green so re-enabling is a one-env-var change.
+describe("Geoblock enforcement on trading routes (flag ON)", () => {
   it("blocks order submission from blocked IP", async () => {
     const blockedGeoblock: GeoblockClient = {
       check: async (ip) => ok({ status: "blocked", country: "RU", region: null, ip }),
     };
-    const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: blockedGeoblock });
+    const app = buildTestApp({
+      cfg: configGeoblockOn,
+      sessions: mockSessionsAuthed,
+      geoblockClient: blockedGeoblock,
+    });
     const res = await app.inject({
       method: "POST",
       url: "/api/trade/orders",
@@ -2204,7 +2239,11 @@ describe.skip("Geoblock enforcement on trading routes", () => {
     const closeOnlyGeoblock: GeoblockClient = {
       check: async (ip) => ok({ status: "close_only", country: "SG", region: null, ip }),
     };
-    const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: closeOnlyGeoblock });
+    const app = buildTestApp({
+      cfg: configGeoblockOn,
+      sessions: mockSessionsAuthed,
+      geoblockClient: closeOnlyGeoblock,
+    });
     const res = await app.inject({
       method: "POST",
       url: "/api/trade/orders",
@@ -2228,7 +2267,11 @@ describe.skip("Geoblock enforcement on trading routes", () => {
     const failingGeoblock: GeoblockClient = {
       check: async () => err({ code: "NETWORK_ERROR", message: "timeout" }),
     };
-    const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: failingGeoblock });
+    const app = buildTestApp({
+      cfg: configGeoblockOn,
+      sessions: mockSessionsAuthed,
+      geoblockClient: failingGeoblock,
+    });
     const res = await app.inject({
       method: "POST",
       url: "/api/trade/orders",
@@ -2245,14 +2288,43 @@ describe.skip("Geoblock enforcement on trading routes", () => {
     expect(res.statusCode).toBe(403);
     await app.close();
   });
+
+  it("with the flag OFF (default) a blocked IP passes the geo stage and the client is never called", async () => {
+    let checked = 0;
+    const blockedGeoblock: GeoblockClient = {
+      check: async (ip) => {
+        checked++;
+        return ok({ status: "blocked", country: "RU", region: null, ip });
+      },
+    };
+    const app = buildTestApp({ sessions: mockSessionsAuthed, geoblockClient: blockedGeoblock });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify({
+        conditionId: "0x",
+        tokenId: "0x",
+        side: "BUY",
+        price: "0.5",
+        size: "10",
+        funder: "0xf",
+      }),
+    });
+    // Past geoblock → the next gate fires instead (live trading off ⇒ 503).
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as Record<string, unknown>).error).toBe("TRADING_DISABLED");
+    expect(checked).toBe(0);
+    await app.close();
+  });
 });
 
 describe("Geoblock reporting (status endpoint)", () => {
-  it("trade/status does NOT geoblock (public diagnostic endpoint)", async () => {
+  it("trade/status does NOT geoblock (public diagnostic endpoint, flag ON)", async () => {
     const blockedGeoblock: GeoblockClient = {
       check: async (ip) => ok({ status: "blocked", country: "RU", region: null, ip }),
     };
-    const app = buildTestApp({ geoblockClient: blockedGeoblock });
+    const app = buildTestApp({ cfg: configGeoblockOn, geoblockClient: blockedGeoblock });
     const res = await app.inject({ method: "GET", url: "/api/trade/status" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as Record<string, unknown>;
@@ -2957,6 +3029,10 @@ describe("POST /api/trade/orders (restricted sessions)", () => {
             triggeredAt: new Date(),
             autoRetryUntil: null,
             autoRetryReason: null,
+            autoExecutedAt: null,
+            autoFailedAt: null,
+            autoFailureReason: null,
+            acknowledgedAt: null,
             evidence: {},
             reasonCodes: [],
             status: "awaiting_user",

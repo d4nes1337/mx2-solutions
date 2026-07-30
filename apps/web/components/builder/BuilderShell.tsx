@@ -611,6 +611,7 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         doc={doc}
         edit
         evaluation={evaluation.data}
+        liveReceivedAtMs={evaluation.dataUpdatedAt || undefined}
         onOpenCanvas={openCanvas}
         onDuplicateForMarket={duplicateForMarket}
         actFooter={

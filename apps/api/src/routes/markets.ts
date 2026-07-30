@@ -41,7 +41,11 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
   // /:id variant below can't serve it. Registered before /:id (static wins).
   app.get(
     "/api/markets/prices-history",
-    { preHandler: [makeRateLimit({ scope: "prices-history-token", limit: 60, windowMs: 60_000 })] },
+    // 120/min: the builder grid + side panel + trigger modal poll ~9 charts at
+    // 10s (≈54/min per tab); 60 broke with two tabs open.
+    {
+      preHandler: [makeRateLimit({ scope: "prices-history-token", limit: 120, windowMs: 60_000 })],
+    },
     async (req, reply) => {
       const q = req.query as Record<string, string>;
       const tokenId = q["tokenId"];
@@ -51,7 +55,8 @@ export const registerMarketsRoutes = (app: FastifyInstance, deps: MarketsRoutesD
       }
 
       const histParams: GetPricesHistoryParams = { tokenId, interval: q["interval"] ?? "1m" };
-      if (q["fidelity"] !== undefined) histParams.fidelity = Number(q["fidelity"]);
+      const fidelity = Number(q["fidelity"]);
+      if (Number.isFinite(fidelity) && fidelity >= 1) histParams.fidelity = Math.floor(fidelity);
       const histResult = await deps.clobClient.getPricesHistory(histParams);
       if (!histResult.ok) {
         reply.code(502);

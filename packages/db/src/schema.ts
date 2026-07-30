@@ -416,6 +416,17 @@ export const ruleTriggers = pgTable(
      */
     autoRetryUntil: timestamp("auto_retry_until", { withTimezone: true }),
     autoRetryReason: text("auto_retry_reason"),
+    /**
+     * In-app notification parity for auto execution (migration 0024).
+     * autoExecutedAt: the worker submitted this trigger's order unattended —
+     * the bell surfaces it until acknowledgedAt is set (Dismiss).
+     * autoFailedAt/autoFailureReason: an auto attempt terminally failed or
+     * degraded to manual; the trigger stays awaiting_user and the UI explains.
+     */
+    autoExecutedAt: timestamp("auto_executed_at", { withTimezone: true }),
+    autoFailedAt: timestamp("auto_failed_at", { withTimezone: true }),
+    autoFailureReason: text("auto_failure_reason"),
+    acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -425,6 +436,9 @@ export const ruleTriggers = pgTable(
     index("rule_triggers_retry_idx")
       .on(t.status, t.autoRetryUntil)
       .where(sql`"auto_retry_until" IS NOT NULL`),
+    index("rule_triggers_auto_unacked_idx")
+      .on(t.walletAddress)
+      .where(sql`"auto_executed_at" IS NOT NULL AND "acknowledged_at" IS NULL`),
   ],
 );
 

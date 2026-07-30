@@ -96,6 +96,8 @@ const buildHarness = () => {
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
 
   const clob = {
@@ -193,6 +195,8 @@ describe("GET /api/showcases", () => {
       getPublicProfile: async () => ok(null),
       findMarket: async () => ok(null),
       searchMarkets: async () => ok([]),
+      getTag: async () => ok(null),
+      listRelatedTags: async () => ok([]),
     } satisfies GammaClient;
     const clob = {
       getOrderbook: async () => err(upstreamErr),

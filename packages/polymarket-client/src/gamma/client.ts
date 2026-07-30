@@ -4,13 +4,17 @@ import {
   GammaEventSchema,
   GammaMarketSchema,
   GammaPaginatedEventsSchema,
+  GammaRelatedTagSchema,
   GammaSeriesSchema,
+  GammaTagSchema,
   PublicProfileSchema,
   PublicSearchSchema,
   type GammaEvent,
   type GammaMarket,
   type GammaPaginatedEvents,
+  type GammaRelatedTag,
   type GammaSeries,
+  type GammaTag,
   type PublicProfile,
 } from "./schema.js";
 import {
@@ -93,6 +97,14 @@ export interface GammaClient {
     limit?: number,
     opts?: { status?: "active" | "any" },
   ): Promise<Result<GammaEvent[], PolymarketError>>;
+  /** Tag lookup by numeric id (Gamma /tags/{id}); null = not found. */
+  getTag(id: number | string): Promise<Result<GammaTag | null, PolymarketError>>;
+  /**
+   * Ranked sub-tags of a category (Gamma /tags/slug/{slug}/related-tags) — the
+   * source of polymarket.com's second-row filter chips. Returns relationships
+   * only; resolve each `relatedTagID` with getTag to get a label and slug.
+   */
+  listRelatedTags(slug: string): Promise<Result<GammaRelatedTag[], PolymarketError>>;
 }
 
 export interface GammaClientOptions {
@@ -290,6 +302,30 @@ export const createGammaClient = (opts?: GammaClientOptions): GammaClient => {
       );
       return ok(matches.slice(0, limit));
     },
+
+    async getTag(id) {
+      const result = await fetchJson(
+        buildUrl(baseUrl, `/tags/${encodeURIComponent(String(id))}`),
+        GammaTagSchema,
+        timeoutMs,
+      );
+      if (!result.ok && result.error.code === "UPSTREAM_ERROR" && result.error.statusCode === 404) {
+        return ok(null);
+      }
+      return result;
+    },
+
+    // Verified live 2026-07-29: returns 200 [] for both a category with no
+    // curated sub-tags (elections, esports, art) and an unknown slug — an empty
+    // row is never distinguishable from a bad slug, and never an error.
+    listRelatedTags: (slug) =>
+      fetchJson(
+        buildUrl(baseUrl, `/tags/slug/${encodeURIComponent(slug)}/related-tags`, {
+          status: "active",
+        }),
+        GammaRelatedTagSchema.array(),
+        timeoutMs,
+      ),
 
     findMarket: async (params) => {
       if (params.conditionId) {

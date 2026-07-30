@@ -415,6 +415,7 @@ export const buildApp = (deps: AppDeps) => {
     triggerStore: deps.triggerStore,
     orderIntents: deps.orderIntents,
     marketSnapshots: deps.marketSnapshots,
+    runtimeFlags: deps.runtimeFlags,
     tradingAccounts,
     accountClobCredentials,
   });

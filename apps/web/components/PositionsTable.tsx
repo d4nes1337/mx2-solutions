@@ -5,8 +5,8 @@ import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 import type { Position } from "@/lib/types";
-import { api } from "@/lib/api";
 import type { MarketResolveResponse } from "@/lib/types";
+import { marketResolveOptions } from "@/lib/queries";
 import { pct, signed, toNum, usd } from "@/lib/format";
 import { Badge, Empty } from "./ui";
 
@@ -30,15 +30,8 @@ function useMarketLinks(positions: Position[]) {
   );
 
   const results = useQueries({
-    queries: conditionIds.map((conditionId) => ({
-      queryKey: ["market-resolve", conditionId],
-      queryFn: () =>
-        api.get<MarketResolveResponse>(
-          `/api/markets/resolve?conditionId=${encodeURIComponent(conditionId)}`,
-        ),
-      staleTime: 10 * 60_000,
-      retry: false,
-    })),
+    // Shared options (key + forever-cache) — one resolve serves every surface.
+    queries: conditionIds.map((conditionId) => marketResolveOptions(conditionId)),
   });
 
   const map = new Map<string, MarketResolveResponse>();

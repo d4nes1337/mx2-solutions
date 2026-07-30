@@ -19,11 +19,15 @@ export function ActionCenterBell() {
 
   if (!signedIn) return null;
 
-  const count = query.data?.actionableCount ?? 0;
+  // attentionCount = ready-to-sign + unseen auto executions (W5 parity);
+  // fall back for an older API build that only sends actionableCount.
+  const count = query.data?.attentionCount ?? query.data?.actionableCount ?? 0;
   const awaiting = query.data?.items.length ?? 0;
+  const executed = query.data?.items.filter((i) => i.state === "AUTO_EXECUTED").length ?? 0;
+  const ready = query.data?.actionableCount ?? 0;
   const label =
     count > 0
-      ? `Action Center — ${count} ready to sign`
+      ? `Action Center — ${ready > 0 ? `${ready} ready to sign` : ""}${ready > 0 && executed > 0 ? ", " : ""}${executed > 0 ? `${executed} executed` : ""}`
       : awaiting > 0
         ? "Action Center — items need attention"
         : "Action Center";

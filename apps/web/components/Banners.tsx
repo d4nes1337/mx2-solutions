@@ -22,7 +22,6 @@ export function TradingStatusBanner() {
   const status = useTradeStatus();
 
   const liveTrading = flags.data?.liveTrading ?? false;
-  const geo = status.data?.geoblock;
   const paused = status.data?.runtimePaused;
 
   return (
@@ -34,12 +33,6 @@ export function TradingStatusBanner() {
       {paused ? (
         <Badge tone="neg" dot>
           kill-switch: PAUSED
-        </Badge>
-      ) : null}
-      {geo ? (
-        <Badge tone={geo.status === "allowed" ? "pos" : "warn"} dot>
-          geoblock: {geo.status}
-          {geo.country ? ` (${geo.country})` : ""}
         </Badge>
       ) : null}
       <span className="text-muted">

@@ -11,6 +11,7 @@ import {
 } from "./transfers";
 import type {
   BrowseResponse,
+  CategoryFiltersResponse,
   CreateRuleRequest,
   EquityHistoryResponse,
   EquityWindow,
@@ -29,6 +30,7 @@ import type {
   MarketDetail,
   MarketEconomicsResponse,
   MarketHoldersResponse,
+  MarketResolveResponse,
   MarketScenariosResponse,
   MarketTradesResponse,
   OpenOrdersResponse,
@@ -139,6 +141,26 @@ export function useBrowseEvents(tag: string | null) {
     // (TanStack v5), so keep the poll to the single-page state only.
     refetchInterval: (query) =>
       (query.state.data?.pages.length ?? 0) <= 1 ? POLL.homeFeed : false,
+  });
+}
+
+/**
+ * Second-row sub-filters for a category (Politics → Trump / Midterms / …),
+ * resolved server-side from Gamma's related-tags. Skipped for the "All" chip,
+ * which has no sub-row on polymarket.com either. The row is curated upstream
+ * and barely moves, so it is cached long and never polled.
+ */
+export function useCategoryFilters(tag: string | null) {
+  return useQuery({
+    queryKey: ["categoryFilters", tag],
+    queryFn: () =>
+      api.get<CategoryFiltersResponse>(
+        `/api/markets/categories/${encodeURIComponent(tag ?? "")}/filters`,
+      ),
+    enabled: tag !== null,
+    staleTime: 10 * 60_000,
+    gcTime: 30 * 60_000,
+    retry: 1,
   });
 }
 
@@ -300,16 +322,60 @@ export function useShowcases(enabled = true) {
   });
 }
 
-/** 30-day history keyed directly by CLOB token id (builder projection panel). */
+/**
+ * Candle resolution (minutes) per range. Without an explicit fidelity the
+ * CLOB defaults to 60-minute candles, which left every chart's right edge up
+ * to an hour behind the live book.
+ */
+const HISTORY_FIDELITY: Record<string, number> = {
+  "1h": 1,
+  "6h": 1,
+  "1d": 5,
+  "1w": 15,
+  "1m": 60,
+  max: 180,
+};
+
+/** Price history keyed directly by CLOB token id — feeds every strategy chart. */
 export function useTokenPricesHistory(tokenId: string | null, interval = "1m") {
+  // fidelity is derived from interval — the query key stays [tokenId, interval].
+  // If fidelity ever becomes an independent parameter it must join the key.
+  const fidelity = HISTORY_FIDELITY[interval] ?? 5;
   return useQuery({
     queryKey: ["token-prices-history", tokenId, interval],
     queryFn: () =>
       api.get<TokenPricesHistoryResponse>(
-        `/api/markets/prices-history?tokenId=${encodeURIComponent(tokenId!)}&interval=${encodeURIComponent(interval)}`,
+        `/api/markets/prices-history?tokenId=${encodeURIComponent(tokenId!)}&interval=${encodeURIComponent(interval)}&fidelity=${fidelity}`,
       ),
     enabled: Boolean(tokenId),
-    staleTime: 60_000,
+    staleTime: 5_000,
+    refetchInterval: POLL.pricesHistory,
+    // Keep the previous series on range/token flips — charts must never
+    // collapse to a skeleton during a poll or a Segmented switch.
+    placeholderData: (prev) => prev,
+  });
+}
+
+/**
+ * conditionId → { slug, question, marketId }. A market's slug never changes,
+ * so resolutions cache for the session; the key is shared with PositionsTable
+ * so one lookup serves every surface.
+ */
+export const marketResolveOptions = (conditionId: string) => ({
+  queryKey: ["market-resolve", conditionId] as const,
+  queryFn: () =>
+    api.get<MarketResolveResponse>(
+      `/api/markets/resolve?conditionId=${encodeURIComponent(conditionId)}`,
+    ),
+  staleTime: Infinity,
+  gcTime: 24 * 3_600_000,
+  retry: false,
+});
+
+export function useMarketResolve(conditionId: string | null) {
+  return useQuery({
+    ...marketResolveOptions(conditionId ?? ""),
+    enabled: Boolean(conditionId),
   });
 }
 
@@ -876,6 +942,22 @@ export function useConfirmTrigger() {
       void qc.invalidateQueries({ queryKey: ["triggers"] });
       void qc.invalidateQueries({ queryKey: ["action-center"] });
       void qc.invalidateQueries({ queryKey: ["rules"] });
+    },
+  });
+}
+
+/**
+ * Dismiss an AUTO-EXECUTED card from the bell (W5). The trigger is already
+ * confirmed — this only marks it seen; /dismiss would no-op and the card
+ * would never clear.
+ */
+export function useAckTrigger() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ ok: boolean }>(`/api/rules/triggers/${id}/ack`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["action-center"] });
+      void qc.invalidateQueries({ queryKey: ["triggers"] });
     },
   });
 }

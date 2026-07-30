@@ -11,11 +11,14 @@
 import { useState, type ReactNode } from "react";
 import { Card, CardHeader, Segmented, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
+import { LiveCaption } from "@/components/charts/LiveCaption";
+import { PolymarketLink } from "@/components/PolymarketLink";
 import { useTokenPricesHistory } from "@/lib/queries";
 import { conditionLeavesOf, docFromDefinition, marketLabel } from "@/lib/strategies/doc";
+import { spliceLive } from "@/lib/strategies/live-splice";
 import { cents } from "@/lib/strategies/summaries";
 import { humanDuration } from "@/lib/strategies/sentence";
-import type { StrategyRow, StrategyTimeline } from "@/lib/strategies/queries";
+import type { MarketFreshness, StrategyRow, StrategyTimeline } from "@/lib/strategies/queries";
 import type { ConditionV2 } from "@mx2/rules";
 
 /** Engine events → chart markers so the price line explains itself. */
@@ -46,12 +49,17 @@ const CHART_RANGES = [
 export function ConditionCharts({
   row,
   timeline,
+  freshness,
+  freshnessReceivedAtMs,
   thresholds,
   renderThreshold,
   height = 180,
 }: {
   row: StrategyRow;
   timeline: StrategyTimeline | undefined;
+  /** Live per-token book quotes (3s evaluation poll) — spliced onto the charts. */
+  freshness?: MarketFreshness[] | undefined;
+  freshnessReceivedAtMs?: number | undefined;
   /** Staged threshold overrides by leaf id (panel quick-edit preview). */
   thresholds?: Record<string, number> | undefined;
   /** Replaces the static header chip (e.g. with an editable number). */
@@ -75,6 +83,7 @@ export function ConditionCharts({
     return true;
   });
   const markers = timelineMarkers(timeline);
+  const liveByToken = new Map((freshness ?? []).map((m) => [m.tokenId, m]));
   if (charts.length === 0) return null;
   return (
     <div className="space-y-3">
@@ -87,6 +96,8 @@ export function ConditionCharts({
           leafId={id}
           doc={doc}
           condition={c}
+          live={"market" in c ? liveByToken.get(c.market.tokenId) : undefined}
+          liveReceivedAtMs={freshnessReceivedAtMs}
           range={range}
           markers={markers}
           height={height}
@@ -102,6 +113,8 @@ function ConditionChart({
   leafId,
   doc,
   condition,
+  live,
+  liveReceivedAtMs,
   range,
   markers,
   height,
@@ -111,6 +124,8 @@ function ConditionChart({
   leafId: string;
   doc: ReturnType<typeof docFromDefinition>;
   condition: ReturnType<typeof conditionLeavesOf>[number]["condition"];
+  live?: MarketFreshness | undefined;
+  liveReceivedAtMs?: number | undefined;
   range: string;
   markers: { t: number; label?: string }[];
   height: number;
@@ -123,7 +138,8 @@ function ConditionChart({
   const label = "market" in c ? marketLabel(doc, c.market) : "";
   const history = useTokenPricesHistory(tokenId, range);
   if (tokenId === null) return null;
-  const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  const rawSeries: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  const { series, spliced } = spliceLive(rawSeries, live, Date.now());
   if (history.isLoading) return <Skeleton className="h-[180px] w-full rounded-xl" />;
   if (series.length < 2) return null;
   const firstT = series[0]!.t;
@@ -132,19 +148,22 @@ function ConditionChart({
     <Card>
       <CardHeader
         right={
-          renderThreshold ? (
-            renderThreshold(leafId, c)
-          ) : threshold !== null ? (
-            <span className="tabular text-[11px] text-muted">trigger {cents(threshold)}</span>
-          ) : c.kind === "trailing" ? (
-            <span className="tabular text-[11px] text-muted">
-              trailing {c.mode} · {cents(c.offset)} offset
-            </span>
-          ) : c.kind === "price_move" ? (
-            <span className="tabular text-[11px] text-muted">
-              {c.direction} {cents(c.deltaThreshold)} in {humanDuration(c.windowMs)}
-            </span>
-          ) : undefined
+          <span className="flex items-center gap-2">
+            <PolymarketLink conditionId={"market" in c ? c.market.conditionId : null} iconOnly />
+            {renderThreshold ? (
+              renderThreshold(leafId, c)
+            ) : threshold !== null ? (
+              <span className="tabular text-[11px] text-muted">trigger {cents(threshold)}</span>
+            ) : c.kind === "trailing" ? (
+              <span className="tabular text-[11px] text-muted">
+                trailing {c.mode} · {cents(c.offset)} offset
+              </span>
+            ) : c.kind === "price_move" ? (
+              <span className="tabular text-[11px] text-muted">
+                {c.direction} {cents(c.deltaThreshold)} in {humanDuration(c.windowMs)}
+              </span>
+            ) : null}
+          </span>
         }
       >
         {label}
@@ -153,6 +172,7 @@ function ConditionChart({
         <AreaChart
           data={series}
           height={height}
+          live={spliced}
           valueFormat={(v) => cents(v)}
           {...(threshold !== null
             ? {
@@ -161,6 +181,11 @@ function ConditionChart({
               }
             : {})}
           {...(visibleMarkers.length > 0 ? { markers: visibleMarkers } : {})}
+        />
+        <LiveCaption
+          quote={live}
+          {...(liveReceivedAtMs ? { receivedAtMs: liveReceivedAtMs } : {})}
+          className="px-1 pt-1"
         />
       </div>
     </Card>

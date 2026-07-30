@@ -95,6 +95,7 @@ export const registerTradingWalletRoutes = (
 ): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
   const geoblockCheck = makeGeoblockCheck({
+    enabled: deps.config.features.geoblock,
     geoblockClient: deps.geoblockClient,
     auditStore: deps.auditStore,
   });

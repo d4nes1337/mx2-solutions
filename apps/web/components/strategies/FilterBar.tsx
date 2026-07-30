@@ -82,14 +82,15 @@ export function FilterBar({
             className="w-44 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint"
           />
         </label>
-        {groups.map(({ group, count }) => (
+        {/* No counts on section chips — the PulseStrip is the count surface. */}
+        {groups.map(({ group }) => (
           <button
             key={group}
             type="button"
             onClick={() => onChange({ ...filters, group: filters.group === group ? null : group })}
             className={chipClass(filters.group === group)}
           >
-            {SECTION_TITLES[group]} · {count}
+            {SECTION_TITLES[group]}
           </button>
         ))}
         {starredCount > 0 ? (

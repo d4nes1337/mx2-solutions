@@ -4,7 +4,7 @@
  * semantics, and the localStorage layer's caps/tombstones.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { emptyDoc } from "./doc";
+import { docHasContent, emptyDoc } from "./doc";
 import {
   DRAFT_SCHEMA_VERSION,
   deleteDraftLocal,
@@ -49,6 +49,25 @@ beforeEach(() => {
     dirty: false,
     aiMessages: [],
     aiHistory: [],
+  });
+});
+
+describe("docHasContent persistence gate", () => {
+  it("a fresh untouched doc (default prepared order, unbound) is NOT content", () => {
+    // Regression guard: emptyDoc's action is now an order — a plain visit to
+    // the builder must still not persist a junk draft.
+    expect(docHasContent(emptyDoc())).toBe(false);
+  });
+
+  it("binding the order's market makes the doc worth keeping", () => {
+    const doc = emptyDoc();
+    if (doc.action.kind === "order") {
+      doc.action = {
+        ...doc.action,
+        market: { conditionId: "cond-1", tokenId: "tok-1", outcome: "YES" },
+      };
+    }
+    expect(docHasContent(doc)).toBe(true);
   });
 });
 

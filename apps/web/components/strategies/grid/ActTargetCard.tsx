@@ -19,8 +19,12 @@ import Link from "next/link";
 import { Copy, Pencil, Repeat2 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, Skeleton } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
+import { LiveCaption } from "@/components/charts/LiveCaption";
+import { PolymarketLink } from "@/components/PolymarketLink";
 import { useMarketEconomics, useTokenPricesHistory } from "@/lib/queries";
 import { marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
+import { spliceLive } from "@/lib/strategies/live-splice";
+import type { MarketFreshness } from "@/lib/strategies/queries";
 import { cents } from "@/lib/strategies/summaries";
 import { computePayoff } from "@/lib/strategies/projection";
 import type { OrderActionV2 } from "@mx2/rules";
@@ -38,6 +42,8 @@ const usd2 = (n: number): string =>
 function OrderTarget({
   doc,
   action,
+  live,
+  liveReceivedAtMs,
   range,
   markers,
   chartHeight,
@@ -46,6 +52,8 @@ function OrderTarget({
 }: {
   doc: StrategyDoc;
   action: OrderActionV2;
+  live?: MarketFreshness | undefined;
+  liveReceivedAtMs?: number | undefined;
   range: string;
   markers: { t: number; label?: string }[];
   chartHeight: number;
@@ -55,7 +63,9 @@ function OrderTarget({
   const tokenId = action.market.tokenId || null;
   const history = useTokenPricesHistory(tokenId, range);
   const economics = useMarketEconomics(action.market.conditionId);
-  const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  const rawSeries: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  // Live book mid as the newest point — cost/payoff below read the same value.
+  const { series, spliced } = spliceLive(rawSeries, live, Date.now());
   const last = series.length > 0 ? series[series.length - 1]!.v : null;
 
   const payoff = computePayoff({
@@ -78,11 +88,17 @@ function OrderTarget({
     <Card className={selected ? "ring-1 ring-brand/50" : undefined}>
       <CardHeader
         right={
-          action.execution === "auto" ? (
-            <Badge tone="brand">AUTO · Arima Wallet</Badge>
-          ) : (
-            <Badge tone="neutral">You sign</Badge>
-          )
+          <span className="flex items-center gap-2">
+            {/* Rolling orders re-target a fresh market each window — no fixed page to link. */}
+            {!action.rollingSeries ? (
+              <PolymarketLink conditionId={action.market.conditionId} iconOnly />
+            ) : null}
+            {action.execution === "auto" ? (
+              <Badge tone="brand">AUTO · Arima Wallet</Badge>
+            ) : (
+              <Badge tone="neutral">You sign</Badge>
+            )}
+          </span>
         }
       >
         <span className="text-faint">Trade · </span>
@@ -114,6 +130,7 @@ function OrderTarget({
           <AreaChart
             data={series}
             height={chartHeight}
+            live={spliced}
             valueFormat={(v) => cents(v)}
             baselines={baselines}
             includeInDomain={baselines.map((b) => b.value)}
@@ -121,6 +138,11 @@ function OrderTarget({
           />
         </div>
       ) : null}
+      <LiveCaption
+        quote={live}
+        {...(liveReceivedAtMs ? { receivedAtMs: liveReceivedAtMs } : {})}
+        className="px-3 pt-1"
+      />
       <div className="space-y-1 px-3 py-2.5">
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-[14px] font-semibold text-fg">
@@ -165,6 +187,8 @@ function OrderTarget({
 
 export function ActTargetCard({
   doc,
+  live,
+  liveReceivedAtMs,
   range,
   markers,
   chartHeight = 210,
@@ -172,6 +196,9 @@ export function ActTargetCard({
   selected,
 }: {
   doc: StrategyDoc;
+  /** Live book quote for the order's target market (3s evaluation poll). */
+  live?: MarketFreshness | undefined;
+  liveReceivedAtMs?: number | undefined;
   range: string;
   markers: { t: number; label?: string }[];
   chartHeight?: number;
@@ -192,6 +219,8 @@ export function ActTargetCard({
       <OrderTarget
         doc={doc}
         action={action}
+        live={live}
+        liveReceivedAtMs={liveReceivedAtMs}
         range={range}
         markers={markers}
         chartHeight={chartHeight}

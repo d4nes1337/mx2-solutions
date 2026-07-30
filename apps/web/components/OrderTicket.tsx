@@ -23,7 +23,7 @@ import { Badge, Button, ErrorNote, cn } from "./ui";
 // Submission builds + signs the full CTF Exchange order with the EOA
 // (signatureType 2; maker = the derived deposit wallet), then POSTs the signed
 // struct. The backend still gates submission behind FEATURE_LIVE_TRADING +
-// kill switch + geoblock, so submit stays disabled until trading is enabled.
+// kill switch, so submit stays disabled until trading is enabled.
 // The builder attribution code comes from GET /api/trade/status.
 //
 // Wallet *management* (add/activate/credentials) lives in the Profile page's
@@ -400,11 +400,9 @@ export function OrderTicket({
           message={
             submitError.status === 503
               ? "Trading is disabled (live-trading flag off or paused) — order not submitted."
-              : submitError.status === 403
-                ? "Geoblocked: order submission is not available from your region."
-                : submitError.message.includes("CLOB_CREDENTIALS_NOT_SET")
-                  ? "No trading credentials yet — set them up in Profile first."
-                  : submitError.message
+              : submitError.message.includes("CLOB_CREDENTIALS_NOT_SET")
+                ? "No trading credentials yet — set them up in Profile first."
+                : submitError.message
           }
         />
       ) : null}

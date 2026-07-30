@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type {
   ReasonCode,
   RuleDefinition,
@@ -544,6 +544,22 @@ export interface TriggerStore {
   hasForRule(ruleId: string): Promise<boolean>;
   updateStatus(id: string, status: TriggerStatus, opts?: { orderIntentId?: string }): Promise<void>;
   /**
+   * Auto execution succeeded (migration 0024): one atomic UPDATE — status
+   * confirmed + orderIntentId + autoExecutedAt, retry cleared. The trigger
+   * stays in the bell (unacknowledged) until the user dismisses it.
+   */
+  markAutoExecuted(id: string, opts: { orderIntentId: string }): Promise<void>;
+  /**
+   * Auto execution terminally failed / degraded to manual: stamp the reason
+   * for the UI banner. Status untouched — the trigger remains awaiting_user
+   * and the normal manual-confirm path takes over.
+   */
+  markAutoFailed(id: string, reason: string): Promise<void>;
+  /** User dismissed an auto-executed card from the bell. Idempotent. */
+  acknowledge(id: string, walletAddress: string): Promise<RuleTriggerRow | null>;
+  /** Auto-executed triggers the user hasn't dismissed yet, newest first. */
+  listUnacknowledgedAutoExecuted(walletAddress: string, limit?: number): Promise<RuleTriggerRow[]>;
+  /**
    * Schedule a bounded auto-retry (migration 0019): the auto-executor skipped
    * this trigger for a recoverable reason (funds in transit, allowances
    * pending); the sweeper may re-attempt until `until`.
@@ -625,6 +641,55 @@ export const createTriggerStore = (db: Database): TriggerStore => ({
       .where(eq(ruleTriggers.ruleId, ruleId))
       .limit(1);
     return row !== undefined;
+  },
+
+  async markAutoExecuted(id, opts) {
+    await db
+      .update(ruleTriggers)
+      .set({
+        status: "confirmed",
+        orderIntentId: opts.orderIntentId,
+        autoExecutedAt: new Date(),
+        autoRetryUntil: null,
+      })
+      .where(eq(ruleTriggers.id, id));
+  },
+
+  async markAutoFailed(id, reason) {
+    await db
+      .update(ruleTriggers)
+      .set({ autoFailedAt: new Date(), autoFailureReason: reason })
+      .where(eq(ruleTriggers.id, id));
+  },
+
+  async acknowledge(id, walletAddress) {
+    const [row] = await db
+      .update(ruleTriggers)
+      .set({ acknowledgedAt: new Date() })
+      .where(
+        and(
+          eq(ruleTriggers.id, id),
+          eq(ruleTriggers.walletAddress, walletAddress),
+          isNull(ruleTriggers.acknowledgedAt),
+        ),
+      )
+      .returning();
+    return row ?? null;
+  },
+
+  async listUnacknowledgedAutoExecuted(walletAddress, limit = 20) {
+    return db
+      .select()
+      .from(ruleTriggers)
+      .where(
+        and(
+          eq(ruleTriggers.walletAddress, walletAddress),
+          isNotNull(ruleTriggers.autoExecutedAt),
+          isNull(ruleTriggers.acknowledgedAt),
+        ),
+      )
+      .orderBy(desc(ruleTriggers.autoExecutedAt))
+      .limit(limit);
   },
 
   async updateStatus(id, status, opts) {

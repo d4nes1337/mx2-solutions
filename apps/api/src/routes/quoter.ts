@@ -134,6 +134,7 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
   // Geoblock applies wherever real orders can start flowing: on escalation
   // out of shadow and on every confirm-mode approval (RFC-0003 §6.5).
   const geoblockCheck = makeGeoblockCheck({
+    enabled: deps.config.features.geoblock,
     geoblockClient: deps.geoblockClient,
     auditStore: deps.auditStore,
   });
@@ -215,7 +216,7 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
 
     const ip =
       (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.ip;
-    const geo = await deps.geoblockClient.check(ip);
+    const geo = cfg.features.geoblock ? await deps.geoblockClient.check(ip) : null;
 
     return {
       flags: {
@@ -237,9 +238,12 @@ export const registerQuoterRoutes = (app: FastifyInstance, deps: QuoterRoutesDep
         clobCredentials: credsRow !== null,
       },
       allowances,
-      geoblock: geo.ok
-        ? { status: geo.value.status, country: geo.value.country }
-        : { status: "unknown" },
+      geoblock:
+        geo === null
+          ? { status: "disabled" }
+          : geo.ok
+            ? { status: geo.value.status, country: geo.value.country }
+            : { status: "unknown" },
     };
   });
 

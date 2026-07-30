@@ -96,6 +96,7 @@ const ensureBridgeFundingEnabled = (config: AppConfig, reply: FastifyReply): boo
 export const registerFundsRoutes = (app: FastifyInstance, deps: FundsRoutesDeps): void => {
   const requireAuth = makeRequireAuth({ sessions: deps.sessions });
   const geoblockCheck = makeGeoblockCheck({
+    enabled: deps.config.features.geoblock,
     geoblockClient: deps.geoblockClient,
     auditStore: deps.auditStore,
   });

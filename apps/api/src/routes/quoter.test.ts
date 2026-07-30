@@ -17,7 +17,7 @@ import { registerQuoterRoutes } from "./quoter.js";
 const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
 const RULE = "3a8e1a67-0000-4000-8000-000000000001";
 
-const configLive = loadConfig({
+const LIVE_ENV = {
   DATABASE_URL: "postgresql://u:p@localhost:5432/db",
   APP_ENCRYPTION_MASTER_KEY: "a".repeat(64),
   TRADING_ADMIN_SECRET: "test-admin-secret-123",
@@ -35,7 +35,12 @@ const configLive = loadConfig({
   POLYMARKET_BUILDER_PASSPHRASE: "p",
   CTF_ADAPTER_ADDRESS: "0x1111111111111111111111111111111111111111",
   NEG_RISK_CTF_ADAPTER_ADDRESS: "0x2222222222222222222222222222222222222222",
-});
+};
+
+const configLive = loadConfig(LIVE_ENV);
+// Geoblock enforcement defaults OFF (D-055) — the geoBlocked harness flag
+// tests enforcement, so it implies FEATURE_GEOBLOCK=true.
+const configLiveGeoblockOn = loadConfig({ ...LIVE_ENV, FEATURE_GEOBLOCK: "true" });
 
 const sessRow = (): SessionRow => ({
   id: "sess-id",
@@ -112,7 +117,7 @@ const buildApp = (
   const app = Fastify();
   void app.register(fastifyCookie);
   registerQuoterRoutes(app, {
-    config: over.cfg ?? configLive,
+    config: over.cfg ?? (over.geoBlocked ? configLiveGeoblockOn : configLive),
     sessions: sessionsAuthed,
     ruleStore: {
       findByIdForWallet: async () => ({ id: RULE, walletAddress: WALLET }) as never,

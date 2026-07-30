@@ -29,6 +29,8 @@ export const NOTIFICATION_KINDS = [
   "withdrawal_completed",
   /** A scheduled funds-arrival auto-retry gave up — manual confirm needed. */
   "auto_retry_abandoned",
+  /** An auto execution attempt terminally failed — manual signing is the fallback. */
+  "order_auto_failed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

@@ -136,7 +136,9 @@ describe("validateConnection", () => {
     expect(farm.ok).toBe(false);
     if (!farm.ok) expect(farm.reason).toMatch(/farm/i);
 
-    const alert = validateConnection(base, conn("market:tok-1", "action"));
+    // Explicit alert action — emptyDoc now defaults to a prepared order.
+    const alertDoc = docWith(base.expr, { action: { kind: "alert" } });
+    const alert = validateConnection(alertDoc, conn("market:tok-1", "action"));
     expect(alert.ok).toBe(false);
   });
 
@@ -175,7 +177,7 @@ describe("dropTargetFor", () => {
   });
 
   it("skips the action when it is not an order", () => {
-    const alertDoc = docWith(doc.expr); // emptyDoc action = alert
+    const alertDoc = docWith(doc.expr, { action: { kind: "alert" } });
     expect(dropTargetFor(alertDoc, "tok-1", ["action"])).toBeNull();
   });
 });

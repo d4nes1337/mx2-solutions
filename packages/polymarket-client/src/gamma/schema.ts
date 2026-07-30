@@ -184,6 +184,20 @@ export const GammaSeriesSchema = z
   })
   .passthrough();
 
+/**
+ * Gamma /tags/{id}/related-tags entry (verified live 2026-07-29). Only the
+ * relationship is returned — `relatedTagID` must be resolved via /tags/{id} to
+ * get a label and slug. `rank` is polymarket.com's own display order for the
+ * sub-filter row under a category.
+ */
+export const GammaRelatedTagSchema = z
+  .object({
+    tagID: z.coerce.number(),
+    relatedTagID: z.coerce.number(),
+    rank: z.coerce.number().default(0),
+  })
+  .passthrough();
+
 // Each point is {t: Unix seconds, p: probability 0–1}
 export const PricePointSchema = z.object({ t: z.number(), p: z.number() }).passthrough();
 
@@ -202,6 +216,7 @@ export const PublicProfileSchema = z
   .passthrough();
 
 export type GammaTag = z.infer<typeof GammaTagSchema>;
+export type GammaRelatedTag = z.infer<typeof GammaRelatedTagSchema>;
 export type GammaMarket = z.infer<typeof GammaMarketSchema>;
 export type GammaEvent = z.infer<typeof GammaEventSchema>;
 export type GammaPaginatedEvents = z.infer<typeof GammaPaginatedEventsSchema>;

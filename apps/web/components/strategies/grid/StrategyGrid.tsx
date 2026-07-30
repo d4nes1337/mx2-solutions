@@ -18,7 +18,7 @@ import {
   selectionTarget,
 } from "@/lib/strategies/grid-projection";
 import { useBuilderStore } from "@/lib/strategies/store";
-import type { StrategyTimeline } from "@/lib/strategies/queries";
+import type { MarketFreshness, StrategyTimeline } from "@/lib/strategies/queries";
 import type { ExprResultNode } from "@mx2/rules";
 import { timelineMarkers } from "@/components/strategies/detail/ConditionCharts";
 import { defaultCondition } from "@/components/builder/editors/ConditionEditor";
@@ -41,6 +41,7 @@ const CHART_RANGES = [
 export function StrategyGrid({
   doc,
   evaluation,
+  liveReceivedAtMs,
   timeline,
   onOpenCanvas,
   edit = false,
@@ -48,8 +49,10 @@ export function StrategyGrid({
   onDuplicateForMarket,
 }: {
   doc: StrategyDoc;
-  /** Live per-condition readings (strategy or draft evaluation). */
-  evaluation?: { root: ExprResultNode | null } | undefined;
+  /** Live per-condition readings + per-token book quotes (strategy or draft evaluation). */
+  evaluation?: { root: ExprResultNode | null; markets?: MarketFreshness[] } | undefined;
+  /** Client-clock time the evaluation landed (query.dataUpdatedAt) — ages the captions. */
+  liveReceivedAtMs?: number | undefined;
   timeline?: StrategyTimeline | undefined;
   /** Builder only: reveal/expand the canvas (complex-logic escape hatch). */
   onOpenCanvas?: (() => void) | undefined;
@@ -87,6 +90,7 @@ export function StrategyGrid({
 
   const projection = docToGrid(doc);
   const results = collectConditionResults(evaluation?.root);
+  const liveByToken = new Map((evaluation?.markets ?? []).map((m) => [m.tokenId, m]));
   const markers = timelineMarkers(timeline);
   const highlightIds = edit && lastAiChangedIds.length > 0 ? new Set(lastAiChangedIds) : undefined;
   const selection = edit
@@ -143,6 +147,8 @@ export function StrategyGrid({
                   doc={doc}
                   card={card}
                   results={results}
+                  live={liveByToken.get(card.key)}
+                  liveReceivedAtMs={liveReceivedAtMs}
                   range={range}
                   markers={markers}
                   highlightIds={highlightIds}
@@ -202,6 +208,10 @@ export function StrategyGrid({
           <div ref={selection.action ? selectedRef : undefined}>
             <ActTargetCard
               doc={doc}
+              live={
+                doc.action.kind === "order" ? liveByToken.get(doc.action.market.tokenId) : undefined
+              }
+              liveReceivedAtMs={liveReceivedAtMs}
               range={range}
               markers={markers}
               selected={selection.action}

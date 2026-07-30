@@ -108,6 +108,8 @@ function SmartOrdersDashboard() {
       row={row}
       overview={overview.get(row.id)}
       sparklines={overviewQuery.data?.sparklines}
+      books={overviewQuery.data?.books}
+      booksReceivedAtMs={overviewQuery.dataUpdatedAt || undefined}
       onOpen={openPanel}
       onReviewTrigger={openReview}
     />
@@ -132,13 +134,7 @@ function SmartOrdersDashboard() {
     >
       <div className="min-w-0 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight text-fg">Strategies</h1>
-            <p className="mt-1 text-sm text-muted">
-              Strategies that watch the market for you — and alert, prepare, or execute when your
-              conditions hold.
-            </p>
-          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-fg">Strategies</h1>
           <Link
             href="/strategies/new"
             className="inline-flex items-center gap-1.5 rounded-lg border border-brand bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-brand-strong hover:bg-brand-strong"
@@ -226,8 +222,9 @@ function SmartOrdersDashboard() {
               </section>
             ) : null}
             {sections.map(({ section, rows: sectionRows }) =>
-              section === "done" ? (
-                // Terminal strategies stay out of the way — one collapsed line.
+              section === "done" || section === "watching" ? (
+                // Quiet sections stay out of the way — one collapsed line
+                // (the count lives here because it is the only signal when closed).
                 <details key={section} id={`section-${section}`} className="group">
                   <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
                     <span className="h-3.5 w-0.5 rounded-full bg-border-strong" />
@@ -255,13 +252,14 @@ function SmartOrdersDashboard() {
                               : "bg-brand-strong",
                       )}
                     />
+                    {/* No count here — the PulseStrip is the single count surface. */}
                     <h2
                       className={cn(
                         "text-[11px] font-semibold uppercase tracking-wide",
                         section === "failed" ? "text-neg" : "text-muted",
                       )}
                     >
-                      {SECTION_TITLES[section]} · {sectionRows.length}
+                      {SECTION_TITLES[section]}
                     </h2>
                   </div>
                   {section === "missed" ? <NotifyUpsell signedIn={signedIn} /> : null}
@@ -270,15 +268,18 @@ function SmartOrdersDashboard() {
               ),
             )}
             {archived.length > 0 ? (
-              <section className="space-y-2">
-                <div className="flex items-center gap-2">
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
                   <span className="h-3.5 w-0.5 rounded-full bg-border-strong" />
                   <h2 className="text-[11px] font-semibold uppercase tracking-wide text-faint">
                     Archived · {archived.length}
                   </h2>
-                </div>
-                {archived.map(renderCard)}
-              </section>
+                  <span className="text-[10px] text-faint transition-transform group-open:rotate-90">
+                    ›
+                  </span>
+                </summary>
+                <div className="mt-2 space-y-2">{archived.map(renderCard)}</div>
+              </details>
             ) : null}
           </>
         )}

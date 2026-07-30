@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { GammaClient, GammaEvent, PolymarketError } from "@mx2/polymarket-client";
+import { getCategoryFilters } from "../lib/category-filters.js";
 import { getInstantMarkets } from "../lib/instant-markets.js";
 import { makeRateLimit } from "../middleware/rate-limit.js";
 
@@ -29,7 +30,14 @@ const STALE_TTL_MS = 5 * 60_000;
 const MAX_ENTRIES = 100;
 const MAX_LIMIT = 50;
 const MAX_OFFSET = 1000;
-const TAG_RE = /^[a-z0-9-]{1,60}$/;
+/**
+ * Gamma tag slugs are *mostly* lowercase, but not always — `EPL` (under
+ * Sports), `Global-Rates` (Economy) and `M-A` are live counter-examples, and
+ * they reach us as sub-filter chips. Gamma's own tag_slug filter is
+ * case-insensitive (EPL and epl both return the same 4 events), but rejecting
+ * these here would 400 a chip we ourselves rendered. Longest slug seen: 45.
+ */
+const TAG_RE = /^[A-Za-z0-9-]{1,60}$/;
 
 interface CacheEntry {
   at: number;
@@ -122,6 +130,28 @@ export const registerBrowseRoutes = (app: FastifyInstance, deps: BrowseRoutesDep
     reply.code(outcome.error.statusCode === 429 ? 429 : 502);
     return { error: outcome.error.code, message: outcome.error.message };
   });
+
+  // ── GET /api/markets/categories/:slug/filters — the sub-chip row ────────────
+  // Polymarket's second-row filters for one category. Built lazily and cached
+  // hard (see lib/category-filters.ts — it costs 1 + 2N upstream calls).
+  app.get(
+    "/api/markets/categories/:slug/filters",
+    { preHandler: browseGuard },
+    async (req, reply) => {
+      const { slug } = req.params as { slug: string };
+      if (!TAG_RE.test(slug)) {
+        reply.code(400);
+        return { error: "INVALID_REQUEST", message: "slug must be a lowercase slug." };
+      }
+
+      const result = await getCategoryFilters(deps.gammaClient, slug);
+      if (!result.ok) {
+        reply.code(result.error.statusCode === 429 ? 429 : 502);
+        return { error: result.error.code, message: result.error.message };
+      }
+      return result.value;
+    },
+  );
 
   // ── GET /api/markets/instant — curated recurring series, live + next windows ─
   // Caching (15s single shared entry, stale-on-error) lives in the lib module.

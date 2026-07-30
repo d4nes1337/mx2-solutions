@@ -104,6 +104,11 @@ const intentRow: OrderIntentRow = {
 interface Harness {
   deps: Parameters<typeof createAutoExecutor>[0];
   audits: string[];
+  /** W5 marks recorded on the trigger store (executed receipts / failures). */
+  autoMarks: {
+    executed: { id: string; orderIntentId: string }[];
+    failed: { id: string; reason: string }[];
+  };
   ruleStatus: () => string;
   submitted: () => boolean;
 }
@@ -225,10 +230,20 @@ const makeHarness = (
     },
   } as unknown as AuthenticatedClobClient;
 
+  const autoMarks = {
+    executed: [] as { id: string; orderIntentId: string }[],
+    failed: [] as { id: string; reason: string }[],
+  };
   const triggerStore = {
     updateStatus: async () => {},
     scheduleAutoRetry: async () => {},
     clearAutoRetry: async () => {},
+    markAutoExecuted: async (id: string, opts: { orderIntentId: string }) => {
+      autoMarks.executed.push({ id, orderIntentId: opts.orderIntentId });
+    },
+    markAutoFailed: async (id: string, reason: string) => {
+      autoMarks.failed.push({ id, reason });
+    },
   } as unknown as TriggerStore;
 
   // W4: the deposit-wallet account + per-account CLOB creds the live order
@@ -284,6 +299,7 @@ const makeHarness = (
       balanceOfUsdc: over.balanceUsd === null ? null : async () => over.balanceUsd ?? 1_000,
     },
     audits,
+    autoMarks,
     ruleStatus: () => ruleStatus,
     submitted: () => submitted,
   };
@@ -304,6 +320,10 @@ describe("auto-executor", () => {
     expect(h.audits).toContain("order.submitted");
     expect(h.audits).toContain("rule.executed_auto");
     expect(h.audits).not.toContain("rule.execution.skipped");
+    // W5: the trigger is marked auto-executed (bell parity), not just confirmed.
+    expect(h.autoMarks.executed).toHaveLength(1);
+    expect(h.autoMarks.executed[0]!.id).toBe("trig-1");
+    expect(h.autoMarks.failed).toHaveLength(0);
   });
 
   it("skips (deposit_wallet_required) when no internal deposit-wallet account exists", async () => {
@@ -370,6 +390,9 @@ describe("auto-executor", () => {
     expect(h.ruleStatus()).toBe("EXECUTION_FAILED:rejected");
     expect(h.audits).toContain("rule.execution.failed");
     expect(h.audits).not.toContain("rule.executed_auto");
+    // W5: the terminal failure is stamped on the trigger so the user is told.
+    expect(h.autoMarks.failed).toEqual([{ id: "trig-1", reason: "UPSTREAM_ERROR" }]);
+    expect(h.autoMarks.executed).toHaveLength(0);
   });
 
   // ── W5–W8 guard chain ──────────────────────────────────────────────────────

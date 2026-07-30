@@ -16,6 +16,8 @@ import { Badge, Button, Card, CardHeader, LiveDot, Skeleton, cn } from "@/compon
 import { fromCents, toCents } from "@/components/builder/editors/fields";
 import { InlineNumber } from "./InlineNumber";
 import { RenameField } from "../RenameField";
+import { MetaRow } from "../MetaRow";
+import { TagsRow } from "../TagsRow";
 import { ConditionCharts } from "../detail/ConditionCharts";
 import { conditionLeavesOf, docFromDefinition } from "@/lib/strategies/doc";
 import { applyDefinitionEdits, type DefinitionEdits } from "@/lib/strategies/edit-definition";
@@ -346,6 +348,11 @@ export function StrategyPanel({
             )}
           </div>
           <p className="mt-1 text-[12px] leading-relaxed text-muted">{strategySentence(doc)}</p>
+          {/* Secondary facts + tags — the compact dashboard card dropped these. */}
+          <div className="mt-1.5">
+            <MetaRow row={row} />
+          </div>
+          <TagsRow row={row} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Link
@@ -503,6 +510,8 @@ export function StrategyPanel({
       <ConditionCharts
         row={row}
         timeline={timeline.data}
+        freshness={evaluation.data?.markets}
+        freshnessReceivedAtMs={evaluation.dataUpdatedAt || undefined}
         height={150}
         thresholds={edits.thresholds}
         renderThreshold={thresholdChip}

@@ -151,8 +151,17 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
           subject: `rule:${rule.id}`,
           metadata: { triggerId, reason, until: until.toISOString() },
         });
+        deps.logger.warn(
+          { ruleId: rule.id, triggerId, reason },
+          "Auto-execution skipped (fail-closed) — left awaiting manual confirmation",
+        );
+        return;
       }
     }
+    // Non-recoverable (or unretryable) degrade: stamp the reason so the bell
+    // and the trigger modal can say WHY auto didn't fire instead of silently
+    // waiting for a signature.
+    await deps.triggerStore.markAutoFailed(triggerId, reason);
     deps.logger.warn(
       { ruleId: rule.id, triggerId, reason },
       "Auto-execution skipped (fail-closed) — left awaiting manual confirmation",
@@ -403,11 +412,14 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       if (!submitResult.ok) {
         // Fail closed: a submit error after signing may still have registered
         // upstream — never degrade to manual re-submission. The intent is
-        // failed, once-rules go terminal EXECUTION_FAILED, everything audited.
+        // failed, once-rules go terminal EXECUTION_FAILED, everything audited —
+        // and the user is told (bell annotation + external channel), because a
+        // silent auto failure is indistinguishable from "still watching".
         await deps.orderIntents.updateStatus(intent.id, "failed", {
           errorMessage: submitResult.error.message,
         });
         if (isOnce) await deps.ruleStore.markExecutionFailed(rule.id, submitResult.error.message);
+        await deps.triggerStore.markAutoFailed(triggerId, submitResult.error.code);
         await deps.auditStore.emit({
           actor: wallet,
           action: "rule.execution.failed",
@@ -419,6 +431,25 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
             message: submitResult.error.message,
           },
         });
+        if (deps.outbox) {
+          await deps.outbox
+            .enqueue({
+              walletAddress: wallet,
+              kind: "order_auto_failed",
+              dedupeKey: `trigger:${triggerId}:auto-failed`,
+              payload: {
+                triggerId,
+                ruleId: rule.id,
+                reason: submitResult.error.code,
+                side: action.side,
+                price: action.price,
+                size: action.size,
+              },
+            })
+            .catch((e: unknown) =>
+              deps.logger.warn({ err: e, triggerId }, "auto-fail notification enqueue failed"),
+            );
+        }
         deps.logger.warn(
           { ruleId: rule.id, triggerId, intentId: intent.id, error: submitResult.error },
           "Auto-execution order submit failed",
@@ -429,7 +460,9 @@ export const createAutoExecutor = (deps: AutoExecutorDeps): AutoExecutor => {
       const clobOrderId = submitResult.value.ack.orderID;
       await deps.orderIntents.updateStatus(intent.id, "submitted", { clobOrderId });
       await deps.ruleStore.addExecutedNotional(rule.id, orderNotional);
-      await deps.triggerStore.updateStatus(triggerId, "confirmed", { orderIntentId: intent.id });
+      // One atomic update: confirmed + intent link + autoExecutedAt — the bell
+      // shows "Executed automatically" until the user dismisses (acknowledges).
+      await deps.triggerStore.markAutoExecuted(triggerId, { orderIntentId: intent.id });
       if (isOnce) await deps.ruleStore.markAutoExecuted(rule.id);
       await deps.auditStore.emit({
         actor: wallet,

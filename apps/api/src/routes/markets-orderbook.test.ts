@@ -34,6 +34,8 @@ const buildHarness = (opts: { snapshot?: MarketSnapshotRow | null; restBook?: "o
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
 
   const clob = {

@@ -6,7 +6,8 @@ import { AnimatePresence, m } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bell, Clock, X } from "lucide-react";
 import type { ActionCenterItem, ActionCenterState } from "@/lib/types";
-import { useDismissTrigger } from "@/lib/queries";
+import { useAckTrigger, useDismissTrigger } from "@/lib/queries";
+import { autoFailureCopy } from "@/lib/strategies/auto-reasons";
 import { useActionCenterUi } from "@/lib/action-center-store";
 import { Badge, Button, cn } from "@/components/ui";
 import { NotificationControls } from "./NotificationControls";
@@ -14,7 +15,7 @@ import { useReducedMotion } from "@/components/motion";
 
 const STATE_META: Record<
   ActionCenterState,
-  { label: string; tone: "brand" | "warn" | "neutral"; cta: string }
+  { label: string; tone: "brand" | "warn" | "neutral" | "pos"; cta: string }
 > = {
   READY_TO_SIGN: { label: "Ready to sign", tone: "brand", cta: "Review & sign" },
   PRICE_MOVED: { label: "Price moved", tone: "warn", cta: "Review what changed" },
@@ -23,6 +24,7 @@ const STATE_META: Record<
     tone: "neutral",
     cta: "Refresh check",
   },
+  AUTO_EXECUTED: { label: "Executed automatically", tone: "pos", cta: "View details" },
 };
 
 const ageLabel = (ms: number | null): string | null => {
@@ -55,20 +57,21 @@ function ItemCard({
   onRefresh: () => void;
 }) {
   const dismiss = useDismissTrigger();
+  const ack = useAckTrigger();
+  const executed = item.state === "AUTO_EXECUTED";
   const meta = STATE_META[item.state];
   const age = ageLabel(item.dataAgeMs);
 
   return (
     <div className="rounded-lg border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
-        <Badge
-          tone={meta.tone === "brand" ? "brand" : meta.tone === "warn" ? "warn" : "neutral"}
-          dot
-        >
+        <Badge tone={meta.tone} dot>
           {meta.label}
         </Badge>
         <span className="text-[11px] text-faint">
-          {new Date(item.triggeredAt).toLocaleTimeString()}
+          {new Date(
+            executed ? (item.executed?.at ?? item.triggeredAt) : item.triggeredAt,
+          ).toLocaleTimeString()}
         </span>
       </div>
 
@@ -77,6 +80,11 @@ function ItemCard({
         {item.market.title ?? item.market.outcome} · {item.market.outcome}
       </p>
       <p className="mt-1 text-[12px] text-muted">{item.conditionSummary}</p>
+      {item.autoFailed ? (
+        <p className="mt-1.5 rounded-md border border-warn/40 bg-warn/10 px-2 py-1 text-[12px] text-warn">
+          Auto-execution failed: {autoFailureCopy(item.autoFailed.reason)} — you can sign manually.
+        </p>
+      ) : null}
 
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[12px]">
         <span className="text-muted">
@@ -122,10 +130,12 @@ function ItemCard({
         >
           {meta.cta}
         </Button>
+        {/* Executed receipts are already confirmed — /dismiss would no-op and
+            the card would never clear; ack marks them seen (cross-device). */}
         <button
           type="button"
-          onClick={() => dismiss.mutate(item.triggerId)}
-          disabled={dismiss.isPending}
+          onClick={() => (executed ? ack.mutate(item.triggerId) : dismiss.mutate(item.triggerId))}
+          disabled={executed ? ack.isPending : dismiss.isPending}
           className="text-[12px] text-muted hover:text-fg"
         >
           Dismiss

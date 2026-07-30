@@ -15,6 +15,7 @@ import {
 } from "@/lib/queries";
 import { getTelegramWebApp } from "@/lib/telegram";
 import { ApiError } from "@/lib/api";
+import { friendlySubmitError } from "@/lib/order-errors";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
 import type { TriggerDetailResponse } from "@/lib/types";
 import { Badge, Button, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
@@ -241,7 +242,7 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });
       setDone("signed");
     } catch (e) {
-      setSignError(e instanceof Error ? e.message : "Signing failed.");
+      setSignError(friendlySubmitError(e));
     }
   };
 

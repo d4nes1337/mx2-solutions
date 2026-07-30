@@ -60,6 +60,8 @@ const gammaStub = (): GammaClient => ({
   getMarket: async () => err(upstreamErr),
   getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
+  getTag: async () => ok(null),
+  listRelatedTags: async () => ok([]),
   searchMarkets: async () => ok([]),
 });
 

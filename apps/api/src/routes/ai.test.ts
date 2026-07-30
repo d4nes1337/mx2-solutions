@@ -216,6 +216,8 @@ const buildAiApp = (opts: {
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
     findMarket: opts.findMarket ?? (async () => ok(null)),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
     searchMarkets: opts.searchMarkets ?? (async () => ok([searchEvent()])),
   };
   const clob: ClobClient = {
@@ -353,6 +355,10 @@ const buildAiApp = (opts: {
     clearAutoRetry: async () => {},
     listAutoRetryable: async () => [],
     listAutoRetryLapsed: async () => [],
+    markAutoExecuted: async () => {},
+    markAutoFailed: async () => {},
+    acknowledge: async () => null,
+    listUnacknowledgedAutoExecuted: async () => [],
   };
   const privyWallets: PrivyWalletStore = {
     upsert: async () => {

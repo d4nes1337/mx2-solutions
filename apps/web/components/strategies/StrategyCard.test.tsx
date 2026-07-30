@@ -149,7 +149,7 @@ describe("StrategyCard hero metric", () => {
     expect(calls.review).toEqual(["trig-1"]);
   });
 
-  it("shows the regret line, Sign anyway and Re-arm for a missed trigger", () => {
+  it("shows the regret line, Review as the primary and Re-arm in the ⋯ menu for a missed trigger", () => {
     render(
       <StrategyCard
         row={row({ status: "TRIGGERED_AWAITING_USER" })}
@@ -169,10 +169,43 @@ describe("StrategyCard hero metric", () => {
       />,
     );
     expect(screen.getByText(/hit 45¢ · now 56¢/)).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: /Sign anyway/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
     expect(calls.review).toEqual(["trig-2"]);
+    // Re-arm folded into the overflow menu — not a second visible button.
+    expect(screen.queryByRole("button", { name: /Re-arm/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
     fireEvent.click(screen.getByRole("button", { name: /Re-arm/ }));
     expect(calls.dismissed).toEqual(["trig-2"]);
+  });
+
+  it("keeps ONE primary action: an active row shows Pause; Edit/Cancel live in the ⋯ menu", () => {
+    render(<StrategyCard row={row()} onOpen={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("button", { name: /Edit/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
+  });
+
+  it("drops the sentence and metadata row from the card (they live in the panel now)", () => {
+    render(<StrategyCard row={row()} />);
+    expect(screen.queryByText(/last check/)).toBeNull();
+    expect(screen.queryByText(/ask me to sign|and ask/i)).toBeNull();
+  });
+
+  it("folds AUTO into the single status chip", () => {
+    const autoDef = {
+      ...def,
+      action: { ...def.action, execution: "auto" as const },
+      limits: {
+        maxTotalNotional: 100,
+        maxDailyNotional: 100,
+        maxOrdersPerDay: 5,
+        maxNotionalPerOrder: 50,
+      },
+    };
+    render(<StrategyCard row={row({ definitionV2: autoDef })} />);
+    expect(screen.getByText(/AUTO · /i)).toBeDefined();
   });
 
   it("shows a live dwell bar while the hold window runs", () => {

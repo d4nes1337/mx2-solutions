@@ -13,8 +13,12 @@
 import { Clock, Plus, RefreshCw, Target, X } from "lucide-react";
 import { Badge, Card, CardHeader, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
+import { LiveCaption } from "@/components/charts/LiveCaption";
+import { PolymarketLink } from "@/components/PolymarketLink";
 import { useTokenPricesHistory } from "@/lib/queries";
 import { marketLabel, type StrategyDoc } from "@/lib/strategies/doc";
+import { spliceLive } from "@/lib/strategies/live-splice";
+import type { MarketFreshness } from "@/lib/strategies/queries";
 import { cents } from "@/lib/strategies/summaries";
 import type { ConditionLiveResult, WatchCard } from "@/lib/strategies/grid-projection";
 import { ConditionRow } from "./ConditionRow";
@@ -78,6 +82,8 @@ export function WatchMarketCard({
   doc,
   card,
   results,
+  live,
+  liveReceivedAtMs,
   range,
   markers,
   chartHeight = 150,
@@ -90,6 +96,9 @@ export function WatchMarketCard({
   doc: StrategyDoc;
   card: WatchCard;
   results: Map<string, ConditionLiveResult>;
+  /** Live book quote for this market (3s evaluation poll) — spliced onto the chart. */
+  live?: MarketFreshness | undefined;
+  liveReceivedAtMs?: number | undefined;
   range: string;
   markers: { t: number; label?: string }[];
   chartHeight?: number;
@@ -120,7 +129,9 @@ export function WatchMarketCard({
     return { text: `${meta.recurrence} · ${when}`, ended: false };
   })();
   const history = useTokenPricesHistory(tokenId, range);
-  const series: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  const rawSeries: ChartPoint[] = (history.data?.history ?? []).map((p) => ({ t: p.t, v: p.p }));
+  // The chart's right edge is the live book mid (3s poll), not the last candle.
+  const { series, spliced } = spliceLive(rawSeries, live, Date.now());
   const last = series.length > 0 ? series[series.length - 1]!.v : null;
   const baselines = cardBaselines(card);
   const firstT = series.length > 0 ? series[0]!.t : 0;
@@ -197,6 +208,7 @@ export function WatchMarketCard({
             {last !== null ? (
               <span className="tabular text-[12px] text-muted">{cents(last)}</span>
             ) : null}
+            <PolymarketLink conditionId={card.market?.conditionId} iconOnly />
             {edit?.onRemove ? (
               <button
                 type="button"
@@ -223,6 +235,7 @@ export function WatchMarketCard({
           <AreaChart
             data={series}
             height={chartHeight}
+            live={spliced}
             valueFormat={(v) => cents(v)}
             {...(baselines.length > 0
               ? { baselines, includeInDomain: baselines.map((b) => b.value) }
@@ -231,6 +244,11 @@ export function WatchMarketCard({
           />
         </div>
       ) : null}
+      <LiveCaption
+        quote={live}
+        {...(liveReceivedAtMs ? { receivedAtMs: liveReceivedAtMs } : {})}
+        className="px-3 pb-1.5 pt-0.5"
+      />
       {rows}
     </Card>
   );

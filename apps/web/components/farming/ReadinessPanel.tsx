@@ -73,11 +73,6 @@ export function ReadinessPanel() {
       label: "FEATURE_MAKER_LOOP_LIVE (final gate)",
       action: "Owner enables after the shadow soak + adapter verification",
     },
-    {
-      ok: r.geoblock.status === "allowed",
-      label: `Geoblock: ${r.geoblock.status}${r.geoblock.country ? ` (${r.geoblock.country})` : ""}`,
-      action: "Live trading requires an unrestricted region",
-    },
   ];
   const readyCount = rows.filter((x) => x.ok).length;
   const allReady = readyCount === rows.length;

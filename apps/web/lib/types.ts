@@ -73,6 +73,23 @@ export interface BrowseResponse {
   degraded: boolean;
 }
 
+/** One second-row chip under a category (Politics → Trump, Midterms, …). */
+export interface CategoryFilter {
+  label: string;
+  slug: string;
+  /** Live open-event count; the API drops zero-count sub-tags, as Polymarket does. */
+  count: number;
+}
+
+export interface CategoryFiltersResponse {
+  slug: string;
+  /** Count for the "All" chip — every open event in the category. */
+  totalCount: number;
+  filters: CategoryFilter[];
+  /** True when the API served a stale cached row because Gamma was down. */
+  degraded: boolean;
+}
+
 export type FeedKind = "now" | "top" | "suggestedFavorites";
 
 export interface FeedMeta {
@@ -191,6 +208,8 @@ export interface ShowcasesResponse {
 
 export interface FeatureFlags {
   liveTrading: boolean;
+  /** IP geoblock enforcement (default off; owner decision D-055). */
+  geoblock: boolean;
   conditionalRules: boolean;
   smartOrdersV2: boolean;
   conditionalLiveExecution: boolean;
@@ -252,7 +271,6 @@ export interface TradeStatus {
   runtimePaused: boolean;
   /** Attribution code embedded in signed orders (public config). */
   builderCode?: string | null;
-  geoblock: { status: string; country?: string; error?: string };
 }
 
 // ── Market cockpit data panels ───────────────────────────────────────────────
@@ -1095,6 +1113,11 @@ export interface TriggerRow {
   reasonCodes: string[];
   status: string;
   orderIntentId: string | null;
+  /** W5 auto-notification parity (optional: older API builds omit them). */
+  autoExecutedAt?: string | null;
+  autoFailedAt?: string | null;
+  autoFailureReason?: string | null;
+  acknowledgedAt?: string | null;
   createdAt: string;
 }
 
@@ -1103,7 +1126,12 @@ export interface TriggersResponse {
 }
 
 /** Honest signing-readiness of a fired trigger (brief §3.1/§6.3). */
-export type ActionCenterState = "READY_TO_SIGN" | "PRICE_MOVED" | "WAITING_FOR_FRESH_DATA";
+export type ActionCenterState =
+  | "READY_TO_SIGN"
+  | "PRICE_MOVED"
+  | "WAITING_FOR_FRESH_DATA"
+  /** Auto order submitted by the worker — stays in the bell until dismissed. */
+  | "AUTO_EXECUTED";
 
 export interface ActionCenterItem {
   triggerId: string;
@@ -1129,12 +1157,18 @@ export interface ActionCenterItem {
     maxSpendUsd: string;
     orderType: string;
   };
+  /** An auto attempt failed/degraded on this awaiting trigger (W5). */
+  autoFailed?: { at: string; reason: string } | null;
+  /** AUTO_EXECUTED items: when + which order intent (W5). */
+  executed?: { at: string; orderIntentId: string | null } | null;
 }
 
 export interface ActionCenterResponse {
   generatedAt: string;
   /** Count of READY_TO_SIGN items — drives the header badge (brief §6.5). */
   actionableCount: number;
+  /** Signatures needed + unseen auto executions (optional: older API builds). */
+  attentionCount?: number;
   items: ActionCenterItem[];
 }
 

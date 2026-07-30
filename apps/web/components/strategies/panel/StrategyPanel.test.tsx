@@ -26,6 +26,7 @@ vi.mock("@/lib/strategies/queries", () => ({
   useRenameStrategy: () => ({ isPending: false, mutate: vi.fn() }),
   useStarStrategy: () => ({ isPending: false, mutate: vi.fn() }),
   useStrategyControl: () => ({ isPending: false, mutate: vi.fn() }),
+  useSetStrategyTags: () => ({ isPending: false, mutate: vi.fn() }),
   useCreateStrategy: () => ({
     isPending: false,
     error: null,

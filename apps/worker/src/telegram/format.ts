@@ -50,6 +50,8 @@ export interface NotificationPayload {
   avgFillPrice?: string | null;
   amountUsd?: string;
   intentId?: string;
+  /** order_auto_failed: skip/submit failure code shown to the user. */
+  reason?: string;
 }
 
 export interface FormattedMessage {
@@ -150,6 +152,19 @@ export const formatNotification = (
         "⚠️ <b>Auto-execution needs you</b>",
         nameLine(payload),
         "The automatic retry gave up — confirm or dismiss the trigger manually.",
+      );
+      if (payload.ruleId) {
+        buttons.push([{ text: "Open strategy", url: `${base}/strategies/${payload.ruleId}` }]);
+      }
+      break;
+    }
+    case "order_auto_failed": {
+      lines.push(
+        "⚠️ <b>Auto-execution failed</b>",
+        nameLine(payload),
+        orderLine(payload),
+        payload.reason ? `Reason: ${escapeHtml(String(payload.reason))}` : null,
+        "You can still sign the prepared order manually.",
       );
       if (payload.ruleId) {
         buttons.push([{ text: "Open strategy", url: `${base}/strategies/${payload.ruleId}` }]);

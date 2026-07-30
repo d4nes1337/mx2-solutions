@@ -78,6 +78,8 @@ const buildGamma = (opts?: { failWindows?: Set<string> }) => {
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
 
   return { gamma, windowCalls, curWindow };

@@ -1,17 +1,15 @@
 "use client";
 
 /**
- * Order action editor — the few decisions that matter up front (execution
- * mode, market, side, price, size), everything else behind Advanced. The old
- * single-scroll form stacked ~12 controls and buried the arm button; the
- * essentials now fit one screen with zero explanatory paragraphs.
+ * Order action editor — the few decisions that matter up front (market, side,
+ * price, size), everything else behind Advanced. Execution mode is chosen by
+ * the parent ActionEditor's 3-way picker; this form only reflects it (the
+ * auto-caps box appears when execution is "auto").
  */
 import { useState } from "react";
-import Link from "next/link";
 import type { OrderActionV2 } from "@mx2/rules";
 import { GTD_MAX_EXPIRES_AFTER_MS, GTD_MIN_EXPIRES_AFTER_MS } from "@mx2/rules";
 import { Segmented } from "@/components/ui";
-import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { Field, MarketBinding, NumberInput, fromCents, toCents } from "./fields";
 import { DurationField } from "./DurationField";
@@ -31,31 +29,12 @@ const STYLE_HINTS: Record<OrderActionV2["orderType"], string> = {
   FOK: "Fills the full size immediately or not at all. Taker fee applies.",
 };
 
-const DEFAULT_LIMIT_FROM_ORDER = (a: OrderActionV2) => {
-  const perOrder = Math.max(1, Math.ceil(a.price * a.size));
-  return {
-    maxNotionalPerOrder: perOrder,
-    maxDailyNotional: perOrder,
-    maxTotalNotional: perOrder,
-  };
-};
-
 export function OrderActionEditor({ action: a }: { action: OrderActionV2 }) {
   const doc = useBuilderStore((s) => s.doc);
   const setAction = useBuilderStore((s) => s.setAction);
   const setLimits = useBuilderStore((s) => s.setLimits);
   const bindMarket = useBuilderStore((s) => s.bindMarket);
   const [editingLimits, setEditingLimits] = useState(false);
-
-  const switchExecution = (execution: "prepare" | "auto") => {
-    setAction({ ...a, execution });
-    // First switch to auto: seed the caps from last-used values (or this
-    // order's cost) so arming isn't blocked on an empty form. Still editable,
-    // still required, still validated.
-    if (execution === "auto" && doc.limits === null) {
-      setLimits(loadLimitPrefs() ?? DEFAULT_LIMIT_FROM_ORDER(a));
-    }
-  };
 
   const limits = doc.limits;
   const limitsSummary = limits
@@ -64,33 +43,6 @@ export function OrderActionEditor({ action: a }: { action: OrderActionV2 }) {
 
   return (
     <>
-      <Field label="Execution">
-        <div className="nodrag">
-          <Segmented
-            options={[
-              { value: "prepare", label: "Ask me to sign" },
-              { value: "auto", label: "Auto · Arima Wallet" },
-            ]}
-            value={a.execution}
-            onChange={switchExecution}
-            size="md"
-            grow
-          />
-        </div>
-      </Field>
-      {a.execution === "prepare" ? (
-        <p className="text-[11px] leading-snug text-muted">
-          You sign each triggered order in your connected wallet — the default.
-        </p>
-      ) : (
-        <p className="text-[11px] leading-snug text-muted">
-          Executes automatically from your{" "}
-          <Link href="/wallet" className="text-accent hover:underline">
-            Arima Wallet (Beta)
-          </Link>
-          . Enable and fund it on the Wallet page — until then, triggers wait for your signature.
-        </p>
-      )}
       <MarketBinding
         current={a.market}
         doc={doc}

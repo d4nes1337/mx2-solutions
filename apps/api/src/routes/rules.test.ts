@@ -235,6 +235,10 @@ const makeTriggerStore = (
         orderIntentId: null,
         autoRetryUntil: null,
         autoRetryReason: null,
+        autoExecutedAt: null,
+        autoFailedAt: null,
+        autoFailureReason: null,
+        acknowledgedAt: null,
         createdAt: new Date(),
       };
       rows.push(row);
@@ -261,6 +265,31 @@ const makeTriggerStore = (
     clearAutoRetry: async () => {},
     listAutoRetryable: async () => [],
     listAutoRetryLapsed: async () => [],
+    markAutoExecuted: async (id, opts) => {
+      const r = find(id);
+      if (r) {
+        r.status = "confirmed";
+        r.orderIntentId = opts.orderIntentId;
+        r.autoExecutedAt = new Date();
+      }
+    },
+    markAutoFailed: async (id, reason) => {
+      const r = find(id);
+      if (r) {
+        r.autoFailedAt = new Date();
+        r.autoFailureReason = reason;
+      }
+    },
+    acknowledge: async (id, w) => {
+      const r = find(id);
+      if (!r || r.walletAddress !== w || r.acknowledgedAt !== null) return null;
+      r.acknowledgedAt = new Date();
+      return r;
+    },
+    listUnacknowledgedAutoExecuted: async (w) =>
+      rows.filter(
+        (r) => r.walletAddress === w && r.autoExecutedAt !== null && r.acknowledgedAt === null,
+      ),
   };
 };
 
@@ -292,6 +321,9 @@ interface Harness {
 
 const buildRulesApp = (opts: {
   conditionalRules?: boolean;
+  liveTrading?: boolean;
+  /** trading_paused runtime kill switch (read by the trigger detail's warning). */
+  tradingPaused?: boolean;
   ruleStore?: ReturnType<typeof makeRuleStore>;
   triggerStore?: ReturnType<typeof makeTriggerStore>;
   snapshotRow?: MarketSnapshotRow | null;
@@ -306,6 +338,13 @@ const buildRulesApp = (opts: {
   const config = loadConfig({
     ...baseConfig,
     FEATURE_CONDITIONAL_RULES: opts.conditionalRules === false ? "false" : "true",
+    ...(opts.liveTrading
+      ? {
+          FEATURE_LIVE_TRADING: "true",
+          POLYMARKET_BUILDER_CODE:
+            "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0",
+        }
+      : {}),
   });
 
   const auditStore: AuditStore = {
@@ -401,7 +440,10 @@ const buildRulesApp = (opts: {
     updateFillState: async () => true,
   };
   const noopFlags: RuntimeFlagStore = {
-    get: async () => null,
+    get: async (key) =>
+      key === "trading_paused" && opts.tradingPaused
+        ? { key, value: "true", updatedBy: "test", updatedAt: new Date() }
+        : null,
     set: async (k, v, by) => ({ key: k, value: v, updatedBy: by, updatedAt: new Date() }),
   };
   const gamma: GammaClient = {
@@ -414,6 +456,8 @@ const buildRulesApp = (opts: {
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
     searchMarkets: async () => ok([]),
   };
   const clob: ClobClient = {
@@ -658,6 +702,10 @@ describe("conditional rules routes", () => {
         orderIntentId: null,
         autoRetryUntil: null,
         autoRetryReason: null,
+        autoExecutedAt: null,
+        autoFailedAt: null,
+        autoFailureReason: null,
+        acknowledgedAt: null,
         createdAt: new Date(),
       },
     ]);
@@ -747,6 +795,99 @@ describe("GET /api/action-center", () => {
     await app.close();
   });
 
+  it("surfaces unacknowledged AUTO_EXECUTED orders and counts them in attentionCount (W5)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    // The worker executed this trigger: confirmed + stamped, not yet seen.
+    const trig = triggerStore.rows[0]!;
+    trig.status = "confirmed";
+    trig.orderIntentId = "intent-7";
+    trig.autoExecutedAt = new Date();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: snapshot() });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    const body = res.json() as {
+      actionableCount: number;
+      attentionCount: number;
+      items: { triggerId: string; state: string; executed: { orderIntentId: string | null } }[];
+    };
+    // Not awaiting a signature — but it must light the bell until dismissed.
+    expect(body.actionableCount).toBe(0);
+    expect(body.attentionCount).toBe(1);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]!.state).toBe("AUTO_EXECUTED");
+    expect(body.items[0]!.executed).toMatchObject({ orderIntentId: "intent-7" });
+
+    // Acknowledge → the receipt clears everywhere.
+    const ackRes = await app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-1/ack",
+      headers: { cookie: COOKIE },
+    });
+    expect(ackRes.statusCode).toBe(200);
+    expect((ackRes.json() as { status: string }).status).toBe("acknowledged");
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    expect((after.json() as { attentionCount: number; items: unknown[] }).items).toHaveLength(0);
+
+    // Second ack is idempotent.
+    const again = await app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-1/ack",
+      headers: { cookie: COOKIE },
+    });
+    expect((again.json() as { idempotent?: boolean }).idempotent).toBe(true);
+    await app.close();
+  });
+
+  it("annotates awaiting items whose auto attempt failed (W5)", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const trig = triggerStore.rows[0]!;
+    trig.autoFailedAt = new Date();
+    trig.autoFailureReason = "insufficient_balance";
+    const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: snapshot() });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/action-center",
+      headers: { cookie: COOKIE },
+    });
+    const body = res.json() as { items: { autoFailed: { reason: string } | null }[] };
+    expect(body.items[0]!.autoFailed).toMatchObject({ reason: "insufficient_balance" });
+    await app.close();
+  });
+
+  it("ack 404s for an unknown trigger and rejects sign-link (scoped) sessions", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore });
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-unknown/ack",
+      headers: { cookie: COOKIE },
+    });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+
+    // Restricted sessions must not touch the wallet's bell state (guard =
+    // requireAuth rejects scoped sessions with 401, same as /api/action-center).
+    const scoped = buildRulesApp({
+      ruleStore,
+      triggerStore,
+      sessionScope: { type: "trigger", triggerId: "trig-1" },
+    });
+    const res = await scoped.app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-1/ack",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(401);
+    await scoped.app.close();
+  });
+
   it("requires a full session (401 without a cookie)", async () => {
     const { ruleStore, triggerStore } = await seedTriggered();
     const { app } = buildRulesApp({ ruleStore, triggerStore, snapshotRow: snapshot() });
@@ -807,6 +948,10 @@ const seedTriggered = async () => {
       orderIntentId: null,
       autoRetryUntil: null,
       autoRetryReason: null,
+      autoExecutedAt: null,
+      autoFailedAt: null,
+      autoFailureReason: null,
+      acknowledgedAt: null,
       createdAt: new Date(),
     },
   ]);
@@ -835,6 +980,45 @@ const makeSignTokens = (): SignLinkTokenStore & { consumed: string[] } => {
     },
   };
 };
+
+describe("trigger detail trading gate", () => {
+  it("never claims ENABLED while the trading_paused kill switch is set", async () => {
+    // The submit route honors the kill switch — the preview must agree, or
+    // the modal says "Live trading is ENABLED" over a disabled button.
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({
+      ruleStore,
+      triggerStore,
+      liveTrading: true,
+      tradingPaused: true,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-1",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tradingEnabled: boolean; warning: string };
+    expect(body.tradingEnabled).toBe(false);
+    expect(body.warning).toMatch(/DISABLED/);
+    await app.close();
+  });
+
+  it("claims ENABLED when live trading is on and not paused", async () => {
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({ ruleStore, triggerStore, liveTrading: true });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-1",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tradingEnabled: boolean; warning: string };
+    expect(body.tradingEnabled).toBe(true);
+    expect(body.warning).toMatch(/ENABLED/);
+    await app.close();
+  });
+});
 
 describe("restricted (sign-link) sessions", () => {
   const scope = { type: "trigger", triggerId: "trig-1" };

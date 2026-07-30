@@ -81,7 +81,8 @@ describe("ArmSheet", () => {
   });
 
   it("skips the fire-mode step entirely for alert-only strategies", () => {
-    useBuilderStore.getState().reset(emptyDoc()); // action: alert
+    // emptyDoc now defaults to a prepared order — force the alert action.
+    useBuilderStore.getState().reset({ ...emptyDoc(), action: { kind: "alert" } });
     renderSheet();
     expect(screen.queryByText("How should this fire?")).toBeNull();
     expect(screen.getByText("How should we reach you?")).toBeInTheDocument();

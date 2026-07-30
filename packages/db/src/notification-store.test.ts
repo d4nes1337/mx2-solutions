@@ -51,6 +51,9 @@ describe("notification kinds", () => {
       "auto_retry_abandoned",
       "deposit_completed",
       "order_auto_executed",
+      // order_auto_failed added with W5 notification parity (2026-07-29):
+      // a terminal auto failure must never be silent — manual is the fallback.
+      "order_auto_failed",
       "order_awaiting_signature",
       "order_filled",
       "rule_alert",

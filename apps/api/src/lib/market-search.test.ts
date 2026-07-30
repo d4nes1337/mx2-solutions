@@ -60,6 +60,8 @@ const makeGamma = (
     getMarket: async () => err(upstreamErr),
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
     searchMarkets: async (query, limit, opts) => {
       calls.push({ query, limit, opts });
       return impl(query, limit, opts);

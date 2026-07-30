@@ -36,6 +36,19 @@ export function usdCompact(v: string | number | undefined | null): string {
   return `$${n.toFixed(2)}`;
 }
 
+/**
+ * Compact item count for chips (274, 2.2K, 12K) — matches how polymarket.com
+ * prints the count on its category filter chips.
+ */
+export function countCompact(v: number): string {
+  if (!Number.isFinite(v)) return "0";
+  const n = Math.max(0, Math.round(v));
+  if (n < 1_000) return String(n);
+  if (n < 10_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  if (n < 1_000_000) return `${Math.round(n / 1_000)}K`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
 // A 0–1 probability rendered as a percent (Polymarket prices are probabilities).
 export function pct(v: string | number | undefined | null): string {
   const n = toNum(v);

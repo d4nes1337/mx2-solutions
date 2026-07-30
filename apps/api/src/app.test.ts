@@ -51,6 +51,8 @@ const mockGammaClient: GammaClient = {
   getMarket: async () => err(upstreamErr),
   getPublicProfile: async () => ok(null),
   findMarket: async () => ok(null),
+  getTag: async () => ok(null),
+  listRelatedTags: async () => ok([]),
   searchMarkets: async () => ok([]),
 };
 
@@ -222,6 +224,10 @@ const mockTriggerStore: TriggerStore = {
   clearAutoRetry: async () => {},
   listAutoRetryable: async () => [],
   listAutoRetryLapsed: async () => [],
+  markAutoExecuted: async () => {},
+  markAutoFailed: async () => {},
+  acknowledge: async () => null,
+  listUnacknowledgedAutoExecuted: async () => [],
 };
 
 const mockTradingClobClient: AuthenticatedClobClient = {

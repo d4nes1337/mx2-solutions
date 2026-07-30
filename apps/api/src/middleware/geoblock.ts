@@ -5,6 +5,12 @@ import type { AuditStore } from "@mx2/db";
 export interface GeoblockMiddlewareDeps {
   geoblockClient: GeoblockClient;
   auditStore: AuditStore;
+  /**
+   * FEATURE_GEOBLOCK. When false (owner decision D-055, 2026-07-29) the check
+   * is skipped entirely — no upstream call, request proceeds — but every skip
+   * is still audited so the trail shows enforcement was off at request time.
+   */
+  enabled: boolean;
 }
 
 const extractIp = (req: FastifyRequest): string => {
@@ -19,6 +25,17 @@ export const makeGeoblockCheck =
   (deps: GeoblockMiddlewareDeps) =>
   async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const ip = extractIp(req);
+
+    if (!deps.enabled) {
+      await deps.auditStore.emit({
+        actor: ip,
+        action: "geoblock.checked",
+        subject: `ip:${ip}`,
+        metadata: { status: "disabled_by_flag" },
+      });
+      return;
+    }
+
     const result = await deps.geoblockClient.check(ip);
 
     if (!result.ok) {

@@ -163,14 +163,17 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
   const geoblockCheck = makeGeoblockCheck({
     geoblockClient: deps.geoblockClient,
     auditStore: deps.auditStore,
+    enabled: deps.config.features.geoblock,
   });
 
   // ── GET /api/trade/status ──────────────────────────────────────────────────
-  // Public: returns feature flag state and (on success) geoblock result for the caller's IP.
+  // Public: returns feature flag state and (when enforcement is on) the
+  // geoblock result for the caller's IP. With FEATURE_GEOBLOCK off, no
+  // upstream call is made and the status reads "disabled".
   app.get("/api/trade/status", async (req) => {
     const ip =
       (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.ip;
-    const geoResult = await deps.geoblockClient.check(ip);
+    const geoResult = deps.config.features.geoblock ? await deps.geoblockClient.check(ip) : null;
     const paused = await isTradingPaused(deps);
     return {
       tradingEnabled: deps.config.features.liveTrading && !paused,
@@ -180,9 +183,12 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       // not a secret — surfaced here so the order ticket no longer depends on
       // the preview endpoint for it.
       builderCode: deps.config.polymarket.builderCode ?? null,
-      geoblock: geoResult.ok
-        ? { status: geoResult.value.status, country: geoResult.value.country }
-        : { status: "unknown", error: geoResult.error.code },
+      geoblock:
+        geoResult === null
+          ? { status: "disabled" }
+          : geoResult.ok
+            ? { status: geoResult.value.status, country: geoResult.value.country }
+            : { status: "unknown", error: geoResult.error.code },
     };
   });
 

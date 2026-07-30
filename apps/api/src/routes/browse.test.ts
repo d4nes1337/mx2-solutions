@@ -40,6 +40,8 @@ const buildHarness = (opts?: { fail?: boolean; totalResults?: number }) => {
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
 
   const app = Fastify({ logger: false });
@@ -93,6 +95,17 @@ describe("GET /api/markets/browse", () => {
 
     const bad = await app.inject({ url: "/api/markets/browse?tag=Nope%20Tag" });
     expect(bad.statusCode).toBe(400);
+  });
+
+  it("accepts the mixed-case slugs Gamma really serves (EPL, Global-Rates)", async () => {
+    const { app, calls } = buildHarness();
+    // Rendered as sub-filter chips under Sports and Economy — rejecting them
+    // would 400 a chip we ourselves put on screen.
+    expect((await app.inject({ url: "/api/markets/browse?tag=EPL" })).statusCode).toBe(200);
+    expect(calls[0]).toMatchObject({ tag_slug: "EPL" });
+    expect((await app.inject({ url: "/api/markets/browse?tag=Global-Rates" })).statusCode).toBe(
+      200,
+    );
   });
 
   it("rejects out-of-range limit and offset", async () => {
@@ -149,6 +162,8 @@ describe("GET /api/markets/browse", () => {
         getPublicProfile: async () => ok(null),
         findMarket: async () => ok(null),
         searchMarkets: async () => ok([]),
+        getTag: async () => ok(null),
+        listRelatedTags: async () => ok([]),
       } satisfies GammaClient,
     });
     const res = await app.inject({ url: "/api/markets/browse" });

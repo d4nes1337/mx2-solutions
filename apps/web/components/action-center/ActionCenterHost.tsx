@@ -24,7 +24,9 @@ const cents = (v: string) => `${Math.round(Number(v) * 100)}c`;
 
 /** One-line trade summary for a single ready item (desktop-notification body). */
 const detailLine = (item: ActionCenterItem): string =>
-  `${item.action.side === "BUY" ? "Buy" : "Sell"} ${item.action.sizeShares} ${item.market.outcome} at up to ${cents(item.action.price)} · ${item.ruleName}`;
+  item.state === "AUTO_EXECUTED"
+    ? `Executed automatically: ${item.action.side === "BUY" ? "Buy" : "Sell"} ${item.action.sizeShares} ${item.market.outcome} at ${cents(item.action.price)} · ${item.ruleName}`
+    : `${item.action.side === "BUY" ? "Buy" : "Sell"} ${item.action.sizeShares} ${item.market.outcome} at up to ${cents(item.action.price)} · ${item.ruleName}`;
 
 /** True while an interruption would fight the user's current context. */
 const interactionSuppressed = (): boolean => {
@@ -74,17 +76,24 @@ export function ActionCenterHost() {
     if (!signedIn || !data) return;
     const prefs = readNotificationPrefs();
 
-    // Every tab reflects the actionable (ready-to-sign) count in title + favicon.
-    setTabBadge(data.actionableCount);
+    // Every tab reflects what needs attention (signatures + unseen auto
+    // executions) in title + favicon.
+    setTabBadge(data.attentionCount ?? data.actionableCount);
 
     const ready = data.items.filter((i) => i.state === "READY_TO_SIGN");
+    // W5 parity: an auto execution announces itself exactly like a ready
+    // trigger — popup, sound, desktop — and persists until dismissed.
+    const autoDone = data.items.filter((i) => i.state === "AUTO_EXECUTED");
 
-    // Auto-open the ready popup: the product's money moment. Once per trigger
-    // per device (cross-tab deduped), only in a focused tab, never while the
-    // user is typing or another dialog is open — those fall through to the
-    // persistent corner card instead. In-app UI: independent of browserAlerts.
+    // Auto-open the popup: the product's money moment (a ready signature
+    // outranks an executed receipt). Once per trigger per device (cross-tab
+    // deduped), only in a focused tab, never while the user is typing or
+    // another dialog is open — those fall through to the persistent corner
+    // card instead. In-app UI: independent of browserAlerts.
     if (prefs.autoOpenReady && reviewTriggerId === null && !open) {
-      const candidate = ready.find((i) => !isAutoOpened(i.triggerId) && !snoozed.has(i.triggerId));
+      const candidate = [...ready, ...autoDone].find(
+        (i) => !isAutoOpened(i.triggerId) && !snoozed.has(i.triggerId),
+      );
       if (candidate && document.hasFocus() && !interactionSuppressed()) {
         markAutoOpened(candidate.triggerId);
         openReview(candidate.triggerId);
@@ -96,7 +105,7 @@ export function ActionCenterHost() {
     if (prefs.browserAlerts) {
       const isLeader = leaderRef.current?.isLeader() ?? false;
       if (isLeader) {
-        const unhandled = ready.filter((i) => !isHandled(i.triggerId));
+        const unhandled = [...ready, ...autoDone].filter((i) => !isHandled(i.triggerId));
         if (unhandled.length > 0) {
           if (prefs.sound) playAlertSound(prefs.volume);
           if (prefs.desktop) {
@@ -116,7 +125,8 @@ export function ActionCenterHost() {
   if (!signedIn) return null;
 
   const readyItems = (data?.items ?? []).filter(
-    (i) => i.state === "READY_TO_SIGN" && !snoozed.has(i.triggerId),
+    (i) =>
+      (i.state === "READY_TO_SIGN" || i.state === "AUTO_EXECUTED") && !snoozed.has(i.triggerId),
   );
 
   return (

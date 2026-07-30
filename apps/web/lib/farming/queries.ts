@@ -69,7 +69,6 @@ export interface QuoterReadiness {
   adapters: { ctfConfigured: boolean; negRiskConfigured: boolean };
   wallet: { provisioned: boolean; depositWalletActive: boolean; clobCredentials: boolean };
   allowances: { label: string; kind: string; granted: boolean }[] | null;
-  geoblock: { status: string; country?: string };
 }
 
 export interface QuoteEvent {

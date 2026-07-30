@@ -3,18 +3,24 @@
 /**
  * Action editor — the strategy's single "then do this" block, for both the
  * panel Block tab and the expanded canvas node. Handles ALL four engine action
- * kinds (alert / order / stop_strategy / quote_loop). The kind selector
- * converts explicitly with a discard confirmation, and the alert vs order
- * split is a kind decision — so switching execution can never silently
- * clobber a farming loop or a stop link (the old data-loss bug).
+ * kinds (alert / order / stop_strategy / quote_loop).
+ *
+ * The primary picker is ONE user-facing choice in execution order: sign it
+ * yourself (order+prepare, the default) → Arima wallet (order+auto) → alert
+ * only. Stop-strategy and farming live under Advanced. Any switch that would
+ * lose configured settings still goes through the discard confirmation — so
+ * changing execution can never silently clobber a farming loop or a stop link
+ * (the old data-loss bug).
  *
  * The dense per-kind forms live in OrderActionEditor / QuoteLoopEditor; this
- * file owns kind selection and the shared canvas-node editors.
+ * file owns action selection and the shared canvas-node editors.
  */
 import { useState } from "react";
-import type { ActionV2 } from "@mx2/rules";
+import Link from "next/link";
+import type { ActionV2, OrderActionV2 } from "@mx2/rules";
 import { Button, Segmented } from "@/components/ui";
-import { UNBOUND } from "@/lib/strategies/doc";
+import { actionHasConfig, UNBOUND } from "@/lib/strategies/doc";
+import { loadLimitPrefs } from "@/lib/strategies/limit-prefs";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { useFeatureFlags } from "@/lib/queries";
 import { useSession } from "@/lib/auth";
@@ -32,6 +38,24 @@ const KIND_LABELS: Record<ActionKind, string> = {
   stop_strategy: "Stop a strategy",
   quote_loop: "Farm rewards",
 };
+
+/** The 3-way primary picker, in the owner-decided order. */
+type PrimaryChoice = "sign" | "auto" | "alert";
+
+const CHOICE_LABELS: Record<PrimaryChoice, string> = {
+  sign: "Ask me to sign",
+  auto: "Auto · Arima Wallet",
+  alert: "Alert only",
+};
+
+const choiceOf = (a: ActionV2): PrimaryChoice | "" =>
+  a.kind === "order"
+    ? a.execution === "auto"
+      ? "auto"
+      : "sign"
+    : a.kind === "alert"
+      ? "alert"
+      : "";
 
 export const defaultActionFor = (kind: ActionKind): ActionV2 => {
   switch (kind) {
@@ -63,31 +87,79 @@ export const defaultActionFor = (kind: ActionKind): ActionV2 => {
   }
 };
 
-/** Does the current action carry configuration worth a discard confirmation? */
-const hasMeaningfulConfig = (a: ActionV2): boolean =>
-  (a.kind === "order" && a.market.tokenId !== "") ||
-  (a.kind === "stop_strategy" && a.targetStrategyId !== "") ||
-  (a.kind === "quote_loop" && a.market.conditionId !== "");
+/** Seed the required auto caps from last-used values (or this order's cost). */
+const DEFAULT_LIMIT_FROM_ORDER = (a: OrderActionV2) => {
+  const perOrder = Math.max(1, Math.ceil(a.price * a.size));
+  return {
+    maxNotionalPerOrder: perOrder,
+    maxDailyNotional: perOrder,
+    maxTotalNotional: perOrder,
+  };
+};
 
 export function ActionEditor() {
   const doc = useBuilderStore((s) => s.doc);
   const setAction = useBuilderStore((s) => s.setAction);
+  const setLimits = useBuilderStore((s) => s.setLimits);
   const flags = useFeatureFlags();
-  const [pendingKind, setPendingKind] = useState<ActionKind | null>(null);
+  /** A confirmed-discard target: the exact action to apply + its label. */
+  const [pending, setPending] = useState<{
+    action: ActionV2;
+    label: string;
+    seedLimits?: boolean;
+  } | null>(null);
   const a = doc.action;
 
   const makerLoop = Boolean(flags.data?.makerLoop);
-  const kinds: ActionKind[] = ["alert", "order", "stop_strategy"];
-  if (makerLoop || a.kind === "quote_loop") kinds.push("quote_loop");
-  const kindOptions = kinds.map((k) => ({ value: k, label: KIND_LABELS[k] }));
+  const advancedKind = a.kind === "stop_strategy" || a.kind === "quote_loop";
+  // Advanced starts open when the current action lives there (an existing
+  // stop/farm strategy opens with its form visible, nothing converted).
+  const [advancedOpen, setAdvancedOpen] = useState(advancedKind);
 
-  const requestKind = (kind: ActionKind) => {
-    if (kind === a.kind) return;
-    if (hasMeaningfulConfig(a)) {
-      setPendingKind(kind);
+  const seedAutoLimits = (order: OrderActionV2) => {
+    // First switch to auto: seed the caps so arming isn't blocked on an empty
+    // form. Still editable, still required, still validated.
+    if (doc.limits === null) setLimits(loadLimitPrefs() ?? DEFAULT_LIMIT_FROM_ORDER(order));
+  };
+
+  const apply = (target: ActionV2, seedLimits: boolean) => {
+    setAction(target);
+    if (seedLimits && target.kind === "order") seedAutoLimits(target);
+  };
+
+  /** Cross-kind switch: confirm before discarding configured settings. */
+  const request = (target: ActionV2, label: string, seedLimits = false) => {
+    if (actionHasConfig(a)) {
+      setPending({ action: target, label, seedLimits });
       return;
     }
-    setAction(defaultActionFor(kind));
+    apply(target, seedLimits);
+  };
+
+  const choose = (choice: PrimaryChoice) => {
+    if (choice === choiceOf(a)) return;
+    if (choice === "sign") {
+      // order↔order keeps every param — only the execution flips.
+      if (a.kind === "order") return setAction({ ...a, execution: "prepare" });
+      return request(defaultActionFor("order"), CHOICE_LABELS.sign);
+    }
+    if (choice === "auto") {
+      if (a.kind === "order") {
+        setAction({ ...a, execution: "auto" });
+        return seedAutoLimits(a);
+      }
+      return request(
+        { ...(defaultActionFor("order") as OrderActionV2), execution: "auto" },
+        CHOICE_LABELS.auto,
+        true,
+      );
+    }
+    if (a.kind !== "alert") request({ kind: "alert" }, CHOICE_LABELS.alert);
+  };
+
+  const chooseAdvanced = (kind: "stop_strategy" | "quote_loop") => {
+    if (a.kind === kind) return;
+    request(defaultActionFor(kind), KIND_LABELS[kind]);
   };
 
   return (
@@ -95,49 +167,97 @@ export function ActionEditor() {
       <Field label="When it triggers">
         <div className="nodrag">
           <Segmented
-            options={kindOptions}
-            value={a.kind}
-            onChange={requestKind}
+            options={[
+              { value: "sign" as const, label: CHOICE_LABELS.sign },
+              { value: "auto" as const, label: CHOICE_LABELS.auto },
+              { value: "alert" as const, label: CHOICE_LABELS.alert },
+            ]}
+            value={choiceOf(a) as PrimaryChoice}
+            onChange={choose}
             size="sm"
-            grow={kindOptions.length > 3 ? 2 : true}
+            grow
           />
         </div>
       </Field>
 
-      {pendingKind ? (
-        <div className="nodrag space-y-2 rounded-lg border border-warn/40 bg-warn/10 p-2.5">
-          <p className="text-[12px] leading-snug text-warn">
-            Switching to “{KIND_LABELS[pendingKind]}” discards this action&apos;s current settings.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => {
-                setAction(defaultActionFor(pendingKind));
-                setPendingKind(null);
-              }}
-            >
-              Switch
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setPendingKind(null)}>
-              Keep current
-            </Button>
-          </div>
-        </div>
+      {/* Per-choice one-liner so the trade-off is visible before committing. */}
+      {a.kind === "order" && a.execution === "prepare" ? (
+        <p className="text-[11px] leading-snug text-muted">
+          You sign each triggered order in your connected wallet — the default.
+        </p>
       ) : null}
-
+      {a.kind === "order" && a.execution === "auto" ? (
+        <p className="text-[11px] leading-snug text-muted">
+          Executes automatically from your{" "}
+          <Link href="/wallet" className="text-accent hover:underline">
+            Arima Wallet (Beta)
+          </Link>
+          . Enable and fund it on the Wallet page — until then, triggers wait for your signature.
+        </p>
+      ) : null}
       {a.kind === "alert" ? (
         <p className="text-[12px] leading-snug text-muted">
           You&apos;ll get a notification with full trigger evidence — nothing trades.
         </p>
       ) : null}
 
-      {a.kind === "stop_strategy" ? <StopStrategyForm targetId={a.targetStrategyId} /> : null}
-
-      {a.kind === "quote_loop" ? <QuoteLoopForm action={a} makerLoop={makerLoop} /> : null}
+      {pending ? (
+        <div className="nodrag space-y-2 rounded-lg border border-warn/40 bg-warn/10 p-2.5">
+          <p className="text-[12px] leading-snug text-warn">
+            Switching to “{pending.label}” discards this action&apos;s current settings.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                apply(pending.action, pending.seedLimits ?? false);
+                setPending(null);
+              }}
+            >
+              Switch
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPending(null)}>
+              Keep current
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {a.kind === "order" ? <OrderActionEditor action={a} /> : null}
+
+      <details
+        className="nodrag rounded-lg border border-border bg-surface-2 px-3 py-2"
+        open={advancedOpen}
+        onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+      >
+        <summary className="cursor-pointer text-[12px] font-medium text-muted">Advanced</summary>
+        <div className="mt-2 space-y-3">
+          <Field label="Other actions">
+            <div className="nodrag">
+              <Segmented
+                options={[
+                  { value: "stop_strategy" as const, label: KIND_LABELS.stop_strategy },
+                  ...(makerLoop || a.kind === "quote_loop"
+                    ? [{ value: "quote_loop" as const, label: KIND_LABELS.quote_loop }]
+                    : []),
+                ]}
+                value={a.kind as "stop_strategy" | "quote_loop"}
+                onChange={chooseAdvanced}
+                size="sm"
+                grow
+              />
+            </div>
+          </Field>
+          {a.kind === "stop_strategy" ? <StopStrategyForm targetId={a.targetStrategyId} /> : null}
+          {a.kind === "quote_loop" ? <QuoteLoopForm action={a} makerLoop={makerLoop} /> : null}
+          {!advancedKind ? (
+            <p className="text-[10px] leading-snug text-faint">
+              Stop another strategy when this one triggers, or run a maker rewards loop.
+            </p>
+          ) : null}
+        </div>
+      </details>
     </div>
   );
 }

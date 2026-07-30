@@ -153,6 +153,10 @@ const makeTrigger = (over: Partial<RuleTriggerRow> = {}): RuleTriggerRow => ({
   triggeredAt: new Date(),
   autoRetryUntil: null,
   autoRetryReason: null,
+  autoExecutedAt: null,
+  autoFailedAt: null,
+  autoFailureReason: null,
+  acknowledgedAt: null,
   evidence: { bestBid: 0.44, bestAsk: 0.46 },
   reasonCodes: [],
   status: "awaiting_user",
@@ -187,6 +191,10 @@ const makeTriggerStore = (
     clearAutoRetry: async () => {},
     listAutoRetryable: async () => [],
     listAutoRetryLapsed: async () => [],
+    markAutoExecuted: async () => {},
+    markAutoFailed: async () => {},
+    acknowledge: async () => null,
+    listUnacknowledgedAutoExecuted: async () => [],
   };
 };
 

@@ -7,6 +7,7 @@
 import { useState } from "react";
 import type { MarketRef } from "@mx2/rules";
 import { cn } from "@/components/ui";
+import { PolymarketLink } from "@/components/PolymarketLink";
 import { isBound, marketLabel, type MarketMeta, type StrategyDoc } from "@/lib/strategies/doc";
 import { MarketSearch } from "../MarketSearch";
 
@@ -97,8 +98,11 @@ export function MarketBinding({
       {isBound(current) ? (
         <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5">
           <span className="truncate text-[12px] text-fg">{marketLabel(doc, current)}</span>
-          <span className="shrink-0 rounded-full border border-brand/40 bg-brand-soft px-2 text-[10px] font-semibold text-accent">
-            {current.outcome}
+          <span className="flex shrink-0 items-center gap-1.5">
+            <PolymarketLink conditionId={current.conditionId} iconOnly />
+            <span className="rounded-full border border-brand/40 bg-brand-soft px-2 text-[10px] font-semibold text-accent">
+              {current.outcome}
+            </span>
           </span>
         </div>
       ) : (

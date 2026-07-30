@@ -527,11 +527,12 @@ describe("deposit addresses + tracked deposits", () => {
     await app.close();
   });
 
-  it("fails closed when geoblock errors", async () => {
+  it("fails closed when geoblock errors (enforcement on)", async () => {
     const blockedGeo: GeoblockClient = { check: async () => err(upstreamErr) };
     const config = loadConfig({
       DATABASE_URL: "postgresql://u:p@localhost:5432/db",
       FEATURE_BRIDGE_FUNDING: "true",
+      FEATURE_GEOBLOCK: "true",
     });
     const app = Fastify();
     await app.register(fastifyCookie);

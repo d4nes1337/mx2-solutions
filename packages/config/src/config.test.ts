@@ -15,6 +15,8 @@ describe("loadConfig", () => {
     expect(cfg.features.liveTrading).toBe(false);
     expect(cfg.features.conditionalLiveExecution).toBe(false);
     expect(cfg.features.relayer).toBe(false);
+    // Geoblock enforcement defaults OFF by explicit owner decision (D-055).
+    expect(cfg.features.geoblock).toBe(false);
     // Bridge FUNDING is not risk-bearing (addresses only deposit into the
     // user's own wallet) and defaults ON; withdrawals move funds and stay off.
     expect(cfg.features.bridgeFunding).toBe(true);
@@ -27,9 +29,11 @@ describe("loadConfig", () => {
     const cfg = loadConfig({
       ...base,
       FEATURE_LIVE_TRADING: "true",
+      FEATURE_GEOBLOCK: "true",
       POLYMARKET_BUILDER_CODE: BUILDER_CODE,
     });
     expect(cfg.features.liveTrading).toBe(true);
+    expect(cfg.features.geoblock).toBe(true);
   });
 
   it("fails closed when live trading is on without a builder code", () => {

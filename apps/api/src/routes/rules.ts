@@ -7,6 +7,7 @@ import type {
   MarketSnapshotStore,
   OrderIntentStore,
   RuleStore,
+  RuntimeFlagStore,
   SessionStore,
   TradingAccountClobCredentialStore,
   TradingAccountStore,
@@ -41,6 +42,9 @@ export interface RulesRoutesDeps {
   triggerStore: TriggerStore;
   orderIntents: OrderIntentStore;
   marketSnapshots: MarketSnapshotStore;
+  /** trading_paused kill switch — the trigger detail's tradingEnabled/warning
+   * must agree with POST /api/trade/orders, which honors it. */
+  runtimeFlags?: RuntimeFlagStore;
   /** Primary-account context for the trigger detail (mobile sign page). */
   tradingAccounts?: TradingAccountStore;
   accountClobCredentials?: TradingAccountClobCredentialStore;
@@ -179,7 +183,11 @@ const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggered
 };
 
 /** Action Center item state — the honest signing-readiness of a fired trigger. */
-type ActionCenterState = "READY_TO_SIGN" | "PRICE_MOVED" | "WAITING_FOR_FRESH_DATA";
+type ActionCenterState =
+  | "READY_TO_SIGN"
+  | "PRICE_MOVED"
+  | "WAITING_FOR_FRESH_DATA"
+  | "AUTO_EXECUTED";
 
 /** Bounds the batch so a pathological wallet can't produce an unbounded response. */
 const ACTION_CENTER_ITEM_CAP = 50;
@@ -498,6 +506,61 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
           maxSpendUsd: (action.price * action.size).toFixed(2),
           orderType: action.orderType,
         },
+        // An auto attempt failed/degraded on this trigger — the UI explains
+        // why it is waiting for a signature instead of silently sitting there.
+        autoFailed: trigger.autoFailedAt
+          ? {
+              at: trigger.autoFailedAt.toISOString(),
+              reason: trigger.autoFailureReason ?? "unknown",
+            }
+          : null,
+        executed: null,
+      });
+    }
+
+    // Auto-executed orders (W5 parity): status is confirmed — gone from the
+    // awaiting list — but the user hasn't seen them. They stay in the bell
+    // until dismissed (acknowledged), surviving reloads and other devices.
+    const executedRows = (
+      await deps.triggerStore.listUnacknowledgedAutoExecuted(user.walletAddress)
+    ).slice(0, ACTION_CENTER_ITEM_CAP);
+    let autoExecutedCount = 0;
+    for (const trigger of executedRows) {
+      const rule = await deps.ruleStore.findById(trigger.ruleId);
+      if (!rule) continue;
+      const def = normalizeDefinition(rule.definition as RuleDefinition | StrategyDefinition);
+      if (def.action.kind !== "order") continue;
+      const action = def.action;
+      autoExecutedCount += 1;
+      items.push({
+        triggerId: trigger.id,
+        ruleId: rule.id,
+        ruleName: def.name,
+        triggeredAt: trigger.triggeredAt.toISOString(),
+        state: "AUTO_EXECUTED" satisfies ActionCenterState,
+        market: {
+          conditionId: action.market.conditionId,
+          tokenId: action.market.tokenId,
+          title: action.market.title ?? null,
+          outcome: action.market.outcome,
+        },
+        conditionSummary: conditionSummary(def),
+        actual: null,
+        threshold: null,
+        dataAgeMs: null,
+        account,
+        action: {
+          side: action.side,
+          sizeShares: action.size,
+          price: String(action.price),
+          maxSpendUsd: (action.price * action.size).toFixed(2),
+          orderType: action.orderType,
+        },
+        autoFailed: null,
+        executed: {
+          at: (trigger.autoExecutedAt ?? trigger.triggeredAt).toISOString(),
+          orderIntentId: trigger.orderIntentId,
+        },
       });
     }
 
@@ -505,6 +568,9 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       generatedAt: new Date(nowMs).toISOString(),
       // Badge counts only items requiring a signature right now (brief §6.5).
       actionableCount,
+      // Everything the bell should light up for: signatures needed + executed
+      // orders not yet seen. Kept separate so old clients stay correct.
+      attentionCount: actionableCount + autoExecutedCount,
       items,
     };
   });
@@ -539,6 +605,11 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       if (snapshot) views[tokenId] = snapshotToView(snapshot);
     }
     const evaluation = evaluateExpression(def, views, nowMs);
+    // The submit route (POST /api/trade/orders) honors the trading_paused kill
+    // switch — this preview must never claim ENABLED while submission is
+    // blocked, so it combines the flag the same way.
+    const paused = (await deps.runtimeFlags?.get("trading_paused"))?.value === "true";
+    const tradingEnabled = deps.config.features.liveTrading && !paused;
     // Primary trading-account context: the mobile sign page runs on a
     // RESTRICTED session that cannot call /api/trading-accounts, so the
     // signing addresses it needs ride along here.
@@ -582,8 +653,8 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         (trigger.evidence as { triggeredAtMs?: number } | null)?.triggeredAtMs,
       ),
       account,
-      tradingEnabled: deps.config.features.liveTrading,
-      warning: deps.config.features.liveTrading
+      tradingEnabled,
+      warning: tradingEnabled
         ? "Live trading is ENABLED. Submitting this order will use real funds."
         : "Live trading is DISABLED. This preview is for demonstration only.",
     };
@@ -659,5 +730,31 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       metadata: { triggerId: id },
     });
     return { ok: true, status: "dismissed" };
+  });
+
+  // ── POST /api/rules/triggers/:id/ack ────────────────────────────────────────
+  // Dismiss an AUTO-EXECUTED card from the bell (W5). Distinct from /dismiss:
+  // the trigger is already confirmed — this only marks it seen, cross-device.
+  // FULL sessions only (guard, not scopedGuard): a sign-link session must not
+  // touch the wallet's bell state.
+  app.post("/api/rules/triggers/:id/ack", guard, async (req, reply) => {
+    const user = req.user!;
+    const { id } = req.params as { id: string };
+    const trigger = await deps.triggerStore.findByIdForWallet(id, user.walletAddress);
+    if (!trigger) {
+      reply.code(404);
+      return { error: "NOT_FOUND", message: "Trigger not found" };
+    }
+    if (trigger.acknowledgedAt !== null) {
+      return { ok: true, idempotent: true, status: "acknowledged" };
+    }
+    await deps.triggerStore.acknowledge(id, user.walletAddress);
+    await deps.auditStore.emit({
+      actor: user.walletAddress,
+      action: "rule.trigger.acknowledged",
+      subject: `rule:${trigger.ruleId}`,
+      metadata: { triggerId: id },
+    });
+    return { ok: true, status: "acknowledged" };
   });
 };

@@ -76,6 +76,7 @@ const MARKETS: Record<string, GammaMarket> = {
 
 const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
   const counters = { history: 0, trades: 0, holders: 0 };
+  const historyCalls: { tokenId: string; interval?: string; fidelity?: number }[] = [];
 
   const gamma = {
     listEvents: async () => ok([]),
@@ -91,6 +92,8 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
 
   const clob = {
@@ -98,8 +101,9 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
     getTrades: async () => err(upstreamErr),
     getPrices: async () => err(upstreamErr),
     getLastTradePrice: async () => err(upstreamErr),
-    getPricesHistory: async (params: { tokenId: string }) => {
+    getPricesHistory: async (params: { tokenId: string; interval?: string; fidelity?: number }) => {
       counters.history++;
+      historyCalls.push(params);
       if (params.tokenId === DIP_TOKEN) return ok(dipSeries);
       if (params.tokenId === FLAT_TOKEN) return ok(flatSeries);
       return err(upstreamErr);
@@ -162,12 +166,45 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
     dataClient: data,
     marketSnapshots: snapshots,
   });
-  return { app, counters };
+  return { app, counters, historyCalls };
 };
 
 beforeEach(() => {
   resetScenarioCache();
   resetRateLimits();
+});
+
+describe("GET /api/markets/prices-history (token-keyed)", () => {
+  it("forwards a valid fidelity to the CLOB and drops junk values", async () => {
+    const { app, historyCalls } = buildHarness();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/markets/prices-history?tokenId=${DIP_TOKEN}&interval=1d&fidelity=5`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(historyCalls[0]).toMatchObject({ tokenId: DIP_TOKEN, interval: "1d", fidelity: 5 });
+
+    await app.inject({
+      method: "GET",
+      url: `/api/markets/prices-history?tokenId=${DIP_TOKEN}&interval=1d&fidelity=abc`,
+    });
+    expect(historyCalls[1]!.fidelity).toBeUndefined();
+    await app.close();
+  });
+
+  it("rate-limits at 120/min (live-chart polling budget)", async () => {
+    const { app } = buildHarness();
+    const url = `/api/markets/prices-history?tokenId=${DIP_TOKEN}&interval=1d&fidelity=5`;
+    let lastOk = 0;
+    for (let i = 0; i < 120; i++) {
+      const res = await app.inject({ method: "GET", url });
+      if (res.statusCode === 200) lastOk++;
+    }
+    expect(lastOk).toBe(120);
+    const overflow = await app.inject({ method: "GET", url });
+    expect(overflow.statusCode).toBe(429);
+    await app.close();
+  });
 });
 
 describe("GET /api/markets/:id/scenarios", () => {

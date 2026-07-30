@@ -95,12 +95,24 @@ export interface StrategyDoc {
 /** Placeholder for a condition the user hasn't bound to a market yet. */
 export const UNBOUND: MarketRef = { conditionId: "", tokenId: "", outcome: "YES" };
 
+/**
+ * Does the action carry configuration worth keeping? Shared by draft
+ * persistence and the ActionEditor's discard confirmation. A fresh default
+ * order (unbound market) is NOT config — every builder visit starts with one
+ * (owner decision, 2026-07-29: sign-an-order is the default action), and it
+ * must not persist a junk draft.
+ */
+export const actionHasConfig = (a: ActionV2): boolean =>
+  (a.kind === "order" && a.market.tokenId !== "") ||
+  (a.kind === "stop_strategy" && a.targetStrategyId !== "") ||
+  (a.kind === "quote_loop" && a.market.conditionId !== "");
+
 /** True when the doc holds anything worth keeping (gates draft persistence). */
 export const docHasContent = (doc: StrategyDoc): boolean =>
   doc.expr.children.length > 0 ||
   doc.watchedMarkets.length > 0 ||
   doc.name.trim() !== "" ||
-  doc.action.kind !== "alert";
+  actionHasConfig(doc.action);
 
 export const isBound = (m: MarketRef): boolean => m.tokenId !== "" && m.conditionId !== "";
 
@@ -112,7 +124,19 @@ export const emptyDoc = (): StrategyDoc => ({
   // moment all conditions are satisfied; hold windows are opt-in.
   holdsForMs: 0,
   maxDataAgeMs: 30_000,
-  action: { kind: "alert" },
+  // Prepared order by default (owner decision, 2026-07-29): the user is asked
+  // to sign; alert-only is an explicit downgrade in the action picker. Keep in
+  // sync with defaultActionFor("order") in ActionEditor (no component imports
+  // here).
+  action: {
+    kind: "order",
+    market: UNBOUND,
+    side: "BUY",
+    price: 0.5,
+    size: 10,
+    orderType: "GTC",
+    execution: "prepare",
+  },
   recurrence: { kind: "once" },
   limits: null,
   expiresAtMs: null,

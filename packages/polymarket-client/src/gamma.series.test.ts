@@ -82,6 +82,8 @@ const buildGamma = (opts?: { windowFail?: boolean; unknownSeries?: boolean }) =>
     getPublicProfile: async () => ok(null),
     findMarket: async () => ok(null),
     searchMarkets: async () => ok([]),
+    getTag: async () => ok(null),
+    listRelatedTags: async () => ok([]),
   } satisfies GammaClient;
   return { gamma, calls, seriesLookups: () => seriesLookups };
 };

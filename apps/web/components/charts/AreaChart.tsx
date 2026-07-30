@@ -28,6 +28,7 @@ export function AreaChart({
   baselines,
   includeInDomain,
   markers,
+  live = false,
   className,
 }: {
   data: ChartPoint[];
@@ -52,6 +53,11 @@ export function AreaChart({
   includeInDomain?: number[];
   /** Optional point markers (e.g. backtest triggers), snapped to the nearest sample. */
   markers?: { t: number; label?: string }[];
+  /**
+   * True only when the last point IS the live book (spliced quote). Gates the
+   * pulsing halo — an hour-old candle must never pretend to be live.
+   */
+  live?: boolean;
   className?: string;
 }) {
   const uid = useId().replace(/:/g, "");
@@ -254,21 +260,23 @@ export function AreaChart({
           </circle>
         ))}
 
-        {/* last point + live pulse (SMIL gated for reduced-motion) */}
+        {/* last point; the pulse halo renders only for a genuinely live edge */}
         <circle cx={lastPt[0]} cy={lastPt[1]} r={3} fill={stroke} />
-        <circle cx={lastPt[0]} cy={lastPt[1]} r={5} fill={stroke} opacity={reduced ? 0.28 : 0.2}>
-          {reduced ? null : (
-            <>
-              <animate attributeName="r" values="4;9;4" dur="2.2s" repeatCount="indefinite" />
-              <animate
-                attributeName="opacity"
-                values="0.28;0;0.28"
-                dur="2.2s"
-                repeatCount="indefinite"
-              />
-            </>
-          )}
-        </circle>
+        {live ? (
+          <circle cx={lastPt[0]} cy={lastPt[1]} r={5} fill={stroke} opacity={reduced ? 0.28 : 0.2}>
+            {reduced ? null : (
+              <>
+                <animate attributeName="r" values="4;9;4" dur="2.2s" repeatCount="indefinite" />
+                <animate
+                  attributeName="opacity"
+                  values="0.28;0;0.28"
+                  dur="2.2s"
+                  repeatCount="indefinite"
+                />
+              </>
+            )}
+          </circle>
+        ) : null}
 
         {hoverPt ? (
           <>

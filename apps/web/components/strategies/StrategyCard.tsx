@@ -1,28 +1,30 @@
 "use client";
 
 /**
- * One strategy on the dashboard — chart-first: a mini price chart with the
- * trigger line drawn on it, a per-section hero metric (edge / regret / dwell /
- * distance), status, plain-English summary, quick actions. Works for v1 rules
- * too — they arrive normalized as definitionV2. Signing NEVER happens here:
- * "Review & sign" opens the existing TriggerConfirm flow.
+ * One strategy on the dashboard, compact by design: mini chart (live-edge
+ * spliced), name, ONE status chip (AUTO folded in), a one-line market/live
+ * caption, the hero metric, and a single primary action — everything else
+ * lives in the "⋯" menu and the side panel. Works for v1 rules too — they
+ * arrive normalized as definitionV2. Signing NEVER happens here: "Review &
+ * sign" opens the existing TriggerConfirm flow.
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
   ChevronRight,
   Copy,
+  MoreHorizontal,
   Pencil,
-  Plus,
   RotateCcw,
   Star,
-  X,
 } from "lucide-react";
 import { Badge, Button, LiveDot, cn } from "@/components/ui";
+import { Popover } from "@/components/ui/Popover";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
+import { LiveCaption } from "@/components/charts/LiveCaption";
 import { FlashOnChange } from "@/components/motion";
 import { cents as centsFine, signedUsd } from "@/lib/format";
 import { useDismissTrigger } from "@/lib/queries";
@@ -33,13 +35,14 @@ import {
   docMarketRefs,
 } from "@/lib/strategies/doc";
 import { layoutDoc } from "@/lib/strategies/layout";
-import { strategySentence, humanDuration } from "@/lib/strategies/sentence";
+import { spliceLive, type LiveQuote } from "@/lib/strategies/live-splice";
 import { cents } from "@/lib/strategies/summaries";
 import { sectionOf } from "@/lib/strategies/sections";
 import { userStatus } from "@/lib/strategies/status";
 import { useBuilderStore } from "@/lib/strategies/store";
 import { useNow } from "@/lib/strategies/use-now";
 import { RenameField } from "./RenameField";
+import { timeAgo, timeLeft } from "./MetaRow";
 import {
   useCreateStrategy,
   useSetStrategyTags,
@@ -50,34 +53,6 @@ import {
   type StrategyRow,
 } from "@/lib/strategies/queries";
 
-const timeAgo = (iso: string | null): string => {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86_400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86_400)}d ago`;
-};
-
-const timeLeft = (ms: number): string => {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 90) return `${s}s`;
-  if (s < 5_400) return `${Math.round(s / 60)}m`;
-  if (s < 129_600) return `${Math.round(s / 3600)}h`;
-  return `${Math.round(s / 86_400)}d`;
-};
-
-/** Estimated exposure: order cost, or the auto limits when armed. */
-const exposure = (row: StrategyRow): string | null => {
-  const a = row.definitionV2.action;
-  if (a.kind !== "order") return null;
-  const cost = a.price * a.size;
-  if (a.execution === "auto" && row.definitionV2.limits) {
-    return `up to $${row.definitionV2.limits.maxTotalNotional.toLocaleString()}`;
-  }
-  return `≈ $${cost.toFixed(2)}`;
-};
-
 const BLOCKED_LABELS: Record<string, string> = {
   liquidity: "liquidity",
   depth: "book depth",
@@ -87,71 +62,6 @@ const BLOCKED_LABELS: Record<string, string> = {
   condition: "a condition",
   empty: "no conditions",
 };
-
-/** Inline tag chips + editor: click + to add (Enter commits), × removes. */
-function TagsRow({ row }: { row: StrategyRow }) {
-  const setTags = useSetStrategyTags();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const tags = row.tags ?? [];
-
-  const commit = () => {
-    const tag = draft.trim().toLowerCase();
-    setDraft("");
-    setEditing(false);
-    if (tag === "" || tags.includes(tag) || tags.length >= 10) return;
-    setTags.mutate({ id: row.id, tags: [...tags, tag] });
-  };
-
-  return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      {tags.map((tag) => (
-        <span
-          key={tag}
-          className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-accent"
-        >
-          {tag}
-          <button
-            type="button"
-            aria-label={`Remove tag ${tag}`}
-            onClick={() => setTags.mutate({ id: row.id, tags: tags.filter((t) => t !== tag) })}
-            className="text-accent/60 transition-colors hover:text-accent"
-          >
-            <X size={9} aria-hidden />
-          </button>
-        </span>
-      ))}
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            if (e.key === "Escape") {
-              setDraft("");
-              setEditing(false);
-            }
-          }}
-          maxLength={24}
-          placeholder="tag name…"
-          aria-label="New tag"
-          className="w-24 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10px] text-fg outline-none focus:border-brand"
-        />
-      ) : tags.length < 10 ? (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          aria-label="Add tag"
-          className="inline-flex items-center gap-0.5 rounded-full border border-dashed border-border px-2 py-0.5 text-[10px] font-medium text-faint transition-colors hover:border-border-strong hover:text-muted"
-        >
-          <Plus size={9} aria-hidden /> tag
-        </button>
-      ) : null}
-    </div>
-  );
-}
 
 /** The one number that answers "what should I do with this card right now?" */
 function HeroMetric({
@@ -258,10 +168,25 @@ function HeroMetric({
   return null;
 }
 
+/** One action the card can take right now — first in the list renders as the button. */
+interface ActionSpec {
+  key: string;
+  label: string;
+  icon?: ReactNode;
+  onClick?: () => void;
+  href?: string;
+  disabled?: boolean;
+  danger?: boolean;
+  title?: string;
+  primaryVariant?: "primary" | "outline";
+}
+
 export function StrategyCard({
   row,
   overview,
   sparklines,
+  books,
+  booksReceivedAtMs,
   onOpen,
   onReviewTrigger,
 }: {
@@ -270,6 +195,10 @@ export function StrategyCard({
   overview?: StrategyOverviewItem | undefined;
   /** Shared per-token sparkline map from the overview response. */
   sparklines?: OverviewResponse["sparklines"] | undefined;
+  /** Shared per-token live books from the overview response (5s poll). */
+  books?: OverviewResponse["books"] | undefined;
+  /** Client-clock time the overview landed (query.dataUpdatedAt). */
+  booksReceivedAtMs?: number | undefined;
   /** Open the strategy panel (falls back to the detail page link). */
   onOpen?: ((id: string) => void) | undefined;
   /** Open the TriggerConfirm flow for an awaiting trigger. */
@@ -283,6 +212,7 @@ export function StrategyCard({
   const dismiss = useDismissTrigger();
   const spawnDraft = useBuilderStore((s) => s.spawnDraft);
   const now = useNow();
+  const [menuOpen, setMenuOpen] = useState(false);
   const def = row.definitionV2;
   const doc = docFromDefinition(def);
   const status = userStatus(row.status, {
@@ -297,13 +227,26 @@ export function StrategyCard({
   const archivable = !row.archivedAt && terminal;
   const starred = row.starredAt !== null;
 
-  // Mini chart: the binding token's recent series with the trigger line drawn.
+  // ONE status chip: AUTO folds into it instead of a second badge.
+  const isAuto = def.action.kind === "order" && def.action.execution === "auto";
+  const degraded = isAuto && Boolean(row.autoDegraded);
+  const chipLabel = isAuto ? `AUTO · ${status.label}` : status.label;
+  const chipTitle = degraded
+    ? "This strategy asks for automatic execution, but the server can't deliver it — triggers will wait for your confirmation."
+    : undefined;
+
+  // Mini chart: the binding token's recent series with the trigger line drawn,
+  // right edge spliced to the live book from the same overview poll.
   const chartToken =
     overview?.proximity?.bindingTokenId ??
     (def.action.kind === "order" ? def.action.market.tokenId : (markets[0]?.tokenId ?? null));
-  const series: ChartPoint[] = (chartToken !== null ? (sparklines?.[chartToken] ?? []) : []).map(
+  const rawSeries: ChartPoint[] = (chartToken !== null ? (sparklines?.[chartToken] ?? []) : []).map(
     (p) => ({ t: p.t, v: p.p }),
   );
+  const book = chartToken !== null ? books?.[chartToken] : undefined;
+  const bookQuote: LiveQuote | null =
+    book && !book.stale ? { bestBid: book.bestBid, bestAsk: book.bestAsk, dataAgeMs: 0 } : null;
+  const { series, spliced } = spliceLive(rawSeries, bookQuote, Date.now());
   const chartThreshold =
     chartToken !== null
       ? ((
@@ -347,6 +290,123 @@ export function StrategyCard({
 
   const triggerId = overview?.actionability?.triggerId ?? null;
 
+  // Everything the card can do, most urgent first: [0] is THE button, the
+  // rest fold into the ⋯ menu. Same handlers as before — this is a re-layout.
+  const actions: ActionSpec[] = [];
+  if (section === "ready" && triggerId !== null && onReviewTrigger) {
+    actions.push({
+      key: "review",
+      label: "Review & sign",
+      onClick: () => onReviewTrigger(triggerId),
+      primaryVariant: "primary",
+    });
+  }
+  if (section === "missed" && triggerId !== null) {
+    if (onReviewTrigger) {
+      actions.push({
+        key: "review-missed",
+        label: "Review",
+        title: "The price moved past your trigger — review the fresh preview before signing.",
+        onClick: () => onReviewTrigger(triggerId),
+        primaryVariant: "outline",
+      });
+    }
+    actions.push({
+      key: "rearm",
+      label: dismiss.isPending || create.isPending ? "Re-arming…" : "Re-arm",
+      icon: <RotateCcw size={11} aria-hidden />,
+      disabled: dismiss.isPending || create.isPending,
+      title: "Dismiss this trigger and arm a fresh copy of the strategy",
+      onClick: () => rearm(triggerId),
+    });
+  }
+  if (active) {
+    actions.push({
+      key: "pause",
+      label: "Pause",
+      disabled: control.isPending,
+      onClick: () => control.mutate({ id: row.id, action: "pause" }),
+    });
+  }
+  if (row.status === "PAUSED") {
+    actions.push({
+      key: "resume",
+      label: "Resume",
+      disabled: control.isPending,
+      onClick: () => control.mutate({ id: row.id, action: "resume" }),
+    });
+  }
+  if (terminal && row.version === 2) {
+    actions.push({
+      key: "restart",
+      label: create.isPending ? "Restarting…" : "Restart",
+      icon: <RotateCcw size={11} aria-hidden />,
+      disabled: create.isPending,
+      title: "Arm a fresh copy of this strategy",
+      onClick: restart,
+    });
+  }
+  if (row.archivedAt) {
+    actions.push({
+      key: "restore",
+      label: "Restore",
+      icon: <ArchiveRestore size={11} aria-hidden />,
+      disabled: control.isPending,
+      onClick: () => control.mutate({ id: row.id, action: "unarchive" }),
+    });
+  }
+  // Triggered rows are not supersedable (store gate) — Re-arm first.
+  if ((active || row.status === "PAUSED") && row.version === 2) {
+    actions.push(
+      onOpen
+        ? {
+            key: "edit",
+            label: "Edit",
+            icon: <Pencil size={11} aria-hidden />,
+            title: "Tune the numbers in the side panel",
+            onClick: () => onOpen(row.id),
+          }
+        : {
+            key: "edit",
+            label: "Edit",
+            icon: <Pencil size={11} aria-hidden />,
+            title: "Open the builder",
+            href: `/strategies/${row.id}/edit`,
+          },
+    );
+  }
+  if (terminal && row.version === 2) {
+    actions.push({
+      key: "duplicate",
+      label: "Duplicate",
+      icon: <Copy size={11} aria-hidden />,
+      title: "Open a copy in the builder to tweak before arming",
+      onClick: duplicateToCanvas,
+    });
+  }
+  if (archivable) {
+    actions.push({
+      key: "archive",
+      label: "Archive",
+      icon: <Archive size={11} aria-hidden />,
+      disabled: control.isPending,
+      title: "Hide from the list (reversible)",
+      onClick: () => control.mutate({ id: row.id, action: "archive" }),
+    });
+  }
+  if (active || row.status === "PAUSED") {
+    actions.push({
+      key: "cancel",
+      label: "Cancel",
+      danger: true,
+      disabled: control.isPending,
+      onClick: () => control.mutate({ id: row.id, action: "cancel" }),
+    });
+  }
+
+  const primary = actions[0];
+  const menuActions = actions.slice(1);
+
   return (
     <div
       className={cn(
@@ -370,6 +430,7 @@ export function StrategyCard({
               data={series}
               height={72}
               showAxis={false}
+              live={spliced}
               valueFormat={(v) => centsFine(v)}
               {...(chartThreshold !== null
                 ? {
@@ -437,45 +498,34 @@ export function StrategyCard({
               )}
             />
             {status.live ? (
-              <LiveDot
-                label={status.label.toUpperCase()}
-                tone={status.tone === "neg" ? "neg" : status.tone === "warn" ? "warn" : "pos"}
-              />
+              <span {...(chipTitle ? { title: chipTitle } : {})}>
+                <LiveDot
+                  label={chipLabel.toUpperCase()}
+                  tone={
+                    degraded || status.tone === "warn"
+                      ? "warn"
+                      : status.tone === "neg"
+                        ? "neg"
+                        : "pos"
+                  }
+                />
+              </span>
             ) : (
-              <Badge tone={status.tone}>{status.label}</Badge>
+              <Badge
+                tone={degraded ? "warn" : status.tone}
+                {...(chipTitle ? { title: chipTitle } : {})}
+              >
+                {chipLabel}
+              </Badge>
             )}
-            {def.action.kind === "order" && def.action.execution === "auto" ? (
-              row.autoDegraded ? (
-                <Badge
-                  tone="warn"
-                  title="This strategy asks for automatic execution, but the server can't deliver it — triggers will wait for your confirmation."
-                >
-                  AUTO UNAVAILABLE
-                </Badge>
-              ) : (
-                <Badge tone="brand">AUTO</Badge>
-              )
-            ) : null}
           </div>
-          <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{strategySentence(doc)}</p>
-          <div className="tabular mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
-            {markets.slice(0, 2).map((m) => (
-              <span key={m.tokenId} className="truncate">
-                {marketLabel(doc, m)}
-              </span>
-            ))}
-            <span>last check {timeAgo(row.lastEvaluatedAt)}</span>
-            {row.triggerCount > 0 ? <span>triggered {row.triggerCount}×</span> : null}
-            {exposure(row) ? <span>exposure {exposure(row)}</span> : null}
-            {row.expiresAt !== null && new Date(row.expiresAt).getTime() > now ? (
-              <span>expires in {timeLeft(new Date(row.expiresAt).getTime() - now)}</span>
-            ) : null}
-            {def.recurrence.kind === "repeat" ? (
-              <span>
-                repeats {row.triggerCount}/{def.recurrence.maxRepeats} ·{" "}
-                {humanDuration(def.recurrence.cooldownMs)} cooldown
-              </span>
-            ) : null}
+          {/* One caption line: the market + how live its data is right now. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-faint">
+            {markets[0] ? <span className="truncate">{marketLabel(doc, markets[0])}</span> : null}
+            <LiveCaption
+              quote={bookQuote}
+              {...(booksReceivedAtMs ? { receivedAtMs: booksReceivedAtMs } : {})}
+            />
           </div>
           {row.errorMessage ? (
             <p className="mt-1.5 text-[12px] text-neg">{row.errorMessage}</p>
@@ -486,140 +536,104 @@ export function StrategyCard({
               the builder.
             </p>
           ) : null}
-          <TagsRow row={row} />
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
           <HeroMetric row={row} item={overview} now={now} />
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            {triggerId !== null && onReviewTrigger && section === "ready" ? (
-              <Button variant="primary" size="sm" onClick={() => onReviewTrigger(triggerId)}>
-                Review &amp; sign
-              </Button>
-            ) : null}
-            {triggerId !== null && section === "missed" ? (
-              <>
-                {onReviewTrigger ? (
+          <div className="flex items-center justify-end gap-1.5">
+            {primary ? (
+              primary.href ? (
+                <Link href={primary.href}>
                   <Button
-                    variant="outline"
+                    variant={primary.primaryVariant ?? "outline"}
                     size="sm"
-                    title="The price moved past your trigger — review the fresh preview before signing."
-                    onClick={() => onReviewTrigger(triggerId)}
+                    {...(primary.title ? { title: primary.title } : {})}
                   >
-                    Sign anyway
-                  </Button>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={dismiss.isPending || create.isPending}
-                  title="Dismiss this trigger and arm a fresh copy of the strategy"
-                  onClick={() => rearm(triggerId)}
-                >
-                  <RotateCcw size={11} aria-hidden />
-                  {dismiss.isPending || create.isPending ? "Re-arming…" : "Re-arm"}
-                </Button>
-              </>
-            ) : null}
-            {active ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={control.isPending}
-                onClick={() => control.mutate({ id: row.id, action: "pause" })}
-              >
-                Pause
-              </Button>
-            ) : null}
-            {row.status === "PAUSED" ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={control.isPending}
-                onClick={() => control.mutate({ id: row.id, action: "resume" })}
-              >
-                Resume
-              </Button>
-            ) : null}
-            {/* Triggered rows are not supersedable (store gate) — Re-arm first. */}
-            {(active || row.status === "PAUSED") && row.version === 2 ? (
-              onOpen ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  title="Tune the numbers in the side panel"
-                  onClick={() => onOpen(row.id)}
-                >
-                  <Pencil size={11} aria-hidden /> Edit
-                </Button>
-              ) : (
-                <Link href={`/strategies/${row.id}/edit`}>
-                  <Button variant="ghost" size="sm" title="Open the builder">
-                    <Pencil size={11} aria-hidden /> Edit
+                    {primary.icon}
+                    {primary.label}
                   </Button>
                 </Link>
+              ) : (
+                <Button
+                  variant={primary.primaryVariant ?? "outline"}
+                  size="sm"
+                  disabled={primary.disabled ?? false}
+                  {...(primary.title ? { title: primary.title } : {})}
+                  onClick={primary.onClick}
+                >
+                  {primary.icon}
+                  {primary.label}
+                </Button>
               )
-            ) : null}
-            {active || row.status === "PAUSED" ? (
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={control.isPending}
-                onClick={() => control.mutate({ id: row.id, action: "cancel" })}
+            ) : (
+              <Link
+                href={`/strategies/${row.id}`}
+                className="inline-flex items-center gap-0.5 rounded-md p-1 text-[12px] font-medium text-muted transition-colors hover:text-fg"
+                aria-label="Open strategy details"
               >
-                Cancel
-              </Button>
-            ) : null}
-            {terminal && row.version === 2 ? (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={create.isPending}
-                  title="Arm a fresh copy of this strategy"
-                  onClick={restart}
+                Details <ChevronRight size={13} aria-hidden />
+              </Link>
+            )}
+            <Popover
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+              label="More strategy actions"
+              panelClassName="min-w-40 p-1.5"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  aria-expanded={menuOpen}
+                  onClick={() => setMenuOpen((v) => !v)}
+                  className="rounded-md border border-border bg-surface p-1.5 text-muted transition-colors hover:border-border-strong hover:text-fg"
                 >
-                  <RotateCcw size={11} aria-hidden />
-                  {create.isPending ? "Restarting…" : "Restart"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  title="Open a copy in the builder to tweak before arming"
-                  onClick={duplicateToCanvas}
-                >
-                  <Copy size={11} aria-hidden /> Duplicate
-                </Button>
-              </>
-            ) : null}
-            {archivable ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={control.isPending}
-                title="Hide from the list (reversible)"
-                onClick={() => control.mutate({ id: row.id, action: "archive" })}
-              >
-                <Archive size={11} aria-hidden /> Archive
-              </Button>
-            ) : null}
-            {row.archivedAt ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={control.isPending}
-                onClick={() => control.mutate({ id: row.id, action: "unarchive" })}
-              >
-                <ArchiveRestore size={11} aria-hidden /> Restore
-              </Button>
-            ) : null}
-            <Link
-              href={`/strategies/${row.id}`}
-              className="inline-flex items-center gap-0.5 rounded-md p-1 text-[12px] font-medium text-muted transition-colors hover:text-fg"
-              aria-label="Open strategy details"
+                  <MoreHorizontal size={14} aria-hidden />
+                </button>
+              }
             >
-              Details <ChevronRight size={13} aria-hidden />
-            </Link>
+              <div className="flex flex-col">
+                {menuActions.map((a) =>
+                  a.href ? (
+                    <Link
+                      key={a.key}
+                      href={a.href}
+                      {...(a.title ? { title: a.title } : {})}
+                      onClick={() => setMenuOpen(false)}
+                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] font-medium text-fg transition-colors hover:bg-surface-2"
+                    >
+                      {a.icon}
+                      {a.label}
+                    </Link>
+                  ) : (
+                    <button
+                      key={a.key}
+                      type="button"
+                      disabled={a.disabled ?? false}
+                      {...(a.title ? { title: a.title } : {})}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        a.onClick?.();
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] font-medium transition-colors disabled:opacity-50",
+                        a.danger ? "text-neg hover:bg-neg/10" : "text-fg hover:bg-surface-2",
+                      )}
+                    >
+                      {a.icon}
+                      {a.label}
+                    </button>
+                  ),
+                )}
+                {menuActions.length > 0 ? <div className="my-1 h-px bg-border" /> : null}
+                <Link
+                  href={`/strategies/${row.id}`}
+                  onClick={() => setMenuOpen(false)}
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] font-medium text-fg transition-colors hover:bg-surface-2"
+                >
+                  Details <ChevronRight size={12} aria-hidden />
+                </Link>
+              </div>
+            </Popover>
           </div>
         </div>
       </div>
