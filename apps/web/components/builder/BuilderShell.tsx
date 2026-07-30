@@ -11,7 +11,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Sparkles } from "lucide-react";
 import { Badge, Button, Segmented, Skeleton, cn } from "@/components/ui";
 import { useSession, useSignIn } from "@/lib/auth";
-import { InviteCodeForm, isAccessError } from "@/components/InviteCodeForm";
 import { ApiError } from "@/lib/api";
 import {
   useFeatureFlags,
@@ -392,7 +391,6 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   );
 
   const signedIn = Boolean(session.data);
-  const allowlisted = Boolean(session.data?.allowlisted);
   const autoReadiness = useAutoReadiness(signedIn);
   const canSave = issues.length === 0 && !create.isPending;
 
@@ -490,28 +488,16 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       data-tour="builder-save"
     >
       {signedIn ? (
-        allowlisted ? (
-          <>
-            <Button className="w-full" disabled={!canSave} onClick={() => setArmOpen(true)}>
-              <Sparkles size={14} aria-hidden />
-              {create.isPending ? "Arming…" : "Arm — start watching"}
-            </Button>
-            <p className="text-[11px] leading-snug text-muted">
-              Arming just starts watching — nothing is bought until you approve it.
-            </p>
-            {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
-          </>
-        ) : (
-          <p className="text-[12px] leading-snug text-muted">
-            Your account isn&apos;t in the beta yet — you can build and simulate freely, and save
-            once you have access.
+        <>
+          <Button className="w-full" disabled={!canSave} onClick={() => setArmOpen(true)}>
+            <Sparkles size={14} aria-hidden />
+            {create.isPending ? "Arming…" : "Arm — start watching"}
+          </Button>
+          <p className="text-[11px] leading-snug text-muted">
+            Arming just starts watching — nothing is bought until you approve it.
           </p>
-        )
-      ) : isAccessError(signIn.error) ? (
-        <InviteCodeForm
-          signIn={signIn}
-          heading="Your draft is ready. Private beta access is required to save, arm, and receive live triggers."
-        />
+          {saveError ? <p className="text-[12px] text-neg">{saveError}</p> : null}
+        </>
       ) : (
         <>
           <Button className="w-full" onClick={() => signIn.mutate()} disabled={signIn.isPending}>
@@ -520,6 +506,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           <p className="text-[11px] leading-snug text-muted">
             Building and simulating is free — no account needed until you save.
           </p>
+          {signIn.error instanceof Error ? (
+            <p className="text-[12px] text-neg">{signIn.error.message}</p>
+          ) : null}
         </>
       )}
     </div>

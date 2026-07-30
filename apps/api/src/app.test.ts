@@ -165,6 +165,7 @@ const mockOrderIntents: OrderIntentStore = {
     throw new Error("not implemented in test");
   },
   findByIdempotencyKey: async () => null,
+  releaseIdempotencyKey: async () => true,
   findById: async () => null,
   listByWallet: async () => [],
   updateStatus: async () => {},

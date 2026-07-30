@@ -330,6 +330,8 @@ const buildRulesApp = (opts: {
   /** Scope of the session the cookie resolves to (null = full session). */
   sessionScope?: unknown;
   signTokens?: SignLinkTokenStore;
+  /** Override the order-intent store (confirm-path intent status checks). */
+  orderIntents?: Partial<OrderIntentStore>;
 }): { app: ReturnType<typeof buildApp>; h: Harness } => {
   const ruleStore = opts.ruleStore ?? makeRuleStore();
   const triggerStore = opts.triggerStore ?? makeTriggerStore();
@@ -424,6 +426,7 @@ const buildRulesApp = (opts: {
       throw new Error("no");
     },
     findByIdempotencyKey: async () => null,
+    releaseIdempotencyKey: async () => true,
     // The confirm route validates linked-intent ownership — serve a row owned
     // by the test wallet for any id so linking succeeds.
     findById: async (id) =>
@@ -504,7 +507,7 @@ const buildRulesApp = (opts: {
     sessions,
     allowlist: noopAllowlist,
     clobCredentials: noopCreds,
-    orderIntents: noopIntents,
+    orderIntents: { ...noopIntents, ...opts.orderIntents },
     runtimeFlags: noopFlags,
     ruleStore,
     triggerStore,
@@ -730,6 +733,33 @@ describe("conditional rules routes", () => {
       payload: {},
     });
     expect(confirm2.json().idempotent).toBe(true);
+    await app.close();
+  });
+
+  it("refuses to confirm on a FAILED intent — the trigger stays signable (409)", async () => {
+    // Fail-closed guard for the disappearing-strategy bug: a submission that
+    // never reached the book must not consume the trigger or complete the rule.
+    const { ruleStore, triggerStore } = await seedTriggered();
+    const { app } = buildRulesApp({
+      ruleStore,
+      triggerStore,
+      orderIntents: {
+        findById: async (id) =>
+          ({ id, walletAddress: WALLET, status: "failed" }) as unknown as Awaited<
+            ReturnType<OrderIntentStore["findById"]>
+          >,
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/rules/triggers/trig-1/confirm",
+      headers: { "content-type": "application/json", cookie: COOKIE },
+      payload: { orderIntentId: "intent-failed" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("INTENT_NOT_SUBMITTED");
+    expect(triggerStore.rows[0]?.status).toBe("awaiting_user");
+    expect(ruleStore.rows[0]?.status).toBe("TRIGGERED_AWAITING_USER");
     await app.close();
   });
 });
@@ -1016,6 +1046,75 @@ describe("trigger detail trading gate", () => {
     const body = res.json() as { tradingEnabled: boolean; warning: string };
     expect(body.tradingEnabled).toBe(true);
     expect(body.warning).toMatch(/ENABLED/);
+    await app.close();
+  });
+
+  it("preview carries the market's negRisk + tickSize for the client signer", async () => {
+    // The browser mirrors these into the signed struct: negRisk selects the
+    // verifying exchange contract (wrong one = invalid signature at the CLOB),
+    // tickSize the amount rounding.
+    const ruleStore = makeRuleStore();
+    const rule = await ruleStore.create({
+      walletAddress: WALLET,
+      conditionId: "cond-1",
+      tokenId: "tok-1",
+      side: "BUY",
+      definition: {
+        ...validRuleBody,
+        version: 1,
+        outcomeSide: "BUY",
+        recurrence: "once",
+        expiresAtMs: null,
+        negRisk: true,
+        tickSize: "0.001",
+      } as unknown as RuleDefinition,
+      definitionHash: "deadbeef",
+      expiresAt: null,
+    });
+    rule.status = "TRIGGERED_AWAITING_USER";
+    const { triggerStore } = await seedTriggered();
+    triggerStore.rows[0]!.ruleId = rule.id;
+    const { app } = buildRulesApp({ ruleStore, triggerStore });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-1",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const preview = res.json().preview as { negRisk: boolean; tickSize: string | null };
+    expect(preview.negRisk).toBe(true);
+    expect(preview.tickSize).toBe("0.001");
+    await app.close();
+  });
+
+  it("preview targets the resolved rolling window, never the stale anchor", async () => {
+    // ADR-0028: for rolling strategies the worker writes the approved window
+    // into evidence.preparedAction — the manual signing preview must read it,
+    // or the user signs an order into a market that is already settling.
+    const { ruleStore, triggerStore } = await seedTriggered();
+    triggerStore.rows[0]!.evidence = {
+      triggeredAtMs: Date.now(),
+      preparedAction: {
+        kind: "order",
+        market: { tokenId: "tok-live-window", conditionId: "cond-live-window" },
+        side: "BUY",
+        price: 0.61,
+        size: 100,
+        orderType: "FOK",
+        execution: "prepare",
+      },
+    };
+    const { app } = buildRulesApp({ ruleStore, triggerStore });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/rules/triggers/trig-1",
+      headers: { cookie: COOKIE },
+    });
+    expect(res.statusCode).toBe(200);
+    const preview = res.json().preview as { tokenId: string; conditionId: string; price: string };
+    expect(preview.tokenId).toBe("tok-live-window");
+    expect(preview.conditionId).toBe("cond-live-window");
+    expect(preview.price).toBe("0.61");
     await app.close();
   });
 });

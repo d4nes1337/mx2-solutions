@@ -23,6 +23,7 @@ import {
   SignedClobOrderSchema,
   build1271SignedOrder,
   buildClobAuthTypedData,
+  verifyOrderSignature,
 } from "@mx2/polymarket-client";
 import type { TradingSigner } from "@mx2/trading-signer";
 import { makeRequireAuth, makeRequireScopedAuth } from "../middleware/require-auth.js";
@@ -434,6 +435,11 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
       }
 
       // Idempotency: if a matching intent already exists, return its current state.
+      // A FAILED intent is the one exception — it never reached the book, so the
+      // user must be able to retry (re-sign) the same trigger. The failed row's
+      // key is released (kept for audit under a derived key) and this request
+      // proceeds as a fresh submission. Returning the failed replay as HTTP 200
+      // here is what used to silently consume triggers with no order placed.
       const existing = await deps.orderIntents.findByIdempotencyKey(idempotencyKey);
       if (existing) {
         if (existing.walletAddress !== user.walletAddress) {
@@ -443,12 +449,32 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
             message: "Idempotency key belongs to a different user.",
           };
         }
-        return {
-          intentId: existing.id,
-          clobOrderId: existing.clobOrderId,
-          status: existing.status,
-          idempotent: true,
-        };
+        if (existing.status !== "failed") {
+          return {
+            intentId: existing.id,
+            clobOrderId: existing.clobOrderId,
+            status: existing.status,
+            idempotent: true,
+          };
+        }
+        const released = await deps.orderIntents.releaseIdempotencyKey(existing.id);
+        if (!released) {
+          // Lost a race with another retry or a status change — replay whatever
+          // the row says now rather than double-submitting.
+          const current = await deps.orderIntents.findById(existing.id);
+          return {
+            intentId: existing.id,
+            clobOrderId: current?.clobOrderId ?? existing.clobOrderId,
+            status: current?.status ?? existing.status,
+            idempotent: true,
+          };
+        }
+        await deps.auditStore.emit({
+          actor: user.walletAddress,
+          action: "order.retry_after_failure",
+          subject: `intent:${existing.id}`,
+          metadata: { idempotencyKey, previousError: existing.errorMessage ?? null },
+        });
       }
 
       // Scoped sessions submit only while their trigger still awaits the user
@@ -671,6 +697,33 @@ export const registerTradeRoutes = (app: FastifyInstance, deps: TradeRoutesDeps)
           return {
             error: "ORDER_BUILDER_MISMATCH",
             message: "Signed order is missing or carries the wrong builder attribution code.",
+          };
+        }
+        // Pre-flight ECDSA check: recover the EIP-712 signer locally before the
+        // CLOB sees the order. This turns the CLOB's opaque
+        // "invalid POLY_GNOSIS_SAFE signature" 400 into an actionable client
+        // error (wrong exchange domain, corrupted payload, wrong wallet) and
+        // blocks unverifiable payloads fail-closed. ECDSA types only —
+        // POLY_1271 envelopes can't be recovered this way (server path above).
+        const sigCheck = await verifyOrderSignature(signedOrder, 137);
+        if (!sigCheck.valid) {
+          await deps.auditStore.emit({
+            actor: user.walletAddress,
+            action: "order.signature_invalid",
+            subject: `idem:${idempotencyKey}`,
+            metadata: {
+              tradingAccountId: account.id,
+              reason: sigCheck.reason,
+              signatureType: signedOrder.signatureType,
+            },
+          });
+          reply.code(400);
+          return {
+            error: "ORDER_SIGNATURE_INVALID",
+            message:
+              sigCheck.reason === "wrong_signer"
+                ? "The order signature does not match the signing wallet. Reconnect the selected wallet and sign again."
+                : "The order signature could not be verified. Please sign the order again.",
           };
         }
         tokenId = signedOrder.tokenId;

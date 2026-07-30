@@ -122,4 +122,39 @@ describe("buildAndSignOrder", () => {
     expect(signed.signature).toBe("0xdeadbeef");
     expect(signed.side).toBe("BUY");
   });
+
+  it("carries the trading account's signatureType into the signed struct", async () => {
+    const provider = { request: vi.fn().mockResolvedValue("0xdeadbeef") };
+    const signed = await buildAndSignOrder(provider, {
+      tokenId: TOKEN,
+      side: "BUY",
+      price: "0.5",
+      size: "10",
+      funder: SIGNER, // EOA path: maker == signer
+      signer: SIGNER,
+      signatureType: 0,
+      chainId: 137,
+      timestamp: "1700000000000",
+    });
+    expect(signed.signatureType).toBe(0);
+    const typed = JSON.parse(provider.request.mock.calls[0]![0].params[1] as string);
+    expect(typed.message.signatureType).toBe(0);
+  });
+
+  it("signs against the neg-risk exchange when the preview says negRisk", async () => {
+    const provider = { request: vi.fn().mockResolvedValue("0xdeadbeef") };
+    await buildAndSignOrder(provider, {
+      tokenId: TOKEN,
+      side: "BUY",
+      price: "0.5",
+      size: "10",
+      funder: FUNDER,
+      signer: SIGNER,
+      chainId: 137,
+      negRisk: true,
+      timestamp: "1700000000000",
+    });
+    const typed = JSON.parse(provider.request.mock.calls[0]![0].params[1] as string);
+    expect(typed.domain.verifyingContract).toBe("0xe2222d279d744050d28e00520010520000310F59");
+  });
 });

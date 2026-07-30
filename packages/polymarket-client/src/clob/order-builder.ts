@@ -1,4 +1,4 @@
-import { getAddress, parseUnits } from "viem";
+import { getAddress, parseUnits, recoverTypedDataAddress, type Hex } from "viem";
 import { ok, type Result } from "@mx2/core";
 import type { OrderSide, SignedClobOrder } from "./schema.js";
 import { SIGNATURE_TYPE_POLY_GNOSIS_SAFE } from "./schema.js";
@@ -240,4 +240,61 @@ export async function buildAndSignEoaOrder<E>(
   const signed = await sign(typedData);
   if (!signed.ok) return signed;
   return ok({ ...order, signature: signed.value.signature });
+}
+
+// ── Pre-flight signature verification (server-side) ──────────────────────────
+
+export type OrderSignatureCheck =
+  /** ECDSA recovers to `order.signer` under one of the two V2 exchange domains. */
+  { valid: true; negRisk: boolean } | { valid: false; reason: "unverifiable" | "wrong_signer" };
+
+/**
+ * Recover the EIP-712 signer of a wire `SignedClobOrder` and compare it to the
+ * order's declared `signer`. Tries BOTH V2 exchange domains (standard and
+ * neg-risk) because the wire payload does not say which one was signed — the
+ * matched domain is returned so callers can cross-check it against the
+ * market's actual negRisk flag.
+ *
+ * Only meaningful for ECDSA types (EOA=0, POLY_PROXY=1, POLY_GNOSIS_SAFE=2),
+ * where the CLOB recovers the EOA exactly like this before its ownership
+ * checks. POLY_1271 (3) signatures are ERC-7739 envelopes — callers must skip
+ * this check for those.
+ */
+export async function verifyOrderSignature(
+  order: SignedClobOrder,
+  chainId: number,
+): Promise<OrderSignatureCheck> {
+  const struct: OrderStruct = {
+    salt: String(order.salt),
+    maker: order.maker,
+    signer: order.signer,
+    tokenId: order.tokenId,
+    makerAmount: order.makerAmount,
+    takerAmount: order.takerAmount,
+    side: order.side === 0 || order.side === "BUY" ? "BUY" : "SELL",
+    signatureType: order.signatureType,
+    timestamp: order.timestamp,
+    metadata: order.metadata,
+    builder: order.builder,
+    expiration: order.expiration ?? "0",
+  };
+  const expected = order.signer.toLowerCase();
+  let sawRecovery = false;
+  for (const negRisk of [false, true]) {
+    const { domain, message } = buildOrderTypedData(struct, chainId, negRisk);
+    try {
+      const recovered = await recoverTypedDataAddress({
+        domain: { ...domain, verifyingContract: domain.verifyingContract as Hex },
+        types: { Order: ORDER_STRUCTURE_V2 },
+        primaryType: "Order",
+        message,
+        signature: order.signature as Hex,
+      });
+      sawRecovery = true;
+      if (recovered.toLowerCase() === expected) return { valid: true, negRisk };
+    } catch {
+      // Malformed signature bytes — fall through to the unverifiable verdict.
+    }
+  }
+  return { valid: false, reason: sawRecovery ? "wrong_signer" : "unverifiable" };
 }

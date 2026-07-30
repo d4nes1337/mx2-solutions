@@ -21,6 +21,7 @@ import { autoFailureCopy } from "@/lib/strategies/auto-reasons";
 import { spliceLive, type LiveQuote } from "@/lib/strategies/live-splice";
 import type { ActionCenterResponse } from "@/lib/types";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
+import { ensurePolygonChain } from "@/lib/chain";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { LiveCaption } from "@/components/charts/LiveCaption";
 import { PolymarketLink } from "@/components/PolymarketLink";
@@ -123,6 +124,9 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
     if (!d) return;
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
+      // Polygon first: every order signature is an EIP-712 payload pinned to
+      // chain 137 — switch the wallet over so strict wallets don't refuse.
+      await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId: d.preview.tokenId,
         side: d.preview.side,
@@ -130,13 +134,19 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
         size: d.preview.size,
         funder,
         signer: activeAccount.signerAddress,
+        // The account's real type — hardcoding Gnosis-Safe here broke every
+        // non-Safe wallet with "invalid POLY_GNOSIS_SAFE signature".
+        signatureType: activeAccount.signatureType,
         builderCode: d.preview.builderCode,
         chainId: 137,
         // GTD entry windows: the API preview computed the wire expiration
         // (trigger time + window + 60s compensation, ADR-0013).
         ...(d.preview.expiration ? { expiration: d.preview.expiration } : {}),
-        // MVP: neg-risk markets for triggered orders are a follow-up (see RFC-0001).
-        negRisk: false,
+        // Market metadata from the preview: negRisk picks the verifying
+        // exchange contract, tickSize the amount rounding. Signing a neg-risk
+        // market against the standard exchange is an invalid signature.
+        negRisk: d.preview.negRisk ?? false,
+        ...(d.preview.tickSize ? { tickSize: d.preview.tickSize } : {}),
       });
       const res = await submit.mutateAsync({
         tradingAccountId: activeAccount.id,
@@ -148,6 +158,13 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
         postOnly: d.preview.postOnly,
         order,
       });
+      // A replayed FAILED intent must never read as success — confirming the
+      // trigger on it is how strategies used to vanish with no order placed.
+      if (res.status === "failed") {
+        throw new Error(
+          "The previous submission attempt failed and could not be retried — please sign again.",
+        );
+      }
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });
       onClose();
     } catch (e) {

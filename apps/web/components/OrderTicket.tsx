@@ -14,6 +14,7 @@ import { ApiError } from "@/lib/api";
 import { signedUsd } from "@/lib/format";
 import { buildPreviewRequest } from "@/lib/orders";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
+import { ensurePolygonChain } from "@/lib/chain";
 import { computePayoff } from "@/lib/strategies/projection";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
@@ -177,6 +178,8 @@ export function OrderTicket({
     }
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
+      // Polygon first — the EIP-712 domain pins chainId 137.
+      await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId,
         side,
@@ -184,6 +187,8 @@ export function OrderTicket({
         size,
         funder,
         signer: activeAccount.signerAddress,
+        // The account's real Polymarket signature type (not hardcoded Safe).
+        signatureType: activeAccount.signatureType,
         builderCode: tradeStatus.data?.builderCode ?? undefined,
         chainId: 137,
         negRisk,

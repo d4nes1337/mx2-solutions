@@ -3,6 +3,7 @@
 import { useAccount } from "wagmi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "./api";
+import { ensurePolygonChain } from "./chain";
 import { clearStoredRefCode, getStoredRefCode } from "./referral";
 import type { LoginChallenge, Me } from "./types";
 
@@ -54,6 +55,10 @@ export function useSignIn() {
       );
 
       const provider = (await connector.getProvider()) as Eip1193Provider;
+      // Best-effort: strict wallets (mobile, some WalletConnect impls) refuse
+      // typed data for a chain they are not on — switch to Polygon first. A
+      // decline is fine; the signature attempt still proceeds.
+      await ensurePolygonChain(provider);
       const signature = await provider.request({
         method: "eth_signTypedData_v4",
         params: [address, JSON.stringify(challenge.typedData)],

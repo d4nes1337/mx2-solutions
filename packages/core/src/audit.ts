@@ -22,6 +22,10 @@ export const AUDIT_ACTIONS = [
   "order.cancel_failed",
   "order.failed",
   "order.rate_limited",
+  /** A failed intent's idempotency key was released so the user could retry. */
+  "order.retry_after_failure",
+  /** A browser-signed order failed local EIP-712 recovery before submission. */
+  "order.signature_invalid",
   /** A browser-signed order was rejected for a missing/wrong builder code (§7.1). */
   "order.builder_mismatch",
   "rule.created",

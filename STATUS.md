@@ -1,8 +1,30 @@
 # Project Status
 
-_Last updated: 2026-07-28_
+_Last updated: 2026-07-30_
 
 ## Recent
+
+- **Public-release signing hardening + open access (owner-directed 2026-07-30; D-056,
+  D-057).** The reported `invalid POLY_GNOSIS_SAFE signature` 400s and the
+  strategy-disappears-after-retry bug are fixed as a set. Browser signing now uses the
+  trading account's stored `signatureType` (was hardcoded Gnosis-Safe) and mirrors the
+  market's `negRisk`/`tickSize` from the trigger preview into the signed struct — signing a
+  neg-risk market against the standard exchange was an unconditional invalid signature.
+  Rolling strategies' manual signing now reads `evidence.preparedAction` (the worker-resolved
+  live window), never the definition's stale anchor. The submit route recovers every
+  browser signature locally before the CLOB sees it (400 `ORDER_SIGNATURE_INVALID` with
+  actionable copy + audit, both exchange domains tried); a FAILED intent no longer replays
+  as success — its idempotency key is released (`<key>#failed#<id>` kept for audit) and the
+  retry submits fresh, while trigger confirm 409s (`INTENT_NOT_SUBMITTED`) on
+  failed/cancelled intents so a strategy can never complete with no order on the book. All
+  signing surfaces (sign-in, CLOB credential setup, order ticket, trigger modal, mobile sign
+  page) best-effort switch the wallet to Polygon first (`ensurePolygonChain`, add-chain
+  fallback, never blocks the signature). **Access**: `FEATURE_OPEN_BETA` defaults ON —
+  every wallet that signs in is auto-allowlisted (revocation + referral attribution intact);
+  the builder beta block, invite-code forms, and waitlist modal are removed from the UI.
+  Tests: golden-vector EIP-712 recovery (both exchange domains, real key), retry-after-failure,
+  invalid-signature 400, failed-intent confirm 409, preview negRisk/tickSize +
+  preparedAction targeting, chain-switch helper — root 929 + web 401 all green.
 
 - **Referral system + admin panel + volume stats (owner decisions 2026-07-28; ADR-0028,
   D-051, migration 0022).** Beta access is now referral-driven: every allowlisted user gets a

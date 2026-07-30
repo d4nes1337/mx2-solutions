@@ -169,3 +169,19 @@ _Last updated: 2026-07-28. Ordered with the top blocker first._
   silently mis-sign. Mitigation: monitor upstream; the contract test flags an envelope change on
   the next SDK bump. Status: Open (watch); async-execution response change (1.1.0, `tradeIDs`) is
   already absorbed by the tolerant `SubmitOrderResponseSchema`.
+
+### Public release: open access + signing hardening (D-056/D-057, 2026-07-30)
+
+- **R-053 (NEW, LOW/MED): open beta removes the access gate.** `FEATURE_OPEN_BETA` defaults
+  true: any wallet that completes EIP-712 sign-in gets an allowlist row automatically, so
+  abuse control shifts entirely to per-route rate limits (login 20/min/IP, order
+  rate-limit/min, AI caps) and per-wallet revocation via the admin panel (sessions cut
+  immediately — the session-store gate re-checks every request). Referral codes no longer
+  gate anything (attribution only). Mitigation: monitor sign-up and order volume at release;
+  re-gate is a single env flip (`FEATURE_OPEN_BETA=false`) with no code change. Status: Open
+  (accepted by owner for public release).
+- **R-054 (NEW, LOW): pre-flight signature recovery adds CPU work per browser order.** Every
+  browser-signed submit now runs up to two `recoverTypedDataAddress` calls (~1ms each)
+  before the CLOB sees the order. Bounded by the existing per-wallet order rate limit;
+  worst case is CPU, never correctness (recovery failure fail-closes with a 400). Status:
+  Open (monitor at load; drop the second domain try if it ever matters).

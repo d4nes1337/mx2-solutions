@@ -109,8 +109,15 @@ export interface BuildOrderInput {
   side: OrderSide;
   price: string;
   size: string;
+  /** Funds owner (maker). For EOA (type 0) this must equal `signer`. */
   funder: string;
   signer: string;
+  /**
+   * Polymarket SignatureType of the trading account (EOA=0, POLY_PROXY=1,
+   * POLY_GNOSIS_SAFE=2). Must match the account's stored type — the API
+   * rejects a mismatch. Defaults to POLY_GNOSIS_SAFE for backward compat.
+   */
+  signatureType?: number;
   tickSize?: TickSize;
   /** Public builder identifier (bytes32); defaults to zero. */
   builderCode?: string | null;
@@ -154,7 +161,7 @@ export function buildOrderStruct(input: BuildOrderInput, salt = generateOrderSal
     makerAmount: parseUnits(rawMakerAmt.toString(), COLLATERAL_DECIMALS).toString(),
     takerAmount: parseUnits(rawTakerAmt.toString(), COLLATERAL_DECIMALS).toString(),
     side,
-    signatureType: SIGNATURE_TYPE_POLY_GNOSIS_SAFE,
+    signatureType: input.signatureType ?? SIGNATURE_TYPE_POLY_GNOSIS_SAFE,
     timestamp: input.timestamp ?? Date.now().toString(),
     metadata: BYTES32_ZERO,
     builder: input.builderCode ?? BYTES32_ZERO,

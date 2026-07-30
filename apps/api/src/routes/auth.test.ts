@@ -128,7 +128,9 @@ const buildAuthApp = async (opts: {
 }): Promise<Harness> => {
   const config = loadConfig({
     DATABASE_URL: "postgresql://u:p@localhost:5432/db",
-    ...(opts.openBeta ? { FEATURE_OPEN_BETA: "true" } : {}),
+    // Explicit both ways: the config default is now open-beta ON (public
+    // release), so gated-path tests must pin it off rather than rely on it.
+    FEATURE_OPEN_BETA: opts.openBeta ? "true" : "false",
     ...(opts.adminWallet ? { ADMIN_WALLET_ADDRESSES: ADDRESS } : {}),
     ...(opts.privySigning
       ? {

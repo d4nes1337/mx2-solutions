@@ -17,6 +17,7 @@ import { getTelegramWebApp } from "@/lib/telegram";
 import { ApiError } from "@/lib/api";
 import { friendlySubmitError } from "@/lib/order-errors";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
+import { ensurePolygonChain } from "@/lib/chain";
 import type { TriggerDetailResponse } from "@/lib/types";
 import { Badge, Button, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
 import { CheckDraw, FadeRise } from "@/components/motion/primitives";
@@ -215,6 +216,9 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
     if (!limitValid) return setSignError("Limit price must be between 1¢ and 99¢.");
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
+      // Polygon first — mobile wallets are the strictest about signing
+      // typed data for a chain they are not on.
+      await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId: preview.tokenId,
         side: preview.side,
@@ -222,12 +226,16 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
         size: preview.size,
         funder: account.funderAddress,
         signer: account.signerAddress,
+        // The account's real type — hardcoding Gnosis-Safe broke non-Safe wallets.
+        signatureType: account.signatureType,
         builderCode: preview.builderCode,
         chainId: 137,
         // GTD entry window (server-computed wire expiration) applies to the
         // resting path only; a market take has no expiration.
         ...(mode === "limit" && preview.expiration ? { expiration: preview.expiration } : {}),
-        negRisk: false,
+        // negRisk selects the verifying exchange contract; tickSize the rounding.
+        negRisk: preview.negRisk ?? false,
+        ...(preview.tickSize ? { tickSize: preview.tickSize } : {}),
       });
       const res = await submit.mutateAsync({
         tradingAccountId: account.id,
@@ -239,6 +247,12 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
         postOnly: mode === "limit" ? preview.postOnly : false,
         order,
       });
+      // A replayed FAILED intent is not a success — never confirm the trigger on it.
+      if (res.status === "failed") {
+        throw new Error(
+          "The previous submission attempt failed and could not be retried — please sign again.",
+        );
+      }
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });
       setDone("signed");
     } catch (e) {

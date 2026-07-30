@@ -299,6 +299,7 @@ const buildAiApp = (opts: {
       throw new Error("no");
     },
     findByIdempotencyKey: async () => null,
+    releaseIdempotencyKey: async () => true,
     findById: async () => null,
     listByWallet: async () => [],
     updateStatus: async () => {},

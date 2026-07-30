@@ -150,7 +150,10 @@ const EnvSchema = z.object({
   FEATURE_AI_WEB_SEARCH: boolFromEnv(false),
   // Open beta: auto-allowlist every wallet that completes EIP-712 sign-in.
   // Allowlist table stays the source of truth (per-wallet revocation intact).
-  FEATURE_OPEN_BETA: boolFromEnv(false),
+  // DEFAULT ON since the public release (owner decision 2026-07-30): the app
+  // is open to every wallet; set FEATURE_OPEN_BETA=false to re-gate access
+  // behind referral/invite codes.
+  FEATURE_OPEN_BETA: boolFromEnv(true),
   // Referral system: plaintext multi-use codes gate beta access, every
   // allowlisted user gets a personal code, /admin panel manages them.
   FEATURE_REFERRALS: boolFromEnv(false),

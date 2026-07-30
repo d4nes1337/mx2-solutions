@@ -1189,7 +1189,10 @@ export interface TriggerDetailResponse {
     expiration: string | null;
     maxSpend: string;
     builderCode: string | null;
-    signatureType: number;
+    /** Market metadata the signer must mirror into the struct: negRisk picks
+     * the verifying exchange contract, tickSize the amount rounding. */
+    negRisk?: boolean;
+    tickSize?: "0.1" | "0.01" | "0.001" | "0.0001" | null;
     timestamp: string;
   };
   /** Primary trading-account signing context (for the mobile sign page,
@@ -1200,6 +1203,8 @@ export interface TriggerDetailResponse {
     signerAddress: string;
     funderAddress: string | null;
     signingMode: "browser" | "server";
+    /** Polymarket SignatureType the account's orders must carry (0/1/2/3). */
+    signatureType: number;
     credentialsReady: boolean;
   } | null;
   tradingEnabled: boolean;

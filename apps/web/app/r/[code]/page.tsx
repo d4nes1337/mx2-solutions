@@ -24,7 +24,7 @@ export default function ReferralLandingPage() {
     <div className="flex min-h-[50vh] items-center justify-center">
       <div className="flex items-center gap-2 text-sm text-muted">
         <KeyRound size={14} aria-hidden />
-        Applying invite code…
+        Applying referral code…
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
+import { privateKeyToAccount } from "viem/accounts";
 import { ok, err } from "@mx2/core";
 import { loadConfig } from "@mx2/config";
 import { createLogger } from "@mx2/observability";
@@ -39,6 +40,7 @@ import type {
   DepositWalletRelayer,
   BridgeClient,
 } from "@mx2/polymarket-client";
+import { buildOrderTypedData, type OrderStruct } from "@mx2/polymarket-client";
 import { createMockTradingSigner, type TradingSigner } from "@mx2/trading-signer";
 import { buildApp, type DbProbe } from "../app.js";
 import { encryptCredentials } from "../auth/crypto.js";
@@ -106,9 +108,30 @@ const upstreamErr: PolymarketError = {
   statusCode: 502,
 };
 
-const WALLET = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+// The submit route recovers every browser-signed order's EIP-712 signature
+// before forwarding, so the test wallet must be a REAL key. Well-known test
+// key (anvil #0) — never used with funds anywhere.
+const ORDER_SIGNER_KEY =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+const orderSignerAccount = privateKeyToAccount(ORDER_SIGNER_KEY);
+const WALLET = orderSignerAccount.address.toLowerCase();
 const TRADING_ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const FUNDER = "0xf000000000000000000000000000000000000001";
+
+/** Sign an order struct exactly as a browser wallet would (V2 domain, chain 137). */
+const signTestOrder = async (order: Omit<OrderStruct, "expiration"> & { expiration?: string }) => {
+  const { domain, types, message } = buildOrderTypedData(
+    { ...order, expiration: order.expiration ?? "0" },
+    137,
+    false,
+  );
+  return orderSignerAccount.signTypedData({
+    domain: { ...domain, verifyingContract: domain.verifyingContract as `0x${string}` },
+    types: { Order: types.Order },
+    primaryType: "Order",
+    message,
+  });
+};
 // The configured builder code (matches the live-trading test configs); every
 // browser-signed order must carry it or the API rejects ORDER_BUILDER_MISMATCH.
 const BUILDER_CODE = "0xe6121e8b7691171b67b6063142c42bfbf8ecf86b1b891bdf52f17d1aecea6be0";
@@ -236,6 +259,7 @@ const mockOrderIntents: OrderIntentStore = {
     throw new Error("not implemented");
   },
   findByIdempotencyKey: async () => null,
+  releaseIdempotencyKey: async () => true,
   findById: async () => null,
   listByWallet: async () => [],
   updateStatus: async () => {},
@@ -778,7 +802,7 @@ describe("POST /api/trade/orders", () => {
       salt: "123456",
       maker: FUNDER,
       signer: WALLET,
-      tokenId: "0xtoken",
+      tokenId: "123456789",
       makerAmount: "45000000",
       takerAmount: "100000000",
       side: "BUY",
@@ -787,9 +811,14 @@ describe("POST /api/trade/orders", () => {
       metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
       builder: BUILDER_CODE,
       expiration: "0",
-      signature: "0xsig",
+      signature: "", // real signature assigned in beforeAll below
     },
   };
+  beforeAll(async () => {
+    validOrderBody.order.signature = await signTestOrder(
+      validOrderBody.order as unknown as OrderStruct,
+    );
+  });
 
   it("returns 401 without session", async () => {
     const app = buildTestApp();
@@ -863,6 +892,127 @@ describe("POST /api/trade/orders", () => {
     expect(body.intentId).toBe("existing-id");
     expect(body.clobOrderId).toBe("clob-order-abc");
     expect(body.idempotent).toBe(true);
+    await app.close();
+  });
+
+  it("retries after a FAILED intent instead of replaying it as success", async () => {
+    // The disappearing-strategy bug: attempt 1 fails at the CLOB, attempt 2
+    // used to return the failed intent as HTTP 200 (client then confirmed the
+    // trigger with no order on the book). Now the failed row's key is released
+    // and the retry is a fresh, real submission.
+    const failedIntent: OrderIntentRow = {
+      id: "failed-id",
+      walletAddress: WALLET,
+      tradingAccountId: TRADING_ACCOUNT_ID,
+      idempotencyKey: "test-idem-key-1",
+      conditionId: "0xcondition",
+      tokenId: "123456789",
+      side: "BUY",
+      price: "0.45",
+      size: "100",
+      orderType: "GTC",
+      funder: FUNDER,
+      signer: WALLET,
+      signatureType: 2,
+      signingMode: "browser",
+      status: "failed",
+      clobOrderId: null,
+      errorMessage: "HTTP 400: invalid POLY_GNOSIS_SAFE signature",
+      filledSize: "0",
+      avgFillPrice: null,
+      lastSyncedAt: null,
+      metadata: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const released: string[] = [];
+    const createdIntent: OrderIntentRow = {
+      ...failedIntent,
+      id: "retry-id",
+      status: "pending",
+      errorMessage: null,
+    };
+    const retryIntents: OrderIntentStore = {
+      ...mockOrderIntents,
+      findByIdempotencyKey: async (key) => (key === "test-idem-key-1" ? failedIntent : null),
+      releaseIdempotencyKey: async (id) => {
+        released.push(id);
+        return true;
+      },
+      create: async () => createdIntent,
+      updateStatus: async () => {},
+    };
+    const events: string[] = [];
+    const credsStore: ClobCredentialStore = {
+      ...mockClobCredentials,
+      find: async () => makeFakeCredsRow(),
+    };
+    const submittingClob: AuthenticatedClobClient = {
+      ...mockTradingClobClient,
+      submitOrder: async () => ok({ orderID: "clob-retry", status: "live" }),
+    };
+    const app = buildTestApp({
+      cfg: configTradingEnabled,
+      sessions: mockSessionsAuthed,
+      orderIntents: retryIntents,
+      clobCredentials: credsStore,
+      tradingClobClient: submittingClob,
+      auditStore: {
+        ...mockAuditStore,
+        emit: async (e) => {
+          events.push(e.action);
+          return mockAuditStore.emit(e);
+        },
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify(validOrderBody),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as Record<string, unknown>;
+    expect(body.intentId).toBe("retry-id");
+    expect(body.clobOrderId).toBe("clob-retry");
+    expect(released).toEqual(["failed-id"]);
+    expect(events).toContain("order.retry_after_failure");
+    expect(events).toContain("order.submitted");
+    await app.close();
+  });
+
+  it("rejects a browser order whose signature does not recover (ORDER_SIGNATURE_INVALID)", async () => {
+    const events: string[] = [];
+    const app = buildTestApp({
+      cfg: configTradingEnabled,
+      sessions: mockSessionsAuthed,
+      auditStore: {
+        ...mockAuditStore,
+        emit: async (e) => {
+          events.push(e.action);
+          return mockAuditStore.emit(e);
+        },
+      },
+    });
+    // A signature over DIFFERENT order contents recovers to a different
+    // address than the declared signer — exactly what the CLOB would 400 on.
+    const foreignSignature = await signTestOrder({
+      ...validOrderBody.order,
+      makerAmount: "46000000",
+    } as unknown as OrderStruct);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/trade/orders",
+      headers: { "content-type": "application/json", cookie: "mx2_session=tok" },
+      body: JSON.stringify({
+        ...validOrderBody,
+        order: { ...validOrderBody.order, signature: foreignSignature },
+      }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("ORDER_SIGNATURE_INVALID");
+    expect(events).toContain("order.signature_invalid");
+    // Fail-closed BEFORE any intent exists: nothing to confirm, nothing consumed.
     await app.close();
   });
 
@@ -980,7 +1130,7 @@ describe("POST /api/trade/orders", () => {
     expect(forwarded!.orderType).toBe("GTC");
     expect(forwarded!.order).toMatchObject({
       signatureType: 2,
-      signature: "0xsig",
+      signature: validOrderBody.order.signature,
       side: "BUY",
       timestamp: "1700000000000",
     });
@@ -2994,6 +3144,25 @@ describe("POST /api/trade/orders (restricted sessions)", () => {
     }),
   };
 
+  // Real signature (assigned in beforeAll) — the submit route recovers it.
+  let scopedSignature = "";
+  const scopedOrder = {
+    salt: "123456",
+    maker: FUNDER,
+    signer: WALLET,
+    tokenId: "123456789",
+    makerAmount: "45000000",
+    takerAmount: "100000000",
+    side: "BUY",
+    signatureType: 2,
+    timestamp: "1700000000000",
+    metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    builder: BUILDER_CODE,
+    expiration: "0",
+  };
+  beforeAll(async () => {
+    scopedSignature = await signTestOrder(scopedOrder as unknown as OrderStruct);
+  });
   const scopedOrderBody = (idempotencyKey: string) => ({
     tradingAccountId: TRADING_ACCOUNT_ID,
     idempotencyKey,
@@ -3001,21 +3170,7 @@ describe("POST /api/trade/orders (restricted sessions)", () => {
     price: "0.45",
     size: "100",
     orderType: "GTC",
-    order: {
-      salt: "123456",
-      maker: FUNDER,
-      signer: WALLET,
-      tokenId: "0xtoken",
-      makerAmount: "45000000",
-      takerAmount: "100000000",
-      side: "BUY",
-      signatureType: 2,
-      timestamp: "1700000000000",
-      metadata: "0x0000000000000000000000000000000000000000000000000000000000000000",
-      builder: BUILDER_CODE,
-      expiration: "0",
-      signature: "0xsig",
-    },
+    order: { ...scopedOrder, signature: scopedSignature },
   });
 
   const awaitingTriggerStore: TriggerStore = {

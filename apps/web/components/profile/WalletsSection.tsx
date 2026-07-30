@@ -13,6 +13,7 @@ import {
 } from "@/lib/queries";
 import type { TradingAccount } from "@/lib/types";
 import { signClobAuth } from "@/lib/clob-auth";
+import { ensurePolygonChain } from "@/lib/chain";
 import type { Eip1193Provider } from "@/lib/order-sign";
 import { Badge, Button, Card, CardHeader, ErrorNote, Spinner } from "@/components/ui";
 import { WalletCard } from "./WalletCard";
@@ -76,6 +77,8 @@ export function WalletsSection({
     }
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
+      // The ClobAuth domain pins chainId 137 — switch strict wallets first.
+      await ensurePolygonChain(provider);
       const clobAuth = await signClobAuth(provider, address, 137);
       await setupCreds.mutateAsync({
         ...clobAuth,

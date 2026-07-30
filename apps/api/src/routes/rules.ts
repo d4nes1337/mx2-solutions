@@ -25,6 +25,7 @@ import {
   spread,
   type BookLevel,
   type MarketDataView,
+  type OrderActionV2,
   type RuleDefinition,
   type StrategyDefinition,
 } from "@mx2/rules";
@@ -158,9 +159,18 @@ const evaluateAgainstSnapshot = (
  * triggeredAtMs + expiresAfterMs + 60s (Polymarket expires GTD orders ~1 min
  * before the stated timestamp — ADR-0013). null expiration = "0" (no expiry).
  */
-const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggeredAtMs?: number) => {
-  if (def.action.kind !== "order") return null;
-  const { market, side, price, size, orderType, postOnly, expiresAfterMs, execution } = def.action;
+const buildOrderPreview = (
+  def: StrategyDefinition,
+  config: AppConfig,
+  triggeredAtMs?: number,
+  /** Rolling strategies: the window the worker resolved at trigger time
+   * (evidence.preparedAction). When present it is the ONLY market authority —
+   * the definition's anchor market is stale within minutes (ADR-0028). */
+  prepared?: OrderActionV2,
+) => {
+  const action = prepared ?? (def.action.kind === "order" ? def.action : null);
+  if (!action) return null;
+  const { market, side, price, size, orderType, postOnly, expiresAfterMs, execution } = action;
   const expiration =
     orderType === "GTD" && expiresAfterMs !== undefined
       ? Math.floor(((triggeredAtMs ?? Date.now()) + expiresAfterMs + 60_000) / 1000).toString()
@@ -176,7 +186,12 @@ const buildOrderPreview = (def: StrategyDefinition, config: AppConfig, triggered
     expiration,
     maxSpend: (price * size).toFixed(6),
     builderCode: config.polymarket.builderCode ?? null,
-    signatureType: config.features.privySigning ? 0 : 2,
+    // Market metadata the client MUST mirror into the signed struct: the
+    // neg-risk flag selects the verifying exchange contract, the tick size
+    // selects the amount rounding. A mismatch here is an invalid signature
+    // or a rejected amount at the CLOB.
+    negRisk: action.negRisk ?? false,
+    tickSize: action.tickSize ?? null,
     executionMode: execution === "auto" ? "auto" : "manual",
     timestamp: Math.floor(Date.now() / 1000).toString(),
   };
@@ -619,6 +634,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       signerAddress: string;
       funderAddress: string | null;
       signingMode: string;
+      signatureType: number;
       credentialsReady: boolean;
     } | null = null;
     if (deps.tradingAccounts) {
@@ -633,6 +649,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
           signerAddress: primary.signerAddress,
           funderAddress: primary.funderAddress,
           signingMode: primary.signingMode,
+          signatureType: primary.signatureType,
           credentialsReady: creds !== null,
         };
       }
@@ -651,6 +668,7 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         def,
         deps.config,
         (trigger.evidence as { triggeredAtMs?: number } | null)?.triggeredAtMs,
+        (trigger.evidence as { preparedAction?: OrderActionV2 } | null)?.preparedAction,
       ),
       account,
       tradingEnabled,
@@ -689,6 +707,17 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       if (!intent || intent.walletAddress !== user.walletAddress) {
         reply.code(400);
         return { error: "INVALID_REQUEST", message: "orderIntentId is not one of your orders." };
+      }
+      // Fail-closed: a failed/cancelled submission must never consume the
+      // trigger. Confirming here would mark the strategy executed with no
+      // order on the book — the trigger stays signable instead.
+      if (intent.status === "failed" || intent.status === "cancelled") {
+        reply.code(409);
+        return {
+          error: "INTENT_NOT_SUBMITTED",
+          message:
+            "That order submission did not go through — the strategy is still waiting for a signature.",
+        };
       }
     }
     await deps.triggerStore.updateStatus(

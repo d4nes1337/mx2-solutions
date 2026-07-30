@@ -12,7 +12,6 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useDisconnect } from "wagmi";
 import { ArrowUpRight, LogOut, Unplug } from "lucide-react";
 import { useSession, useSignIn, useSignOut } from "@/lib/auth";
-import { InviteCodeForm, isAccessError } from "@/components/InviteCodeForm";
 import { useTradingWallet, useTradingWalletBalance } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { Badge, Button } from "@/components/ui";
@@ -113,22 +112,15 @@ export function AccountMenu() {
         return (
           <div className="flex items-center gap-2" data-tour="account-menu">
             {!session.data ? (
-              <div className="relative">
-                <div className="flex items-center gap-2">
-                  {signInError && !isAccessError(signIn.error) ? (
-                    <span className="hidden max-w-[200px] truncate text-xs text-neg sm:inline">
-                      {signInError}
-                    </span>
-                  ) : null}
-                  <Button size="sm" onClick={() => signIn.mutate()} disabled={signIn.isPending}>
-                    {signIn.isPending ? "Check wallet…" : "Sign in"}
-                  </Button>
-                </div>
-                {isAccessError(signIn.error) ? (
-                  <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-border bg-surface p-3 shadow-panel">
-                    <InviteCodeForm signIn={signIn} />
-                  </div>
+              <div className="flex items-center gap-2">
+                {signInError ? (
+                  <span className="hidden max-w-[200px] truncate text-xs text-neg sm:inline">
+                    {signInError}
+                  </span>
                 ) : null}
+                <Button size="sm" onClick={() => signIn.mutate()} disabled={signIn.isPending}>
+                  {signIn.isPending ? "Check wallet…" : "Sign in"}
+                </Button>
               </div>
             ) : null}
 
@@ -150,8 +142,8 @@ export function AccountMenu() {
                     {short(account.address)}
                   </span>
                   {session.data ? (
-                    <Badge tone={session.data.allowlisted ? "pos" : "warn"} dot>
-                      {session.data.allowlisted ? "beta access" : "no beta yet"}
+                    <Badge tone="pos" dot>
+                      signed in
                     </Badge>
                   ) : (
                     <Badge tone="warn" dot>

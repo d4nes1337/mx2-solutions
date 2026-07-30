@@ -495,6 +495,14 @@ export interface OrderIntentStore {
     status: OrderIntentStatus,
     extra?: { clobOrderId?: string; errorMessage?: string },
   ): Promise<void>;
+  /**
+   * Free a FAILED intent's idempotency key so the user can retry the same
+   * logical submission (e.g. re-sign a trigger after a CLOB rejection). The
+   * failed row is kept for the audit trail under a derived unique key
+   * ("<key>#failed#<id>"). Compare-and-set on status='failed' — an in-flight
+   * or successful intent never loses its key. Returns whether a row changed.
+   */
+  releaseIdempotencyKey(id: string): Promise<boolean>;
   /** Batch lookup by id (timeline: trigger-linked orders). */
   findByIds(ids: readonly string[]): Promise<OrderIntentRow[]>;
   /** Intents stamped with a rule id in metadata (auto-executed orders). */
@@ -620,6 +628,18 @@ export const createOrderIntentStore = (db: Database): OrderIntentStore => ({
         ...(extra?.errorMessage !== undefined ? { errorMessage: extra.errorMessage } : {}),
       })
       .where(eq(orderIntents.id, id));
+  },
+
+  async releaseIdempotencyKey(id) {
+    const rows = await db
+      .update(orderIntents)
+      .set({
+        idempotencyKey: sql`${orderIntents.idempotencyKey} || '#failed#' || ${orderIntents.id}`,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(orderIntents.id, id), eq(orderIntents.status, "failed")))
+      .returning({ id: orderIntents.id });
+    return rows.length > 0;
   },
 
   async findByIds(ids) {
