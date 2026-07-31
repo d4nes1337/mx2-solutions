@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { SessionScope, SessionStore } from "@mx2/db";
 import { hashSessionToken, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { UNAUTHORIZED_BODY } from "../auth/unauthorized.js";
 import type {} from "../auth/types.js";
 
 export interface RequireAuthDeps {
@@ -26,19 +27,19 @@ export const makeRequireAuth =
   async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const token = req.cookies[SESSION_COOKIE_NAME];
     if (!token) {
-      await reply.code(401).send({ error: "Unauthorized" });
+      await reply.code(401).send(UNAUTHORIZED_BODY);
       return;
     }
     const session = await sessions.findByTokenHash(hashSessionToken(token));
     if (!session) {
-      await reply.code(401).send({ error: "Unauthorized" });
+      await reply.code(401).send(UNAUTHORIZED_BODY);
       return;
     }
     // Fail-closed: restricted sessions (sign-link / Mini App) never pass the
     // general auth gate — only routes that opt in via the scoped middleware
     // accept them. A full browser session has scope = null.
     if (session.scope !== null && session.scope !== undefined) {
-      await reply.code(401).send({ error: "Unauthorized" });
+      await reply.code(401).send(UNAUTHORIZED_BODY);
       return;
     }
     req.user = { walletAddress: session.userWallet };
@@ -55,12 +56,12 @@ export const makeRequireScopedAuth =
   async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const token = req.cookies[SESSION_COOKIE_NAME];
     if (!token) {
-      await reply.code(401).send({ error: "Unauthorized" });
+      await reply.code(401).send(UNAUTHORIZED_BODY);
       return;
     }
     const session = await sessions.findByTokenHash(hashSessionToken(token));
     if (!session) {
-      await reply.code(401).send({ error: "Unauthorized" });
+      await reply.code(401).send(UNAUTHORIZED_BODY);
       return;
     }
     req.user = { walletAddress: session.userWallet };

@@ -61,7 +61,7 @@ import { registerAdminInvitesRoutes } from "./routes/admin-invites.js";
 import { registerReferralsRoutes } from "./routes/referrals.js";
 import { registerAdminPanelRoutes } from "./routes/admin-panel.js";
 import { registerWaitlistRoutes } from "./routes/waitlist.js";
-import { enforceAllowlistOnSessions } from "./auth/allowlist-sessions.js";
+import { enforceAccessRevocationOnSessions } from "./auth/allowlist-sessions.js";
 import { registerRulesRoutes } from "./routes/rules.js";
 import { registerStrategiesRoutes } from "./routes/strategies.js";
 import { registerShowcasesRoutes } from "./routes/showcases.js";
@@ -152,11 +152,11 @@ export const buildApp = (deps: AppDeps) => {
       return url.replace(/^\/api\/smart-orders(?=\/|\?|$)/, "/api/strategies");
     },
   });
-  // Private-beta enforcement: every route module below authenticates through
-  // this wrapped session store, so a session is only valid while its wallet
-  // keeps an active allowlist row. Revoking access cuts live sessions on the
-  // next request — hiding buttons is not access control (brief §4.2).
-  const sessions = enforceAllowlistOnSessions(deps.sessions, deps.allowlist);
+  // Ban enforcement: every route module below authenticates through this
+  // wrapped session store, so revoking a wallet cuts its live sessions on the
+  // next request — hiding buttons is not access control (brief §4.2). Access
+  // is otherwise open; an unknown wallet is not a revoked one.
+  const sessions = enforceAccessRevocationOnSessions(deps.sessions, deps.allowlist);
   const tradingAccounts =
     deps.tradingAccounts ??
     ({

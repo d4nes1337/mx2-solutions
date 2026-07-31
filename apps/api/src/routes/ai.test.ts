@@ -280,7 +280,7 @@ const buildAiApp = (opts: {
     markUsed: async () => {},
   };
   const allowlist: AllowlistStore = {
-    isAllowed: async () => true,
+    isRevoked: async () => false,
     findEntry: async () => null,
     add: async () => {
       throw new Error("no");

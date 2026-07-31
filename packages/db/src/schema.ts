@@ -139,7 +139,13 @@ export const sessions = pgTable(
 
 export type SessionRow = typeof sessions.$inferSelect;
 
-/** Admin-managed beta allowlist. Only wallets with is_active=true may log in. */
+/**
+ * Wallet access records. Access is OPEN by default: a wallet with no row here
+ * may log in and trade. A row with is_active=false is an explicit admin
+ * revocation (a ban), which is the only thing that blocks login and cuts live
+ * sessions. Rows are also written for every wallet that signs in, so the admin
+ * panel and referral attribution have a full roster.
+ */
 export const allowlist = pgTable("allowlist", {
   walletAddress: text("wallet_address").primaryKey(),
   addedBy: text("added_by").notNull(),

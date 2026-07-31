@@ -16,6 +16,7 @@ import type {
 import { deriveDepositWallet } from "@mx2/polymarket-client";
 import { makeRequireAuth } from "../middleware/require-auth.js";
 import { decryptCredentials } from "../auth/crypto.js";
+import { UNAUTHORIZED_BODY } from "../auth/unauthorized.js";
 import {
   buildEquityHistory,
   EQUITY_DISCLAIMER,
@@ -367,7 +368,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const q = req.query as Record<string, string>;
     const { queryAddress } = await resolveQueryAddress(deps, { user }, q);
@@ -392,7 +393,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const q = req.query as Record<string, string>;
     const limit = q["limit"] !== undefined ? Math.min(Math.max(Number(q["limit"]), 1), 200) : 50;
@@ -430,7 +431,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const q = req.query as Record<string, string>;
     const { queryAddress } = await resolveQueryAddress(deps, { user }, q);
@@ -467,7 +468,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const q = req.query as Record<string, string>;
     const { queryAddress, profile } = await resolveQueryAddress(deps, { user }, q);
@@ -530,7 +531,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const q = req.query as Record<string, string>;
     const { queryAddress } = await resolveQueryAddress(deps, { user }, q);
@@ -568,7 +569,7 @@ export const registerProfileRoutes = (app: FastifyInstance, deps: ProfileRoutesD
     const user = req.user;
     if (!user) {
       reply.code(401);
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
 
     const trading = await fetchTradingSnapshot(deps, user.walletAddress);

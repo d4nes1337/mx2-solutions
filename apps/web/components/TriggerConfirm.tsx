@@ -21,10 +21,11 @@ import { autoFailureCopy } from "@/lib/strategies/auto-reasons";
 import { spliceLive, type LiveQuote } from "@/lib/strategies/live-splice";
 import type { ActionCenterResponse } from "@/lib/types";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
-import { ensurePolygonChain } from "@/lib/chain";
+import { ensurePolygonChain, type EnsureChainResult } from "@/lib/chain";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { LiveCaption } from "@/components/charts/LiveCaption";
 import { PolymarketLink } from "@/components/PolymarketLink";
+import { PolygonNotice } from "@/components/wallet/PolygonNotice";
 import { Badge, Button, ErrorNote, Spinner, cn } from "./ui";
 
 /**
@@ -122,11 +123,15 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
     }
     if (!funder) return setSignError("No funder configured for the selected trading account.");
     if (!d) return;
+    // Tracked outside the try so a failure below can say whether the wallet was
+    // also on the wrong chain — the single most common cause of an opaque
+    // wallet-side rejection, and invisible from the error alone.
+    let chain: EnsureChainResult = { ok: true, switched: false };
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
       // Polygon first: every order signature is an EIP-712 payload pinned to
       // chain 137 — switch the wallet over so strict wallets don't refuse.
-      await ensurePolygonChain(provider);
+      chain = await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId: d.preview.tokenId,
         side: d.preview.side,
@@ -168,7 +173,12 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });
       onClose();
     } catch (e) {
-      setSignError(friendlySubmitError(e));
+      const base = friendlySubmitError(e);
+      setSignError(
+        chain.ok
+          ? base
+          : `${base} Your wallet is also not on the Polygon network — switch it to Polygon and sign again.`,
+      );
     }
   };
 
@@ -390,6 +400,7 @@ export function TriggerConfirm({ triggerId, onClose }: { triggerId: string; onCl
                     not the connected wallet.
                   </p>
                 ) : null}
+                <PolygonNotice className="pt-1" />
                 {d.warning ? <p className="text-warn">{d.warning}</p> : null}
               </div>
             )}

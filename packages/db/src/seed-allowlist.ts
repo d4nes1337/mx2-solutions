@@ -2,12 +2,15 @@ import { createDb } from "./client.js";
 import { createAllowlistStore } from "./auth-store.js";
 
 /**
- * Adds a wallet to the beta allowlist so it can complete EIP-712 login.
- * There is no admin UI in MVP 0.1 (D-009), so this is the supported local path.
+ * Writes an ACTIVE access record for a wallet.
  *
  *   pnpm db:seed:allowlist 0xYourEoaAddress
  *
- * The address is lowercased to match how /api/auth/verify stores and checks it.
+ * Login no longer needs this — access is open, and any wallet with a valid
+ * EIP-712 signature can sign in. The script remains useful for one thing:
+ * lifting a ban (it flips is_active back to true), which is the same effect as
+ * the admin panel's grant-access. The address is lowercased to match how
+ * /api/auth/verify stores and checks it.
  */
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 

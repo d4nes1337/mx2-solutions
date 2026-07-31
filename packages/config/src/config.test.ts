@@ -118,13 +118,9 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, APP_LOG_LEVEL: "loud" })).toThrow(ConfigError);
   });
 
-  it("defaults AI chat off, open beta ON (public release), with the default model", () => {
+  it("defaults AI chat off, with the default model", () => {
     const cfg = loadConfig(base);
     expect(cfg.features.aiChat).toBe(false);
-    // Public release (owner decision 2026-07-30): every wallet that completes
-    // sign-in is auto-allowlisted unless FEATURE_OPEN_BETA=false re-gates.
-    expect(cfg.features.openBeta).toBe(true);
-    expect(loadConfig({ ...base, FEATURE_OPEN_BETA: "false" }).features.openBeta).toBe(false);
     expect(cfg.ai.model).toBe("claude-haiku-4-5");
     expect(cfg.ai.anthropicApiKey).toBeUndefined();
   });
@@ -190,10 +186,8 @@ describe("loadConfig", () => {
       FEATURE_AI_CHAT: "true",
       ANTHROPIC_API_KEY: "sk-ant-test",
       AI_MODEL: "claude-opus-4-8",
-      FEATURE_OPEN_BETA: "true",
     });
     expect(cfg.features.aiChat).toBe(true);
-    expect(cfg.features.openBeta).toBe(true);
     expect(cfg.ai.model).toBe("claude-opus-4-8");
   });
 });

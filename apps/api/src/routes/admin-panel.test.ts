@@ -131,7 +131,7 @@ const buildApp = async (opts: {
   };
 
   const allowlist: AllowlistStore = {
-    isAllowed: async () => true,
+    isRevoked: async () => false,
     findEntry: async () => null,
     add: async (walletAddress, addedBy, note) => ({
       walletAddress,

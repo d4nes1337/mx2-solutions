@@ -407,7 +407,7 @@ const buildRulesApp = (opts: {
     markUsed: async () => {},
   };
   const noopAllowlist: AllowlistStore = {
-    isAllowed: async () => true,
+    isRevoked: async () => false,
     findEntry: async () => null,
     add: async () => {
       throw new Error("no");

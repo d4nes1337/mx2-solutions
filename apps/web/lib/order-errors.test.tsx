@@ -40,6 +40,29 @@ describe("friendlySubmitError", () => {
 
   it("falls back to the raw message, then a generic sentence", () => {
     expect(friendlySubmitError(new Error("boom"))).toBe("boom");
-    expect(friendlySubmitError(undefined)).toBe("Signing failed.");
+    expect(friendlySubmitError(undefined)).toMatch(/Signing failed/);
+  });
+
+  // The reported bug: production serves HTTP/2, whose responses have no reason
+  // phrase, so an ApiError built from a message-less body carries "" — which
+  // used to render as a blank error banner.
+  it("never returns an empty string, even for a message-less ApiError", () => {
+    for (const status of [0, 400, 401, 403, 500, 502]) {
+      const message = friendlySubmitError(new ApiError(status, `HTTP_${status}`, "", null));
+      expect(message.trim()).not.toBe("");
+    }
+    expect(friendlySubmitError(new Error(""))).not.toBe("");
+    expect(friendlySubmitError(null)).not.toBe("");
+  });
+
+  it("says the session died rather than blaming the order on a 401", () => {
+    expect(friendlySubmitError(new ApiError(401, "Unauthorized", "", null))).toMatch(
+      /session expired/i,
+    );
+  });
+
+  it("explains a wallet that will not switch to Polygon (EIP-1193 4902)", () => {
+    const unknownChain = Object.assign(new Error("Unrecognized chain ID"), { code: 4902 });
+    expect(friendlySubmitError(unknownChain)).toMatch(/Polygon/);
   });
 });

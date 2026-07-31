@@ -344,7 +344,7 @@ const buildSmartOrdersApp = (opts: {
       markUsed: async () => {},
     } satisfies ChallengeStore,
     allowlist: {
-      isAllowed: async () => true,
+      isRevoked: async () => false,
       findEntry: async () => null,
       add: async () => {
         throw new Error("no");

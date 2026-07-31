@@ -58,7 +58,10 @@ vi.mock("wagmi", () => ({
   useAccount: () => ({
     address: "0x1111111111111111111111111111111111111111",
     connector: { getProvider: async () => ({ request: async () => "0xsig" }) },
+    // On Polygon already → PolygonNotice renders nothing.
+    chainId: 137,
   }),
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
 }));
 
 vi.mock("@rainbow-me/rainbowkit", () => ({

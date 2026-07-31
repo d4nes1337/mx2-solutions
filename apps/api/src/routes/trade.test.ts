@@ -238,7 +238,7 @@ const mockSessionsAuthed: SessionStore = {
 const mockAllowlist: AllowlistStore = {
   // Sessions only exist for allowlisted wallets; request-time enforcement
   // (enforceAllowlistOnSessions) would 401 every authed call otherwise.
-  isAllowed: async () => true,
+  isRevoked: async () => false,
   findEntry: async () => null,
   add: async () => {
     throw new Error("not implemented");

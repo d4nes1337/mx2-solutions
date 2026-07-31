@@ -1,8 +1,29 @@
 # Project Status
 
-_Last updated: 2026-07-30_
+_Last updated: 2026-07-31_
 
 ## Recent
+
+- **Blank signing error root-caused; allowlist removed (owner-directed 2026-07-31; D-058,
+  D-059, D-060).** The reported empty (`""`) error when signing a ready strategy was not a
+  signing bug: the auth middleware's five 401s (plus six in `profile.ts`, one in `auth.ts`)
+  sent `{error:"Unauthorized"}` with **no** `message`, and the web client fell back to
+  `Response.statusText` — which is always `""` over HTTP/2, the protocol Caddy serves on the
+  beta domain. So a session that died mid-flow rendered as a blank banner: the wallet signed,
+  and nothing visibly happened. Fixed at both ends (shared `UNAUTHORIZED_BODY`; a
+  guaranteed-non-empty client fallback chain covering any message-less or non-JSON body) with
+  regression tests at each layer. **Access is now open**: no allowlist, no invite code, no
+  `FEATURE_OPEN_BETA` flag — the flag is deleted from config and env samples so nothing can
+  silently re-gate login. The `allowlist` table is inverted into an access record (absence =
+  allowed; `is_active=false` = admin ban), `isAllowed` is gone in favour of `isRevoked`, and
+  referral/invite codes are demoted to attribution that can never cost a user their login.
+  **Signing across wallets**: one `signTypedData` helper with a param-shape retry (never after
+  a 4001 rejection) and 0/1 → 27/28 `v` normalization, plus a `PolygonNotice` that offers the
+  network switch before the signature on every signing surface and names a failed switch in the
+  error. Verified against a running API: an unseen wallet signs in (200), a revoked wallet's
+  live session 401s on its next request, and its re-login 403s `ACCESS_REVOKED`. Root 931 green;
+  web 414/418 (the 4 reds are an unrelated in-flight `ThemeSwitcher` → `Popover` refactor from
+  a concurrent session, green at HEAD).
 
 - **Public-release signing hardening + open access (owner-directed 2026-07-30; D-056,
   D-057).** The reported `invalid POLY_GNOSIS_SAFE signature` 400s and the

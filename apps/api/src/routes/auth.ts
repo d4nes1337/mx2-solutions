@@ -21,6 +21,7 @@ import {
   CHALLENGE_TTL_MS,
 } from "../auth/eip712.js";
 import { generateSessionToken, hashSessionToken, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { UNAUTHORIZED_BODY } from "../auth/unauthorized.js";
 import { hashInviteCode } from "../auth/invite-code.js";
 import { verifyTelegramInitData } from "../auth/telegram-miniapp.js";
 import { deriveDepositWallet } from "@mx2/polymarket-client";
@@ -134,13 +135,14 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       address,
     );
 
-    // Emit allowlist audit event regardless of outcome.
-    let allowed = await deps.allowlist.isAllowed(address);
+    // Access is open — the only thing that can block a login is an explicit
+    // admin revocation. Audited regardless of outcome.
+    const revoked = await deps.allowlist.isRevoked(address);
     await deps.auditStore.emit({
       actor: address,
       action: "allowlist.checked",
       subject: `wallet:${address}`,
-      metadata: { allowed, sigValid: valid },
+      metadata: { revoked, sigValid: valid },
     });
 
     if (!valid) {
@@ -198,23 +200,41 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
       };
     }
 
-    // Private beta: a not-yet-allowlisted wallet may redeem a one-time
-    // invitation code alongside a VALID signature. Redemption is atomic and
-    // binds the code to the signature-verified wallet server-side — a client
-    // can never redeem for a different wallet than the one that signed
-    // (brief §4.3.3). A replay by the SAME wallet is an idempotent success so
-    // a mid-login retry cannot strand the user between "code consumed" and
-    // "allowlisted"; anything else is rejected without detail.
+    // The ONLY signature-valid login we refuse: an explicitly revoked wallet.
+    // There is no allowlist to be on — a wallet that has never been seen here
+    // signs in exactly like a returning one.
+    if (revoked) {
+      reply.code(403);
+      return {
+        error: "ACCESS_REVOKED",
+        message:
+          "Access for this wallet has been revoked. Contact support if you believe this is a mistake.",
+      };
+    }
+
+    // Referral / invitation codes are ATTRIBUTION, never a gate. A code that
+    // cannot be redeemed is audited and ignored: losing your login because a
+    // referral link was stale is never the right trade. Redemption still binds
+    // atomically to the signature-verified wallet server-side, so a client can
+    // never redeem for a wallet other than the one that signed (brief §4.3.3),
+    // and a replay by the SAME wallet stays an idempotent success.
+    //
+    // Only unattributed wallets may redeem. Access no longer depends on a code,
+    // so without this an established user could burn a seat off any code and
+    // hand a referrer credit for someone they never brought.
+    const existingEntry = await deps.allowlist.findEntry(address);
+    const attributable = existingEntry === null || existingEntry.addedBy === "system:open-access";
     const inviteCode = typeof body["inviteCode"] === "string" ? body["inviteCode"].trim() : null;
-    if (!allowed && inviteCode && (deps.referrals || deps.invitations)) {
+    let attribution: { addedBy: string; note: string | null } | null = null;
+    if (inviteCode && attributable && (deps.referrals || deps.invitations)) {
       // Referral codes first (plaintext handles); legacy hashed invitations
-      // remain redeemable through the same field so outstanding one-time
-      // codes keep working. Both paths bind to the signature-verified wallet.
-      let redeemedVia: string | null = null;
+      // remain redeemable through the same field so outstanding one-time codes
+      // keep working.
+      let redeemed = false;
       if (deps.referrals) {
         const result = await deps.referrals.redeem(inviteCode, address);
         if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
-          await deps.allowlist.add(address, `referral:${result.code.id}`, result.code.code);
+          attribution = { addedBy: `referral:${result.code.id}`, note: result.code.code };
           await deps.auditStore.emit({
             actor: address,
             action: "referral.redeemed",
@@ -225,37 +245,24 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
               idempotentReplay: result.outcome === "already_redeemed_by_wallet",
             },
           });
-          redeemedVia = "referral";
-          allowed = true;
+          redeemed = true;
         } else if (result.reason !== "not_found") {
-          // A real referral code that cannot be redeemed (exhausted, disabled,
-          // expired, or the wallet was already referred) — report precisely
-          // enough to act on, without confirming seat counts.
           await deps.auditStore.emit({
             actor: address,
             action: "referral.redemption_rejected",
             subject: `wallet:${address}`,
-            metadata: { reason: result.reason },
+            metadata: { reason: result.reason, loginAllowed: true },
           });
-          reply.code(403);
-          return {
-            error: "INVITE_INVALID",
-            message:
-              result.reason === "wallet_already_referred"
-                ? "This wallet has already used a referral code. Contact support if you lost access."
-                : "This referral code is no longer available.",
-          };
         }
         // not_found falls through to the legacy invitation path.
       }
-      if (!redeemedVia && !allowed && deps.invitations) {
+      if (!redeemed && deps.invitations) {
         const result = await deps.invitations.redeem(hashInviteCode(inviteCode), address);
         if (result.outcome === "redeemed" || result.outcome === "already_redeemed_by_wallet") {
-          await deps.allowlist.add(
-            address,
-            `invite:${result.invitation.id}`,
-            result.invitation.note,
-          );
+          attribution = {
+            addedBy: `invite:${result.invitation.id}`,
+            note: result.invitation.note,
+          };
           await deps.auditStore.emit({
             actor: address,
             action: "invite.redeemed",
@@ -265,61 +272,37 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
           if (result.invitation.waitlistEntryId && deps.waitlist) {
             await deps.waitlist.updateStatus(result.invitation.waitlistEntryId, "accepted");
           }
-          allowed = true;
         } else {
           await deps.auditStore.emit({
             actor: address,
             action: "invite.redemption_rejected",
             subject: `wallet:${address}`,
-            metadata: { reason: result.reason },
+            metadata: { reason: result.reason, loginAllowed: true },
           });
-          reply.code(403);
-          return {
-            error: "INVITE_INVALID",
-            message: "This invitation code is invalid, expired, or already used.",
-          };
         }
-      }
-      if (!allowed) {
-        // Referral-only deployment and the code matched nothing.
-        await deps.auditStore.emit({
-          actor: address,
-          action: "referral.redemption_rejected",
-          subject: `wallet:${address}`,
-          metadata: { reason: "not_found" },
-        });
-        reply.code(403);
-        return {
-          error: "INVITE_INVALID",
-          message: "This referral code is invalid.",
-        };
       }
     }
 
-    // Open beta: after a VALID signature, auto-allowlist unknown wallets. The
-    // allowlist table stays the source of truth (revoking a wallet still works;
-    // AllowlistStore.add upserts and re-activates). Behind FEATURE_OPEN_BETA.
-    if (!allowed && deps.config.features.openBeta) {
-      await deps.allowlist.add(address, "system:open-beta", "auto-allowlisted (open beta)");
+    // Record first contact so the admin panel and referral roster stay
+    // complete. Only on INSERT — `add` upserts addedBy/note, and rewriting them
+    // on every login would erase the referral attribution captured above.
+    if (!existingEntry) {
+      await deps.allowlist.add(
+        address,
+        attribution?.addedBy ?? "system:open-access",
+        // `attribution.note` is legitimately null for codes without one — it
+        // must not fall through to the open-access placeholder.
+        attribution ? attribution.note : "first sign-in (open access)",
+      );
       await deps.auditStore.emit({
         actor: address,
         action: "allowlist.auto_added",
         subject: `wallet:${address}`,
-        metadata: { flag: "FEATURE_OPEN_BETA" },
+        metadata: { via: attribution?.addedBy ?? "open-access" },
       });
-      allowed = true;
-    }
-
-    if (!allowed) {
-      reply.code(403);
-      return {
-        error: "NOT_ALLOWLISTED",
-        message:
-          "Private beta access is required to save, arm, and receive live triggers. " +
-          "Redeem an invitation code or join the waitlist.",
-        inviteRedemptionAvailable: Boolean(deps.invitations),
-        waitlistAvailable: true,
-      };
+    } else if (attribution && existingEntry.addedBy === "system:open-access") {
+      // A wallet that signed in before redeeming its code keeps the credit.
+      await deps.allowlist.add(address, attribution.addedBy, attribution.note);
     }
 
     // Mark nonce used.
@@ -512,7 +495,7 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
     const user = req.user;
     if (!user) {
       // Guard (requireAuth guarantees this is set, but types need it)
-      return { error: "Unauthorized" };
+      return UNAUTHORIZED_BODY;
     }
     const entry = await deps.allowlist.findEntry(user.walletAddress);
     // The Polymarket Data API keys off the deposit (Gnosis Safe) wallet, not the
@@ -526,7 +509,10 @@ export const registerAuthRoutes = (app: FastifyInstance, deps: AuthRoutesDeps): 
     }
     return {
       address: user.walletAddress,
-      allowlisted: entry?.isActive === true,
+      // "Has access", not "is on a list": true unless explicitly revoked. A
+      // wallet with no access record at all is a normal, allowed user, and
+      // requireAuth already guarantees this session is not a revoked one.
+      allowlisted: entry?.isActive !== false,
       depositWallet,
       // Admin-panel gate is server-enforced; this only drives nav visibility.
       isAdmin: deps.config.referrals.adminWallets.includes(user.walletAddress),

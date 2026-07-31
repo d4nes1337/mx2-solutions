@@ -4,13 +4,9 @@ import { useAccount } from "wagmi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "./api";
 import { ensurePolygonChain } from "./chain";
+import { signTypedData, type Eip1193Provider } from "./order-sign";
 import { clearStoredRefCode, getStoredRefCode } from "./referral";
 import type { LoginChallenge, Me } from "./types";
-
-// EIP-1193 provider shape we need for eth_signTypedData_v4.
-interface Eip1193Provider {
-  request(args: { method: string; params: unknown[] }): Promise<string>;
-}
 
 async function fetchMe(): Promise<Me | null> {
   try {
@@ -59,14 +55,11 @@ export function useSignIn() {
       // typed data for a chain they are not on — switch to Polygon first. A
       // decline is fine; the signature attempt still proceeds.
       await ensurePolygonChain(provider);
-      const signature = await provider.request({
-        method: "eth_signTypedData_v4",
-        params: [address, JSON.stringify(challenge.typedData)],
-      });
+      const signature = await signTypedData(provider, address, challenge.typedData);
 
       // Explicit entry wins; otherwise a code captured from a /r/CODE link
-      // rides along silently. The server ignores it for allowlisted wallets,
-      // so a stale stored code can never block a returning user.
+      // rides along silently. Codes are attribution only — the server never
+      // refuses a login over one, so a stale stored code is harmless.
       const inviteCode = opts?.inviteCode ?? getStoredRefCode();
 
       return api.post<{ ok: boolean; address: string }>("/api/auth/verify", {
@@ -75,8 +68,8 @@ export function useSignIn() {
         signature,
         issuedAt: challenge.typedData.message.issuedAt,
         signedTypedData: challenge.typedData,
-        // Private beta: an invitation/referral code redeems atomically for the
-        // wallet that signed this exact challenge (server-side binding).
+        // A referral code redeems atomically for the wallet that signed this
+        // exact challenge (server-side binding). Optional in every sense.
         ...(inviteCode ? { inviteCode } : {}),
       });
     },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AllowlistStore, SessionRow, SessionStore } from "@mx2/db";
-import { enforceAllowlistOnSessions } from "./allowlist-sessions.js";
+import { enforceAccessRevocationOnSessions } from "./allowlist-sessions.js";
 
 const row = (userWallet: string): SessionRow => ({
   id: "s-1",
@@ -19,8 +19,8 @@ const makeSessions = (found: SessionRow | null): SessionStore => ({
   revokeAllForWallet: async () => 0,
 });
 
-const makeAllowlist = (allowed: Set<string>): AllowlistStore => ({
-  isAllowed: async (w) => allowed.has(w),
+const makeAllowlist = (revoked: Set<string>): AllowlistStore => ({
+  isRevoked: async (w) => revoked.has(w),
   findEntry: async () => null,
   add: async () => {
     throw new Error("not used");
@@ -28,30 +28,43 @@ const makeAllowlist = (allowed: Set<string>): AllowlistStore => ({
   remove: async () => {},
 });
 
-describe("enforceAllowlistOnSessions", () => {
-  it("passes sessions of allowlisted wallets through", async () => {
-    const wrapped = enforceAllowlistOnSessions(
+describe("enforceAccessRevocationOnSessions", () => {
+  it("passes a session through when the wallet is not revoked", async () => {
+    const wrapped = enforceAccessRevocationOnSessions(
       makeSessions(row("0xaa")),
-      makeAllowlist(new Set(["0xaa"])),
+      makeAllowlist(new Set()),
     );
     expect(await wrapped.findByTokenHash("th")).toMatchObject({ userWallet: "0xaa" });
   });
 
-  it("invalidates sessions the moment the wallet loses beta access", async () => {
-    const wrapped = enforceAllowlistOnSessions(makeSessions(row("0xaa")), makeAllowlist(new Set()));
+  // The regression this file exists for: access is open, so a wallet with no
+  // access record at all must NOT have its requests 401'd.
+  it("passes through a wallet that has no access record", async () => {
+    const wrapped = enforceAccessRevocationOnSessions(
+      makeSessions(row("0xnever-seen")),
+      makeAllowlist(new Set(["0xsomeone-else"])),
+    );
+    expect(await wrapped.findByTokenHash("th")).toMatchObject({ userWallet: "0xnever-seen" });
+  });
+
+  it("invalidates sessions the moment a wallet is revoked", async () => {
+    const wrapped = enforceAccessRevocationOnSessions(
+      makeSessions(row("0xaa")),
+      makeAllowlist(new Set(["0xaa"])),
+    );
     expect(await wrapped.findByTokenHash("th")).toBeNull();
   });
 
-  it("does not consult the allowlist for unknown tokens", async () => {
+  it("does not consult the access record for unknown tokens", async () => {
     let asked = 0;
     const allowlist: AllowlistStore = {
       ...makeAllowlist(new Set()),
-      isAllowed: async () => {
+      isRevoked: async () => {
         asked += 1;
-        return true;
+        return false;
       },
     };
-    const wrapped = enforceAllowlistOnSessions(makeSessions(null), allowlist);
+    const wrapped = enforceAccessRevocationOnSessions(makeSessions(null), allowlist);
     expect(await wrapped.findByTokenHash("missing")).toBeNull();
     expect(asked).toBe(0);
   });
@@ -65,7 +78,7 @@ describe("enforceAllowlistOnSessions", () => {
         return 3;
       },
     };
-    const wrapped = enforceAllowlistOnSessions(sessions, makeAllowlist(new Set()));
+    const wrapped = enforceAccessRevocationOnSessions(sessions, makeAllowlist(new Set()));
     expect(await wrapped.revokeAllForWallet("0xaa")).toBe(3);
     expect(revoked).toBe("0xaa");
   });

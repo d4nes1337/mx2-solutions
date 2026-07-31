@@ -148,14 +148,8 @@ const EnvSchema = z.object({
   // ≤3 per generation). Extra paid capability on top of FEATURE_AI_CHAT —
   // separate flag so the owner opts into the spend explicitly.
   FEATURE_AI_WEB_SEARCH: boolFromEnv(false),
-  // Open beta: auto-allowlist every wallet that completes EIP-712 sign-in.
-  // Allowlist table stays the source of truth (per-wallet revocation intact).
-  // DEFAULT ON since the public release (owner decision 2026-07-30): the app
-  // is open to every wallet; set FEATURE_OPEN_BETA=false to re-gate access
-  // behind referral/invite codes.
-  FEATURE_OPEN_BETA: boolFromEnv(true),
-  // Referral system: plaintext multi-use codes gate beta access, every
-  // allowlisted user gets a personal code, /admin panel manages them.
+  // Referral system: plaintext multi-use codes for ATTRIBUTION (they do not
+  // gate access), every user gets a personal code, /admin panel manages them.
   FEATURE_REFERRALS: boolFromEnv(false),
   // Wallets allowed into the /api/admin/panel/* routes (comma-separated EOAs).
   // Authenticated with the normal wallet session — NOT the header secret.
@@ -305,7 +299,6 @@ export type AppConfig = {
     privySigning: boolean;
     aiChat: boolean;
     aiWebSearch: boolean;
-    openBeta: boolean;
     referrals: boolean;
     walletWithdraw: boolean;
     bridgeFunding: boolean;
@@ -561,7 +554,6 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
       privySigning: e.FEATURE_PRIVY_SIGNING,
       aiChat: e.FEATURE_AI_CHAT,
       aiWebSearch: e.FEATURE_AI_WEB_SEARCH,
-      openBeta: e.FEATURE_OPEN_BETA,
       referrals: e.FEATURE_REFERRALS,
       walletWithdraw: e.FEATURE_WALLET_WITHDRAW,
       bridgeFunding: e.FEATURE_BRIDGE_FUNDING,

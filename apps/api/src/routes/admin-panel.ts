@@ -240,9 +240,11 @@ export const registerAdminPanelRoutes = (
     };
   });
 
-  // Revoke beta access: allowlist off + every live session cut. The referral
-  // redemption row is preserved — the wallet cannot re-enter with another code
-  // (UNIQUE wallet_address), matching fail-closed revocation semantics.
+  // Ban a wallet: access record off + every live session cut. Access is open
+  // by default, so this row is the ONLY thing that keeps a wallet out — and it
+  // does so on its next request, not at session expiry. The referral
+  // redemption row is preserved so the wallet cannot re-enter with another
+  // code (UNIQUE wallet_address).
   app.post(
     "/api/admin/panel/users/:wallet/revoke-access",
     { preHandler: requireAdmin },

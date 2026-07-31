@@ -5,8 +5,10 @@ import {
   buildOrderTypedData,
   BYTES32_ZERO,
   getOrderRawAmounts,
+  normalizeSignatureV,
   ROUNDING_CONFIG,
   SIGNATURE_TYPE_POLY_GNOSIS_SAFE,
+  signTypedData,
 } from "./order-sign";
 
 const FUNDER = "0x997C95D8BE61D5779EdfB49aAF5dD83d85f31434";
@@ -156,5 +158,69 @@ describe("buildAndSignOrder", () => {
     });
     const typed = JSON.parse(provider.request.mock.calls[0]![0].params[1] as string);
     expect(typed.domain.verifyingContract).toBe("0xe2222d279d744050d28e00520010520000310F59");
+  });
+});
+
+// ── Cross-wallet signing compatibility ───────────────────────────────────────
+
+const R_S = "11".repeat(64); // 64 bytes of r||s
+
+describe("normalizeSignatureV", () => {
+  it("lifts a 0/1 recovery id to 27/28", () => {
+    expect(normalizeSignatureV(`0x${R_S}00`)).toBe(`0x${R_S}1b`);
+    expect(normalizeSignatureV(`0x${R_S}01`)).toBe(`0x${R_S}1c`);
+  });
+
+  it("leaves an already-canonical signature untouched", () => {
+    expect(normalizeSignatureV(`0x${R_S}1b`)).toBe(`0x${R_S}1b`);
+    expect(normalizeSignatureV(`0x${R_S}1c`)).toBe(`0x${R_S}1c`);
+  });
+
+  // EIP-1271 / ERC-6492 envelopes are not 65-byte ECDSA and must not be edited.
+  it("leaves non-65-byte payloads untouched", () => {
+    const envelope = `0x${"ab".repeat(200)}`;
+    expect(normalizeSignatureV(envelope)).toBe(envelope);
+    expect(normalizeSignatureV("0x")).toBe("0x");
+  });
+});
+
+describe("signTypedData", () => {
+  const typedData = { primaryType: "Order", domain: {}, types: {}, message: {} };
+
+  it("sends the JSON-string param shape wallets normally expect", async () => {
+    const provider = { request: vi.fn().mockResolvedValue(`0x${R_S}1b`) };
+    await signTypedData(provider, SIGNER, typedData);
+    expect(provider.request).toHaveBeenCalledOnce();
+    expect(typeof provider.request.mock.calls[0]![0].params[1]).toBe("string");
+  });
+
+  it("retries with the object param shape when a wallet rejects the string", async () => {
+    const provider = {
+      request: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("invalid params"), { code: -32602 }))
+        .mockResolvedValueOnce(`0x${R_S}1b`),
+    };
+    const sig = await signTypedData(provider, SIGNER, typedData);
+    expect(provider.request).toHaveBeenCalledTimes(2);
+    expect(provider.request.mock.calls[1]![0].params[1]).toBe(typedData);
+    expect(sig).toBe(`0x${R_S}1b`);
+  });
+
+  // Re-prompting after a decline would be hostile — and the second prompt
+  // would look to the user like the app ignoring their "no".
+  it("never re-prompts after a user rejection", async () => {
+    const provider = {
+      request: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("User rejected the request."), { code: 4001 })),
+    };
+    await expect(signTypedData(provider, SIGNER, typedData)).rejects.toMatchObject({ code: 4001 });
+    expect(provider.request).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes the recovery id of whatever the wallet returns", async () => {
+    const provider = { request: vi.fn().mockResolvedValue(`0x${R_S}00`) };
+    await expect(signTypedData(provider, SIGNER, typedData)).resolves.toBe(`0x${R_S}1b`);
   });
 });

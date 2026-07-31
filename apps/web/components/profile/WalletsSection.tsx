@@ -13,9 +13,11 @@ import {
 } from "@/lib/queries";
 import type { TradingAccount } from "@/lib/types";
 import { signClobAuth } from "@/lib/clob-auth";
-import { ensurePolygonChain } from "@/lib/chain";
+import { ensurePolygonChain, type EnsureChainResult } from "@/lib/chain";
+import { friendlySubmitError } from "@/lib/order-errors";
 import type { Eip1193Provider } from "@/lib/order-sign";
 import { Badge, Button, Card, CardHeader, ErrorNote, Spinner } from "@/components/ui";
+import { PolygonNotice } from "@/components/wallet/PolygonNotice";
 import { WalletCard } from "./WalletCard";
 
 export function WalletsSection({
@@ -75,10 +77,11 @@ export function WalletsSection({
       );
       return;
     }
+    let chain: EnsureChainResult = { ok: true, switched: false };
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
       // The ClobAuth domain pins chainId 137 — switch strict wallets first.
-      await ensurePolygonChain(provider);
+      chain = await ensurePolygonChain(provider);
       const clobAuth = await signClobAuth(provider, address, 137);
       await setupCreds.mutateAsync({
         ...clobAuth,
@@ -86,7 +89,14 @@ export function WalletsSection({
       });
       setCredsSuccess("Trading credentials set up successfully.");
     } catch (e) {
-      setCredsError(e instanceof Error ? e.message : "Credential setup failed.");
+      // friendlySubmitError, not e.message: an ApiError can carry an empty
+      // message, and a raw read of it renders a blank error banner.
+      const base = friendlySubmitError(e);
+      setCredsError(
+        chain.ok
+          ? base
+          : `${base} Your wallet is also not on the Polygon network — switch it to Polygon and try again.`,
+      );
     }
   };
 
@@ -162,6 +172,7 @@ export function WalletsSection({
         )}
 
         {/* Credential feedback */}
+        <PolygonNotice />
         {credsError && <ErrorNote message={credsError} />}
         {credsSuccess && (
           <div className="rounded-md border border-pos/30 bg-pos/10 px-3 py-2 text-sm text-pos">

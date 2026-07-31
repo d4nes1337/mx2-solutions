@@ -148,23 +148,37 @@ export const createSessionStore = (db: Database): SessionStore => ({
   },
 });
 
-// ── Allowlist ─────────────────────────────────────────────────────────────────
+// ── Access records (formerly the beta allowlist) ─────────────────────────────
+//
+// The default is INVERTED from the private-beta design: access is open, and a
+// row only ever *removes* it. An unknown wallet is allowed; a row with
+// is_active=false is an explicit admin revocation (a ban). `add` still records
+// every wallet that signs in so the admin panel, referral attribution, and the
+// audit trail keep a complete roster.
 
 export interface AllowlistStore {
-  isAllowed(walletAddress: string): Promise<boolean>;
+  /**
+   * True only for wallets an admin explicitly revoked. Unknown → false.
+   *
+   * There is deliberately no `isAllowed`: the previous "row must exist and be
+   * active" predicate is what silently 401'd every request from a wallet that
+   * had simply never been allowlisted.
+   */
+  isRevoked(walletAddress: string): Promise<boolean>;
   findEntry(walletAddress: string): Promise<AllowlistRow | null>;
   add(walletAddress: string, addedBy: string, note: string | null): Promise<AllowlistRow>;
   remove(walletAddress: string): Promise<void>;
 }
 
 export const createAllowlistStore = (db: Database): AllowlistStore => ({
-  async isAllowed(walletAddress) {
+  async isRevoked(walletAddress) {
     const [row] = await db
       .select({ isActive: allowlist.isActive })
       .from(allowlist)
       .where(eq(allowlist.walletAddress, walletAddress))
       .limit(1);
-    return row?.isActive === true;
+    // Absence is NOT revocation — that is the whole point of open access.
+    return row !== undefined && row.isActive === false;
   },
 
   async findEntry(walletAddress) {

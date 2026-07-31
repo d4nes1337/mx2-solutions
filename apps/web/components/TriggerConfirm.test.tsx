@@ -83,6 +83,8 @@ let submitQuery: {
 
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: undefined, connector: undefined }),
+  // PolygonNotice (wrong-network nudge) lives in the signing card.
+  useSwitchChain: () => ({ switchChain: vi.fn(), isPending: false, error: null }),
 }));
 
 vi.mock("@/lib/queries", () => ({

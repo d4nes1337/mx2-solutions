@@ -80,7 +80,7 @@ const build = (opts: { secret?: boolean; revokeRow?: InvitationRow | null } = {}
     },
   };
   const allowlist: AllowlistStore = {
-    isAllowed: async () => true,
+    isRevoked: async () => false,
     findEntry: async () => null,
     add: async () => {
       throw new Error("not used");

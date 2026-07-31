@@ -138,7 +138,7 @@ const mockSessions: SessionStore = {
 const mockAllowlist: AllowlistStore = {
   // Sessions only exist for allowlisted wallets; request-time enforcement
   // (enforceAllowlistOnSessions) would 401 every authed call otherwise.
-  isAllowed: async () => true,
+  isRevoked: async () => false,
   findEntry: async () => null,
   add: async (w, by, note) =>
     ({
@@ -466,6 +466,23 @@ describe("auth routes", () => {
     const app = appWith({ ping: async () => true });
     const res = await app.inject({ method: "GET", url: "/api/auth/me" });
     expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  // Regression guard for the blank-error bug: the browser builds its error
+  // string from `message` and falls back to `Response.statusText`, which is
+  // ALWAYS "" over HTTP/2 (what production serves). A 401 body without a
+  // `message` reaches the user as an empty error banner.
+  it("every 401 carries a non-empty, actionable message", async () => {
+    const app = appWith({ ping: async () => true });
+    for (const url of ["/api/auth/me", "/api/profile/positions", "/api/trade/orders"]) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(401);
+      const body = res.json() as { error?: string; message?: string };
+      expect(body.error).toBeTruthy();
+      expect(String(body.message ?? "").trim()).not.toBe("");
+      expect(body.message).toMatch(/sign in/i);
+    }
     await app.close();
   });
 

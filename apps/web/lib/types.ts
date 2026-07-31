@@ -216,7 +216,6 @@ export interface FeatureFlags {
   relayer: boolean;
   privySigning: boolean;
   aiChat: boolean;
-  openBeta: boolean;
   referrals: boolean;
   walletWithdraw: boolean;
   bridgeFunding: boolean;

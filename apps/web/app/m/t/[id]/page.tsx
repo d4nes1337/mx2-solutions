@@ -17,10 +17,11 @@ import { getTelegramWebApp } from "@/lib/telegram";
 import { ApiError } from "@/lib/api";
 import { friendlySubmitError } from "@/lib/order-errors";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
-import { ensurePolygonChain } from "@/lib/chain";
+import { ensurePolygonChain, type EnsureChainResult } from "@/lib/chain";
 import type { TriggerDetailResponse } from "@/lib/types";
 import { Badge, Button, ErrorNote, Segmented, Spinner, cn } from "@/components/ui";
 import { CheckDraw, FadeRise } from "@/components/motion/primitives";
+import { PolygonNotice } from "@/components/wallet/PolygonNotice";
 
 /**
  * Mobile sign surface (opened from a Telegram notification, optionally inside
@@ -214,11 +215,14 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
     }
     if (!account.funderAddress) return setSignError("No funder configured for this account.");
     if (!limitValid) return setSignError("Limit price must be between 1¢ and 99¢.");
+    // Tracked outside the try so a failure can say whether the wallet was also
+    // on the wrong chain — the usual cause of an opaque wallet-side rejection.
+    let chain: EnsureChainResult = { ok: true, switched: false };
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
       // Polygon first — mobile wallets are the strictest about signing
       // typed data for a chain they are not on.
-      await ensurePolygonChain(provider);
+      chain = await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId: preview.tokenId,
         side: preview.side,
@@ -256,7 +260,12 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
       await confirm.mutateAsync({ id: triggerId, orderIntentId: res.intentId });
       setDone("signed");
     } catch (e) {
-      setSignError(friendlySubmitError(e));
+      const base = friendlySubmitError(e);
+      setSignError(
+        chain.ok
+          ? base
+          : `${base} Your wallet is also not on the Polygon network — switch it to Polygon and sign again.`,
+      );
     }
   };
 
@@ -290,6 +299,8 @@ function SignCard({ triggerId, d }: { triggerId: string; d: TriggerDetailRespons
         <div className="text-sm font-semibold text-fg">Order ready to sign</div>
         <Badge tone="warn">awaiting signature</Badge>
       </div>
+
+      <PolygonNotice />
 
       {/* Does the condition still hold right now? */}
       <div

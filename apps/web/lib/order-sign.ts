@@ -199,15 +199,71 @@ export interface SignedOrder extends OrderStruct {
   signature: string;
 }
 
+/**
+ * Normalize a 65-byte ECDSA signature's recovery id to the 27/28 encoding.
+ *
+ * Some signers (hardware wallets behind certain connectors, a few smart-wallet
+ * bridges) return `v` as 0/1. Both the CLOB and our own server-side pre-flight
+ * recovery read that as an invalid signature, and the user just sees the order
+ * rejected. Anything that is not a well-formed 65-byte signature is returned
+ * untouched — EIP-1271/ERC-6492 payloads must not be rewritten.
+ */
+export function normalizeSignatureV(signature: string): string {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) return signature;
+  const v = Number.parseInt(signature.slice(130), 16);
+  if (v !== 0 && v !== 1) return signature;
+  return `${signature.slice(0, 130)}${(v + 27).toString(16).padStart(2, "0")}`;
+}
+
+/** A wallet complaining about the shape of `params`, not about the request. */
+function isParamShapeError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  // Never retry a user rejection (4001) or an unsupported method (4200).
+  if (code === 4001 || code === 4200) return false;
+  if (code === -32602) return true;
+  const message = e instanceof Error ? e.message : String(e ?? "");
+  return /invalid param|params must|unexpected token|JSON|could not be parsed|is not an object/i.test(
+    message,
+  );
+}
+
+/**
+ * Request an EIP-712 signature in a way every wallet we have seen accepts.
+ *
+ * Wallets disagree on the second param: most take the JSON *string*, a
+ * minority (some injected providers, some WalletConnect bridges) only accept
+ * the already-parsed object and reject the string with an invalid-params
+ * error. Try the common shape, fall back to the other — but only on a genuine
+ * shape complaint, never on a rejection, so a declined signature is not
+ * re-prompted.
+ */
+export async function signTypedData(
+  provider: Eip1193Provider,
+  address: string,
+  typedData: unknown,
+): Promise<string> {
+  let signature: string;
+  try {
+    signature = await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [address, JSON.stringify(typedData)],
+    });
+  } catch (e) {
+    if (!isParamShapeError(e)) throw e;
+    signature = await provider.request({
+      method: "eth_signTypedData_v4",
+      params: [address, typedData],
+    });
+  }
+  return normalizeSignatureV(signature);
+}
+
 export async function buildAndSignOrder(
   provider: Eip1193Provider,
   input: BuildOrderInput & { chainId: number; negRisk?: boolean },
 ): Promise<SignedOrder> {
   const order = buildOrderStruct(input);
   const typedData = buildOrderTypedData(order, input.chainId, input.negRisk ?? false);
-  const signature = await provider.request({
-    method: "eth_signTypedData_v4",
-    params: [order.signer, JSON.stringify(typedData)],
-  });
+  const signature = await signTypedData(provider, order.signer, typedData);
   return { ...order, signature };
 }

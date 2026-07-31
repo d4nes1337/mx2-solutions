@@ -113,8 +113,10 @@ const makeReferralRedemptionRow = (
 });
 
 const buildAuthApp = async (opts: {
-  openBeta: boolean;
-  alreadyAllowlisted: boolean;
+  /** Wallet has an access record with is_active=false — the only hard block. */
+  revoked?: boolean;
+  /** Wallet already has an ACTIVE, attributed access record (returning user). */
+  knownWallet?: boolean;
   /** When set, an InvitationStore mock is wired that returns this from redeem. */
   redeemResult?: InvitationRedeemResult;
   /** When set, a ReferralStore mock is wired that returns this from redeem. */
@@ -128,9 +130,6 @@ const buildAuthApp = async (opts: {
 }): Promise<Harness> => {
   const config = loadConfig({
     DATABASE_URL: "postgresql://u:p@localhost:5432/db",
-    // Explicit both ways: the config default is now open-beta ON (public
-    // release), so gated-path tests must pin it off rather than rely on it.
-    FEATURE_OPEN_BETA: opts.openBeta ? "true" : "false",
     ...(opts.adminWallet ? { ADMIN_WALLET_ADDRESSES: ADDRESS } : {}),
     ...(opts.privySigning
       ? {
@@ -162,9 +161,30 @@ const buildAuthApp = async (opts: {
     markUsed: async () => {},
   };
 
+  // Access is open: absence of a row means "allowed", not "blocked".
+  const existingEntry = opts.revoked
+    ? {
+        walletAddress: ADDRESS,
+        addedBy: "admin",
+        note: null,
+        isActive: false,
+        addedAt: new Date(),
+        removedAt: new Date(),
+      }
+    : opts.knownWallet
+      ? {
+          walletAddress: ADDRESS,
+          addedBy: `referral:${REFERRAL_CODE_ID}`,
+          note: "ANSEM",
+          isActive: true,
+          addedAt: new Date(),
+          removedAt: null,
+        }
+      : null;
+
   const allowlist: AllowlistStore = {
-    isAllowed: async () => opts.alreadyAllowlisted,
-    findEntry: async () => null,
+    isRevoked: async () => opts.revoked === true,
+    findEntry: async () => existingEntry,
     add: async (walletAddress, addedBy, note) => {
       addCalls.push({ walletAddress, addedBy, note });
       return {
@@ -316,25 +336,11 @@ const verifyBody = async () => ({
   signature: await signLogin(),
 });
 
-describe("POST /api/auth/verify — open-beta auto-allowlist", () => {
-  it("still 403s unknown wallets when FEATURE_OPEN_BETA is off", async () => {
-    const { app, addCalls } = await buildAuthApp({ openBeta: false, alreadyAllowlisted: false });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/auth/verify",
-      payload: await verifyBody(),
-    });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: "NOT_ALLOWLISTED" });
-    expect(addCalls).toHaveLength(0);
-    await app.close();
-  });
-
-  it("auto-allowlists a valid unknown wallet when FEATURE_OPEN_BETA is on", async () => {
-    const { app, addCalls, audits } = await buildAuthApp({
-      openBeta: true,
-      alreadyAllowlisted: false,
-    });
+describe("POST /api/auth/verify — open access", () => {
+  // The regression this block exists for: there is no list to be on. A wallet
+  // nobody has ever seen signs in on a valid signature alone.
+  it("signs in an unknown wallet with no code at all", async () => {
+    const { app, addCalls, audits } = await buildAuthApp({});
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/verify",
@@ -345,8 +351,8 @@ describe("POST /api/auth/verify — open-beta auto-allowlist", () => {
     expect(addCalls).toEqual([
       {
         walletAddress: ADDRESS,
-        addedBy: "system:open-beta",
-        note: "auto-allowlisted (open beta)",
+        addedBy: "system:open-access",
+        note: "first sign-in (open access)",
       },
     ]);
     expect(audits.map((a) => a.action)).toContain("allowlist.auto_added");
@@ -355,8 +361,25 @@ describe("POST /api/auth/verify — open-beta auto-allowlist", () => {
     await app.close();
   });
 
-  it("never auto-allowlists on an invalid signature", async () => {
-    const { app, addCalls } = await buildAuthApp({ openBeta: true, alreadyAllowlisted: false });
+  it("refuses a wallet an admin revoked", async () => {
+    const { app, addCalls } = await buildAuthApp({ revoked: true });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/verify",
+      payload: await verifyBody(),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: "ACCESS_REVOKED" });
+    // Revocation copy must be actionable, never blank — a message-less error
+    // body reaches the browser as an empty string over HTTP/2.
+    expect(String(res.json().message ?? "").length).toBeGreaterThan(0);
+    expect(addCalls).toHaveLength(0);
+    expect(res.headers["set-cookie"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("never records or signs in on an invalid signature", async () => {
+    const { app, addCalls } = await buildAuthApp({});
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/verify",
@@ -367,11 +390,8 @@ describe("POST /api/auth/verify — open-beta auto-allowlist", () => {
     await app.close();
   });
 
-  it("does not re-add wallets that are already allowlisted", async () => {
-    const { app, addCalls, audits } = await buildAuthApp({
-      openBeta: true,
-      alreadyAllowlisted: true,
-    });
+  it("does not rewrite the access record of a returning wallet", async () => {
+    const { app, addCalls, audits } = await buildAuthApp({ knownWallet: true });
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/verify",
@@ -385,8 +405,7 @@ describe("POST /api/auth/verify — open-beta auto-allowlist", () => {
 
   it("never provisions an Arima trading wallet on login (even with privy signing on)", async () => {
     const { app, audits } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: true,
+      knownWallet: true,
       privySigning: true,
     });
     const res = await app.inject({
@@ -409,8 +428,6 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
   it("redeems a valid code for the signing wallet, allowlists it, and signs in", async () => {
     const row = makeInvitationRow({ waitlistEntryId: WAITLIST_ID });
     const { app, addCalls, audits, redeemCalls, waitlistStatusCalls } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       redeemResult: { outcome: "redeemed", invitation: row },
     });
     const res = await app.inject({
@@ -437,8 +454,6 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
   it("treats a replay by the same wallet as idempotent success", async () => {
     const row = makeInvitationRow({ redeemedBy: ADDRESS, redeemedAt: new Date() });
     const { app, audits } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       redeemResult: { outcome: "already_redeemed_by_wallet", invitation: row },
     });
     const res = await app.inject({
@@ -452,10 +467,10 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
     await app.close();
   });
 
-  it("rejects an invalid/expired/foreign code with 403 INVITE_INVALID and audits it", async () => {
+  // Codes are attribution, not access: a stale or stolen code costs the user
+  // their attribution, never their login.
+  it("signs in anyway when the invitation code is rejected, and audits it", async () => {
     const { app, addCalls, audits } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       redeemResult: { outcome: "rejected", reason: "redeemed_by_other" },
     });
     const res = await app.inject({
@@ -463,19 +478,23 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
       url: "/api/auth/verify",
       payload: { ...(await verifyBody()), inviteCode: "arima-stolen" },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: "INVITE_INVALID" });
-    expect(addCalls).toHaveLength(0);
+    expect(res.statusCode).toBe(200);
+    // Recorded as an ordinary open-access sign-in, with no stolen attribution.
+    expect(addCalls).toEqual([
+      {
+        walletAddress: ADDRESS,
+        addedBy: "system:open-access",
+        note: "first sign-in (open access)",
+      },
+    ]);
     const rejected = audits.find((a) => a.action === "invite.redemption_rejected");
     expect(rejected?.metadata).toMatchObject({ reason: "redeemed_by_other" });
-    expect(res.headers["set-cookie"]).toBeUndefined();
+    expect(res.headers["set-cookie"]).toBeDefined();
     await app.close();
   });
 
   it("never attempts redemption on an invalid signature", async () => {
     const { app, redeemCalls } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       redeemResult: { outcome: "redeemed", invitation: makeInvitationRow() },
     });
     const res = await app.inject({
@@ -492,10 +511,8 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
     await app.close();
   });
 
-  it("403 without a code advertises the waitlist and invite paths", async () => {
-    const { app } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
+  it("signs in without a code and never touches the invitation store", async () => {
+    const { app, redeemCalls } = await buildAuthApp({
       redeemResult: { outcome: "rejected", reason: "not_found" },
     });
     const res = await app.inject({
@@ -503,12 +520,8 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
       url: "/api/auth/verify",
       payload: await verifyBody(),
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({
-      error: "NOT_ALLOWLISTED",
-      inviteRedemptionAvailable: true,
-      waitlistAvailable: true,
-    });
+    expect(res.statusCode).toBe(200);
+    expect(redeemCalls).toHaveLength(0);
     await app.close();
   });
 });
@@ -516,8 +529,6 @@ describe("POST /api/auth/verify — private-beta invitation redemption", () => {
 describe("POST /api/auth/verify — referral code redemption", () => {
   it("redeems a referral code, allowlists, audits, and mints a personal code", async () => {
     const { app, addCalls, audits, referralRedeemCalls, ensurePersonalCalls } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       referralRedeemResult: {
         outcome: "redeemed",
         code: makeReferralCodeRow(),
@@ -539,10 +550,8 @@ describe("POST /api/auth/verify — referral code redemption", () => {
     await app.close();
   });
 
-  it("rejects an exhausted code without leaking seat counts", async () => {
+  it("signs in anyway when the referral code is exhausted", async () => {
     const { app, addCalls, audits } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       referralRedeemResult: { outcome: "rejected", reason: "exhausted" },
     });
     const res = await app.inject({
@@ -550,17 +559,20 @@ describe("POST /api/auth/verify — referral code redemption", () => {
       url: "/api/auth/verify",
       payload: { ...(await verifyBody()), inviteCode: "ANSEM" },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: "INVITE_INVALID" });
-    expect(addCalls).toHaveLength(0);
+    expect(res.statusCode).toBe(200);
+    expect(addCalls).toEqual([
+      {
+        walletAddress: ADDRESS,
+        addedBy: "system:open-access",
+        note: "first sign-in (open access)",
+      },
+    ]);
     expect(audits.some((a) => a.action === "referral.redemption_rejected")).toBe(true);
     await app.close();
   });
 
-  it("tells an already-referred wallet to contact support", async () => {
-    const { app } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
+  it("signs in anyway when the wallet was already referred", async () => {
+    const { app, audits } = await buildAuthApp({
       referralRedeemResult: { outcome: "rejected", reason: "wallet_already_referred" },
     });
     const res = await app.inject({
@@ -568,15 +580,20 @@ describe("POST /api/auth/verify — referral code redemption", () => {
       url: "/api/auth/verify",
       payload: { ...(await verifyBody()), inviteCode: "OTHER" },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().message).toContain("already used a referral code");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["set-cookie"]).toBeDefined();
+    expect(
+      audits.some(
+        (a) =>
+          a.action === "referral.redemption_rejected" &&
+          a.metadata?.["reason"] === "wallet_already_referred",
+      ),
+    ).toBe(true);
     await app.close();
   });
 
   it("falls back to a legacy hashed invitation when the referral code is unknown", async () => {
     const { app, addCalls, redeemCalls, referralRedeemCalls } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       referralRedeemResult: { outcome: "rejected", reason: "not_found" },
       redeemResult: {
         outcome: "redeemed",
@@ -599,10 +616,8 @@ describe("POST /api/auth/verify — referral code redemption", () => {
     await app.close();
   });
 
-  it("403s an unknown code in a referral-only deployment", async () => {
-    const { app, audits } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
+  it("signs in anyway when the referral code is unknown", async () => {
+    const { app, addCalls } = await buildAuthApp({
       referralRedeemResult: { outcome: "rejected", reason: "not_found" },
     });
     const res = await app.inject({
@@ -610,21 +625,21 @@ describe("POST /api/auth/verify — referral code redemption", () => {
       url: "/api/auth/verify",
       payload: { ...(await verifyBody()), inviteCode: "NOPE" },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({ error: "INVITE_INVALID" });
-    expect(
-      audits.some(
-        (a) =>
-          a.action === "referral.redemption_rejected" && a.metadata?.["reason"] === "not_found",
-      ),
-    ).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["set-cookie"]).toBeDefined();
+    expect(addCalls).toEqual([
+      {
+        walletAddress: ADDRESS,
+        addedBy: "system:open-access",
+        note: "first sign-in (open access)",
+      },
+    ]);
     await app.close();
   });
 
   it("never consumes a code for an already-allowlisted wallet", async () => {
     const { app, referralRedeemCalls, ensurePersonalCalls } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: true,
+      knownWallet: true,
       referralRedeemResult: { outcome: "rejected", reason: "exhausted" },
     });
     const res = await app.inject({
@@ -641,8 +656,7 @@ describe("POST /api/auth/verify — referral code redemption", () => {
 
   it("survives a personal-code minting failure (login is never blocked)", async () => {
     const { app } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: true,
+      knownWallet: true,
       referralRedeemResult: { outcome: "rejected", reason: "not_found" },
       personalCodeFails: true,
     });
@@ -657,8 +671,6 @@ describe("POST /api/auth/verify — referral code redemption", () => {
 
   it("rate-limits repeated verify attempts from one IP", async () => {
     const { app } = await buildAuthApp({
-      openBeta: false,
-      alreadyAllowlisted: false,
       referralRedeemResult: { outcome: "rejected", reason: "not_found" },
     });
     let limited = 0;
@@ -679,8 +691,7 @@ describe("GET /api/auth/me — isAdmin flag", () => {
   it("reports isAdmin=true only for configured admin wallets", async () => {
     for (const adminWallet of [true, false]) {
       const { app } = await buildAuthApp({
-        openBeta: false,
-        alreadyAllowlisted: true,
+        knownWallet: true,
         adminWallet,
       });
       const res = await app.inject({

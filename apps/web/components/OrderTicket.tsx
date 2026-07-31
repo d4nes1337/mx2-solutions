@@ -14,7 +14,8 @@ import { ApiError } from "@/lib/api";
 import { signedUsd } from "@/lib/format";
 import { buildPreviewRequest } from "@/lib/orders";
 import { buildAndSignOrder, type Eip1193Provider } from "@/lib/order-sign";
-import { ensurePolygonChain } from "@/lib/chain";
+import { ensurePolygonChain, type EnsureChainResult } from "@/lib/chain";
+import { friendlySubmitError } from "@/lib/order-errors";
 import { computePayoff } from "@/lib/strategies/projection";
 import type { OrderSide } from "@/lib/types";
 import { Badge, Button, ErrorNote, cn } from "./ui";
@@ -176,10 +177,11 @@ export function OrderTicket({
       setSignError("Missing token id or deposit wallet.");
       return;
     }
+    let chain: EnsureChainResult = { ok: true, switched: false };
     try {
       const provider = (await connector.getProvider()) as Eip1193Provider;
       // Polygon first — the EIP-712 domain pins chainId 137.
-      await ensurePolygonChain(provider);
+      chain = await ensurePolygonChain(provider);
       const order = await buildAndSignOrder(provider, {
         tokenId,
         side,
@@ -204,7 +206,12 @@ export function OrderTicket({
       });
     } catch (e) {
       // User rejection or signing failure — surface, don't submit.
-      setSignError(e instanceof Error ? e.message : "Signing failed.");
+      const base = friendlySubmitError(e);
+      setSignError(
+        chain.ok
+          ? base
+          : `${base} Your wallet is also not on the Polygon network — switch it to Polygon and sign again.`,
+      );
     }
   };
 

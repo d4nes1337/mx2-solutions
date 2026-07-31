@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { api } from "./api";
-import type { Eip1193Provider } from "./order-sign";
+import { signTypedData, type Eip1193Provider } from "./order-sign";
 
 // Builds + signs the Polymarket CLOB L1 "ClobAuth" EIP-712 message. The resulting
 // signature lets the backend derive (or create) the user's L2 API credentials via
@@ -62,9 +62,6 @@ export async function signClobAuth(
   const timestamp = await fetchClobServerTimestamp();
   const nonce = 0; // Polymarket's default L1 nonce.
   const typedData = buildClobAuthTypedData(signingAddress, chainId, timestamp, nonce);
-  const l1Signature = await provider.request({
-    method: "eth_signTypedData_v4",
-    params: [signingAddress, JSON.stringify(typedData)],
-  });
+  const l1Signature = await signTypedData(provider, signingAddress, typedData);
   return { l1Signature, timestamp, nonce: nonce.toString() };
 }

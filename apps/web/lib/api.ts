@@ -17,6 +17,30 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Last-resort copy for a failure whose response carried no usable text.
+ *
+ * This exists because `Response.statusText` is ALWAYS "" over HTTP/2 — the
+ * protocol dropped the reason phrase — and production serves h2. Using it as
+ * the fallback meant any error body without a `message` reached the user as a
+ * completely blank error banner. Never return an empty string from here.
+ */
+function defaultMessageForStatus(status: number): string {
+  if (status === 401) return "Your session has expired — sign in with your wallet again.";
+  if (status === 403) return "You don't have access to this action.";
+  if (status === 404) return "Not found.";
+  if (status === 429) return "Too many requests — please wait a moment and try again.";
+  if (status >= 500) return `The server could not handle the request (HTTP ${status}).`;
+  return `Request failed (HTTP ${status}).`;
+}
+
+const firstNonEmpty = (...candidates: (string | undefined | null)[]): string | null => {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim() !== "") return c;
+  }
+  return null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -26,7 +50,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
     });
   } catch (e) {
-    throw new ApiError(0, "NETWORK_ERROR", (e as Error).message, null);
+    throw new ApiError(
+      0,
+      "NETWORK_ERROR",
+      firstNonEmpty(e instanceof Error ? e.message : null) ??
+        "Could not reach the server — check your connection and try again.",
+      null,
+    );
   }
 
   const text = await res.text();
@@ -40,11 +70,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    const body = (json ?? {}) as { error?: string; message?: string };
+    const body = (json ?? {}) as { error?: string; message?: string; raw?: string };
     throw new ApiError(
       res.status,
-      body.error ?? `HTTP_${res.status}`,
-      body.message ?? res.statusText,
+      firstNonEmpty(body.error) ?? `HTTP_${res.status}`,
+      // Ordered by usefulness, and guaranteed non-empty. `raw` catches
+      // non-JSON error bodies (a proxy's HTML 502, say) that would otherwise
+      // fall through to the empty h2 statusText.
+      firstNonEmpty(body.message, res.statusText, body.raw?.slice(0, 200)) ??
+        defaultMessageForStatus(res.status),
       json,
     );
   }
