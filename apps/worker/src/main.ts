@@ -20,6 +20,7 @@ import {
   createReferralStore,
   createSignLinkTokenStore,
   createVolumeStore,
+  commitTriggerAtomically,
   type NotificationOutboxStore,
 } from "@mx2/db";
 import {
@@ -45,6 +46,7 @@ import { createOrderSyncLoop, type OrderSyncLoop } from "./order-sync.js";
 import { createVolumeSyncLoop, type VolumeSyncLoop } from "./volume-sync.js";
 import { createDunePushLoop, type DunePushLoop } from "./dune-push.js";
 import { createRuleEvaluatorManager, type RuleEvaluatorManager } from "./rule-evaluator.js";
+import { createMarketStatusPoller, type MarketStatusPoller } from "./market-status-poller.js";
 import { createAutoExecutor, type AutoExecutor } from "./auto-executor.js";
 import { createAutoRetrySweeper, type AutoRetrySweeper } from "./auto-retry-sweeper.js";
 import { createExecutingRecovery, type ExecutingRecovery } from "./executing-recovery.js";
@@ -100,6 +102,7 @@ const main = async (): Promise<void> => {
   let evaluator: RuleEvaluatorManager | null = null;
   let executingRecovery: ExecutingRecovery | null = null;
   let autoRetrySweeper: AutoRetrySweeper | null = null;
+  let marketStatusPoller: MarketStatusPoller | null = null;
 
   if (config.features.conditionalRules) {
     const ruleStore = createRuleStore(dbHandle.db);
@@ -189,6 +192,27 @@ const main = async (): Promise<void> => {
         );
       return view;
     };
+    // Price-window seeding: CLOB /prices-history (1-min bars) backfills each
+    // price_move token's rolling window at arm/restart and heals reconnect
+    // gaps, so a strategy is never blind for its full lookback (the incident
+    // class: a 10¢-in-1m drop 40s after arming was invisible for 60s+ — the
+    // whole life of a 5-minute instant market). Normalized here (seconds→ms,
+    // sorted, p∈(0,1)); merge semantics guarantee a seed never outranks live
+    // data.
+    const fetchPriceHistory = async (tokenId: string, lookbackMs: number) => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const res = await publicClobClient.getPricesHistory({
+        tokenId,
+        startTs: nowSec - Math.ceil(lookbackMs / 1000),
+        endTs: nowSec,
+        fidelity: 1,
+      });
+      if (!res.ok) return null;
+      return res.value
+        .map((s) => ({ t: s.t < 1e12 ? s.t * 1000 : s.t, p: s.p }))
+        .filter((s) => Number.isFinite(s.t) && s.p > 0 && s.p < 1)
+        .sort((a, b) => a.t - b.t);
+    };
     // Rolling series bindings (ADR-0028): resolve the window a rolling order
     // targets at trigger time, and price the entry side off the LIVE book —
     // Gamma's indicative prices are a display convenience, not something to
@@ -230,18 +254,60 @@ const main = async (): Promise<void> => {
     evaluator = createRuleEvaluatorManager({
       logger,
       ruleStore,
-      triggerStore,
+      // Money-path write: CAS + trigger row + outbox + event-bus NOTIFY in one
+      // transaction (trigger-commit.ts) — a fired condition always yields
+      // something to sign, exactly once.
+      commitTrigger: (o) => commitTriggerAtomically(dbHandle.db, o),
       auditStore,
       subscribe: (tokenIds) => feedRef.current?.subscribe(tokenIds),
       unsubscribe: (tokenIds) => feedRef.current?.unsubscribe(tokenIds),
       fetchOrderbook,
-      isFeedConnected: () => feedRef.current?.state() === "connected",
+      fetchPriceHistory,
+      // Deltas/heartbeats refresh only the in-memory view; persisting the
+      // patched book (1 write/s/token) keeps snapshot readers (overview,
+      // action center) agreeing with the worker instead of showing "no fresh
+      // data" on an actively-trading market. Fire-and-forget: a DB hiccup
+      // must never stall evaluation.
+      persistSnapshot: (view) => {
+        void marketSnapshots
+          .upsert({
+            tokenId: view.tokenId,
+            conditionId: view.conditionId,
+            bids: view.bids.map((l) => ({ price: String(l.price), size: String(l.size) })),
+            asks: view.asks.map((l) => ({ price: String(l.price), size: String(l.size) })),
+            lastTradePrice: null,
+            midPrice:
+              view.bids[0] && view.asks[0]
+                ? ((view.bids[0].price + view.asks[0].price) / 2).toFixed(4)
+                : null,
+            source: "ws",
+            isStale: false,
+            receivedAt: new Date(view.receivedAtMs),
+          })
+          .catch((e: unknown) =>
+            logger.warn({ err: e, tokenId: view.tokenId }, "Failed to persist patched snapshot"),
+          );
+      },
       refreshIntervalMs: config.worker.restRefreshIntervalMs,
       refreshMaxPerPass: config.worker.restRefreshMaxPerPass,
       resolveRollingWindow,
       ...(autoExecutor ? { autoExecutor } : {}),
       ...(outbox ? { outbox } : {}),
     });
+
+    // Real market status: Gamma closed/active flags → evaluator INVALIDATED
+    // path + market_snapshots stamp. A resolved instant market becomes
+    // "market resolved" instead of eternal "no fresh data".
+    {
+      const ev = evaluator;
+      marketStatusPoller = createMarketStatusPoller({
+        logger,
+        gammaClient: seriesGammaClient,
+        marketSnapshots,
+        listWatched: () => ev.watched(),
+        onMarketStatus: (tokenId, status) => ev.onMarketStatus(tokenId, status),
+      });
+    }
 
     // Crash recovery: EXECUTING is not evaluable, so a worker crash mid-
     // execution would otherwise strand the rule forever (RFC-0002 §6). Runs
@@ -545,6 +611,7 @@ const main = async (): Promise<void> => {
   }
 
   evaluator?.start();
+  marketStatusPoller?.start();
   executingRecovery?.start();
   autoRetrySweeper?.start();
   quoter?.start();
@@ -564,6 +631,7 @@ const main = async (): Promise<void> => {
     logger.info({ signal }, "Worker shutting down");
     clearInterval(heartbeat);
     evaluator?.stop();
+    marketStatusPoller?.stop();
     executingRecovery?.stop();
     autoRetrySweeper?.stop();
     quoter?.stop();

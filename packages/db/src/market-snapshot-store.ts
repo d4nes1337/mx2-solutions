@@ -18,6 +18,12 @@ export interface MarketSnapshotStore {
   upsert(snapshot: UpsertMarketSnapshot): Promise<MarketSnapshotRow>;
   findByTokenId(tokenId: string): Promise<MarketSnapshotRow | null>;
   markStale(tokenId: string): Promise<void>;
+  /**
+   * Stamp the real upstream market status (migration 0025): "resolved" |
+   * "closed" | "paused"; null = open/unknown. Lets the UI say "market
+   * resolved" instead of the misleading "no fresh data".
+   */
+  setMarketStatus(tokenId: string, status: string | null): Promise<void>;
 }
 
 export const createMarketSnapshotStore = (db: Database): MarketSnapshotStore => ({
@@ -69,6 +75,13 @@ export const createMarketSnapshotStore = (db: Database): MarketSnapshotStore => 
     await db
       .update(marketSnapshots)
       .set({ isStale: true, updatedAt: sql`now()` })
+      .where(eq(marketSnapshots.tokenId, tokenId));
+  },
+
+  async setMarketStatus(tokenId, status) {
+    await db
+      .update(marketSnapshots)
+      .set({ marketStatus: status, updatedAt: sql`now()` })
       .where(eq(marketSnapshots.tokenId, tokenId));
   },
 });

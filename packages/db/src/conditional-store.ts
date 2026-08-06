@@ -175,6 +175,28 @@ export interface RuleStore {
 
 const tsOrNull = (ms: number | null): Date | null => (ms === null ? null : new Date(ms));
 
+/**
+ * Shared UPDATE payload for a rule's evaluation state. Used by both
+ * `updateEvaluationState` and the atomic trigger commit (trigger-commit.ts) so
+ * the two write paths can never drift.
+ */
+export const evaluationUpdateSet = (update: RuleEvaluationUpdate) => ({
+  status: update.status,
+  trueSince: tsOrNull(update.trueSinceMs),
+  lastEvaluatedAt: update.lastEvaluatedAt,
+  errorMessage: update.errorMessage ?? null,
+  ...(update.triggerCount !== undefined ? { triggerCount: update.triggerCount } : {}),
+  ...(update.cooldownUntilMs !== undefined
+    ? { cooldownUntil: tsOrNull(update.cooldownUntilMs) }
+    : {}),
+  ...(update.watermarks !== undefined ? { runtimeWatermarks: update.watermarks } : {}),
+  ...(update.staleSinceMs !== undefined ? { staleSince: tsOrNull(update.staleSinceMs) } : {}),
+  updatedAt: sql`now()`,
+});
+
+/** Statuses the worker may transition (shared with trigger-commit.ts). */
+export const EVALUABLE_STATUSES = EVALUABLE;
+
 export const createRuleStore = (db: Database): RuleStore => ({
   async create(opts) {
     const [row] = await db
@@ -293,19 +315,7 @@ export const createRuleStore = (db: Database): RuleStore => ({
   async updateEvaluationState(id, update) {
     const [row] = await db
       .update(conditionalRules)
-      .set({
-        status: update.status,
-        trueSince: tsOrNull(update.trueSinceMs),
-        lastEvaluatedAt: update.lastEvaluatedAt,
-        errorMessage: update.errorMessage ?? null,
-        ...(update.triggerCount !== undefined ? { triggerCount: update.triggerCount } : {}),
-        ...(update.cooldownUntilMs !== undefined
-          ? { cooldownUntil: tsOrNull(update.cooldownUntilMs) }
-          : {}),
-        ...(update.watermarks !== undefined ? { runtimeWatermarks: update.watermarks } : {}),
-        ...(update.staleSinceMs !== undefined ? { staleSince: tsOrNull(update.staleSinceMs) } : {}),
-        updatedAt: sql`now()`,
-      })
+      .set(evaluationUpdateSet(update))
       .where(
         and(
           eq(conditionalRules.id, id),

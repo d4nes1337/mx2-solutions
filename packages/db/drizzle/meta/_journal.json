@@ -176,6 +176,13 @@
       "when": 1784500000008,
       "tag": "0024_auto_execution_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784500000009,
+      "tag": "0025_trigger_reliability",
+      "breakpoints": true
     }
   ]
 }

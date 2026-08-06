@@ -100,7 +100,18 @@ export interface OverviewResponse {
   strategies: StrategyOverviewItem[];
   /** Per-token compact price series (unix seconds, 0–1 price), shared. */
   sparklines: Record<string, { t: number; p: number }[]>;
-  books: Record<string, { bestBid: number | null; bestAsk: number | null; stale: boolean }>;
+  books: Record<
+    string,
+    {
+      bestBid: number | null;
+      bestAsk: number | null;
+      stale: boolean;
+      /** Real snapshot age at generation time (server clock). */
+      dataAgeMs: number | null;
+      /** "resolved" | "closed" | "paused" | null = open. */
+      marketStatus: string | null;
+    }
+  >;
 }
 
 export interface MarketFreshness {

@@ -267,6 +267,7 @@ const buildAiApp = (opts: {
     },
     findByTokenId: async () => null,
     markStale: async () => {},
+    setMarketStatus: async () => {},
   };
   const users: UserStore = {
     upsert: async (w) => ({ walletAddress: w, createdAt: new Date(), lastSeenAt: new Date() }),

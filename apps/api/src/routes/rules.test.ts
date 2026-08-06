@@ -306,6 +306,7 @@ const snapshot = (over: Partial<MarketSnapshotRow> = {}): MarketSnapshotRow => (
   midPrice: "0.475",
   source: "ws",
   isStale: false,
+  marketStatus: null,
   receivedAt: new Date(),
   updatedAt: new Date(),
   ...over,
@@ -393,6 +394,7 @@ const buildRulesApp = (opts: {
     },
     findByTokenId: async () => (opts.snapshotRow === undefined ? null : opts.snapshotRow),
     markStale: async () => {},
+    setMarketStatus: async () => {},
   };
 
   const noopUsers: UserStore = {

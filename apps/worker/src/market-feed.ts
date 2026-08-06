@@ -21,6 +21,13 @@ export interface MarketFeedOptions {
   wsUrl: string;
   logger: Logger;
   marketSnapshots: MarketSnapshotStore;
+  /**
+   * PER-TOKEN data-staleness bound: a subscribed token with no message for
+   * this long gets its snapshot marked stale. (The old implementation used
+   * one socket-global timer that marked EVERY token stale together — one busy
+   * token masked every quiet token's silence and one quiet market flagged the
+   * healthy ones.) Default 30 s.
+   */
   staleThresholdMs?: number;
   /** Optional observers for the conditional-rule evaluator (single extra consumer). */
   onBookView?: (view: MarketDataView) => void;
@@ -49,15 +56,29 @@ export interface MarketFeedManager {
   close(): void;
 }
 
+/**
+ * Mid of the BEST bid/ask, robust to level ordering. Upstream `book` frames
+ * list levels WORST-first (verified live 2026-08-06: raw bids[0]=0.01,
+ * asks[0]=0.99 on a 12.5¢ market) — the old `[0]` read produced a constant
+ * phantom mid of ~0.50 for every book, poisoning price windows (false
+ * price_move triggers) and the stored snapshot midPrice.
+ */
 export const computeMidPrice = (
   bids: readonly { price: string }[],
   asks: readonly { price: string }[],
 ): string | null => {
-  const bestBid = bids[0]?.price;
-  const bestAsk = asks[0]?.price;
-  if (bestBid === undefined || bestAsk === undefined) return null;
-  const mid = (Number(bestBid) + Number(bestAsk)) / 2;
-  return mid.toFixed(4);
+  let bestBid = Number.NEGATIVE_INFINITY;
+  for (const l of bids) {
+    const p = Number(l.price);
+    if (Number.isFinite(p) && p > bestBid) bestBid = p;
+  }
+  let bestAsk = Number.POSITIVE_INFINITY;
+  for (const l of asks) {
+    const p = Number(l.price);
+    if (Number.isFinite(p) && p < bestAsk) bestAsk = p;
+  }
+  if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk)) return null;
+  return ((bestBid + bestAsk) / 2).toFixed(4);
 };
 
 /** Map raw level strings → numeric levels, sorted best-first and dropping junk. */
@@ -107,7 +128,15 @@ export const orderbookToView = (ob: Orderbook, receivedAtMs: number): MarketData
   receivedAtMs,
 });
 
-const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions): Promise<void> => {
+/**
+ * Normalize a batch of raw WS market messages and fan them out to the
+ * snapshot store + evaluator observers. Exported for the trigger-reliability
+ * scenario harness, which drives this exact path with recorded frames.
+ */
+export const handleMessages = async (
+  msgs: WsMarketMessage[],
+  opts: MarketFeedOptions,
+): Promise<void> => {
   for (const msg of msgs) {
     if (msg.event_type === "book") {
       const receivedAtMs = Date.now();
@@ -148,13 +177,17 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
       const deltasByToken = new Map<string, BookDelta[]>();
       for (const item of priceChangeItems(msg)) {
         try {
-          // Prefer the item's best bid/ask mid as the price observation —
-          // level-change prices alone can be deep in the book.
-          const price =
-            item.bestBid !== undefined && item.bestAsk !== undefined
-              ? (Number(item.bestBid) + Number(item.bestAsk)) / 2
-              : Number(item.price);
-          if (Number.isFinite(price)) opts.onPrice?.(item.assetId, price, receivedAtMs);
+          // ONLY the item's best bid/ask mid is a price observation. The raw
+          // level price is NEVER one: it can sit anywhere in the book, and a
+          // deep resting order (say 50¢ on a 12¢ market) recorded as a
+          // "price" fabricates a huge phantom move the instant the mid is
+          // sampled again — a false trigger caught live on 2026-08-06.
+          // Items without bests still refresh the book via onBookDelta below,
+          // and the evaluator pushes the PATCHED book's mid from there.
+          if (item.bestBid !== undefined && item.bestAsk !== undefined) {
+            const price = (Number(item.bestBid) + Number(item.bestAsk)) / 2;
+            if (Number.isFinite(price)) opts.onPrice?.(item.assetId, price, receivedAtMs);
+          }
         } catch (e) {
           opts.logger.warn({ err: e, tokenId: item.assetId }, "Price-window tick push failed");
         }
@@ -219,11 +252,42 @@ const handleMessages = async (msgs: WsMarketMessage[], opts: MarketFeedOptions):
 export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedManager => {
   let lastState: WsClientState = "idle";
   let lastUnparsedLogMs = 0;
+  const staleThresholdMs = opts.staleThresholdMs ?? 30_000;
+  /** Last message per subscribed token; entry created (as a grace) on subscribe. */
+  const lastSeenAtMs = new Map<string, number>();
+  /** Tokens already marked stale this silence episode (cleared on traffic). */
+  const staleFlagged = new Set<string>();
+
+  const noteSeen = (tokenId: string, tMs: number): void => {
+    if (lastSeenAtMs.has(tokenId)) lastSeenAtMs.set(tokenId, tMs);
+    staleFlagged.delete(tokenId);
+  };
+
+  const sweepStale = (): void => {
+    const now = Date.now();
+    for (const [tokenId, seenAt] of lastSeenAtMs) {
+      if (now - seenAt <= staleThresholdMs || staleFlagged.has(tokenId)) continue;
+      staleFlagged.add(tokenId);
+      opts.logger.warn({ tokenId, quietMs: now - seenAt }, "Token quiet — marking snapshot stale");
+      opts.marketSnapshots.markStale(tokenId).catch((e: unknown) => {
+        opts.logger.warn({ err: e, tokenId }, "Failed to mark snapshot as stale");
+      });
+    }
+  };
+  const staleSweepTimer = setInterval(sweepStale, 10_000);
+
   const client = new MarketWsClient({
     wsUrl: opts.wsUrl,
-    staleThresholdMs: opts.staleThresholdMs ?? 30_000,
 
     onMessage: (msgs) => {
+      const now = Date.now();
+      for (const m of msgs) {
+        if (m.event_type === "price_change") {
+          for (const item of priceChangeItems(m)) noteSeen(item.assetId, now);
+        } else if (typeof m.asset_id === "string") {
+          noteSeen(m.asset_id, now);
+        }
+      }
       handleMessages(msgs, opts).catch((e: unknown) => {
         opts.logger.warn({ err: e }, "Market feed message handler error");
       });
@@ -236,15 +300,6 @@ export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedMana
       if (now - lastUnparsedLogMs < 60_000) return;
       lastUnparsedLogMs = now;
       opts.logger.warn({ total, sample }, "Market WS messages failed schema validation");
-    },
-
-    onStale: (tokenIds) => {
-      for (const tokenId of tokenIds) {
-        opts.logger.warn({ tokenId }, "Market WS data stale — marking snapshot");
-        opts.marketSnapshots.markStale(tokenId).catch((e: unknown) => {
-          opts.logger.warn({ err: e, tokenId }, "Failed to mark snapshot as stale");
-        });
-      }
     },
 
     onStateChange: (state) => {
@@ -263,9 +318,24 @@ export const createMarketFeedManager = (opts: MarketFeedOptions): MarketFeedMana
   });
 
   return {
-    subscribe: (tokenIds) => client.subscribe(tokenIds),
-    unsubscribe: (tokenIds) => client.unsubscribe(tokenIds),
+    subscribe: (tokenIds) => {
+      const now = Date.now();
+      for (const tokenId of tokenIds) {
+        if (!lastSeenAtMs.has(tokenId)) lastSeenAtMs.set(tokenId, now);
+      }
+      client.subscribe(tokenIds);
+    },
+    unsubscribe: (tokenIds) => {
+      for (const tokenId of tokenIds) {
+        lastSeenAtMs.delete(tokenId);
+        staleFlagged.delete(tokenId);
+      }
+      client.unsubscribe(tokenIds);
+    },
     state: () => client.currentState,
-    close: () => client.close(),
+    close: () => {
+      clearInterval(staleSweepTimer);
+      client.close();
+    },
   };
 };

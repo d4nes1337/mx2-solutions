@@ -18,6 +18,7 @@ vi.mock("@/lib/queries", () => ({
     isPending: false,
     mutate: (id: string) => calls.dismissed.push(id),
   }),
+  useTriggers: () => ({ data: undefined }),
 }));
 vi.mock("@/lib/strategies/store", () => ({
   useBuilderStore: (sel: (s: { spawnDraft: () => string }) => unknown) =>

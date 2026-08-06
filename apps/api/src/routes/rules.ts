@@ -49,6 +49,12 @@ export interface RulesRoutesDeps {
   /** Primary-account context for the trigger detail (mobile sign page). */
   tradingAccounts?: TradingAccountStore;
   accountClobCredentials?: TradingAccountClobCredentialStore;
+  /**
+   * Realtime fan-out: trigger status mutations publish an action-center
+   * refresh hint so every open tab converges instantly instead of on its
+   * next poll. Best-effort — absence or failure degrades to polling.
+   */
+  publishEvent?: (e: { kind: string; walletAddress: string; [k: string]: unknown }) => void;
 }
 
 // ── Request validation ────────────────────────────────────────────────────────
@@ -654,6 +660,18 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         };
       }
     }
+    // The signing modal discloses the ORDER market's live quote + data age —
+    // these fields were referenced by the client but never returned, so the
+    // "data Ns old" disclosure silently never rendered.
+    const preparedMarket = (trigger.evidence as { preparedAction?: OrderActionV2 } | null)
+      ?.preparedAction;
+    const orderTokenId =
+      preparedMarket?.kind === "order"
+        ? preparedMarket.market.tokenId
+        : def.action.kind === "order"
+          ? def.action.market.tokenId
+          : rule.tokenId;
+    const orderView = views[orderTokenId];
     return {
       trigger,
       evidence: trigger.evidence,
@@ -663,6 +681,9 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
         isStale: evaluation.staleTokenIds.length > 0,
         root: evaluation.root,
         staleTokenIds: evaluation.staleTokenIds,
+        bestAsk: orderView?.asks[0]?.price ?? null,
+        bestBid: orderView?.bids[0]?.price ?? null,
+        dataAgeMs: orderView ? Math.max(0, nowMs - orderView.receivedAtMs) : null,
       },
       preview: buildOrderPreview(
         def,
@@ -732,6 +753,12 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       subject: `rule:${trigger.ruleId}`,
       metadata: { triggerId: id, orderIntentId: orderIntentId ?? null },
     });
+    deps.publishEvent?.({
+      kind: "trigger.confirmed",
+      walletAddress: user.walletAddress,
+      triggerId: id,
+      ruleId: trigger.ruleId,
+    });
     return { ok: true, status: "confirmed" };
   });
 
@@ -757,6 +784,12 @@ export const registerRulesRoutes = (app: FastifyInstance, deps: RulesRoutesDeps)
       action: "rule.trigger.dismissed",
       subject: `rule:${trigger.ruleId}`,
       metadata: { triggerId: id },
+    });
+    deps.publishEvent?.({
+      kind: "trigger.dismissed",
+      walletAddress: user.walletAddress,
+      triggerId: id,
+      ruleId: trigger.ruleId,
     });
     return { ok: true, status: "dismissed" };
   });

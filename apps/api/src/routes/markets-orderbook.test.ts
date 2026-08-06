@@ -69,6 +69,7 @@ const buildHarness = (opts: { snapshot?: MarketSnapshotRow | null; restBook?: "o
     },
     findByTokenId: async () => opts.snapshot ?? null,
     markStale: async () => {},
+    setMarketStatus: async () => {},
   };
 
   const app = Fastify({ logger: false });

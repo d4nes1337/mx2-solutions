@@ -1,9 +1,9 @@
 import type { Logger } from "@mx2/observability";
 import type {
   AuditStore,
+  CommitTrigger,
   NotificationOutboxStore,
   RuleStore,
-  TriggerStore,
   ConditionalRuleRow,
 } from "@mx2/db";
 import {
@@ -18,6 +18,8 @@ import {
   transitionV2,
   type EvalEventV2,
   type MarketDataView,
+  type MarketStatus,
+  type PriceSample,
   type ResolvedSeriesWindow,
   type RuleDefinition,
   type SeriesRef,
@@ -29,7 +31,19 @@ import {
   type WatermarksByNode,
 } from "@mx2/rules";
 import type { AutoExecutor } from "./auto-executor.js";
+import { createPriceSeeder } from "./price-seeder.js";
 import { createPriceWindowStore } from "./price-window.js";
+
+/** Extra history fetched beyond a rule's price_move window (bar-lag margin). */
+const SEED_LOOKBACK_MARGIN_MS = 300_000;
+
+/** Mid of the best bid/ask, or null when either side is empty. */
+const midOf = (view: MarketDataView): number | null => {
+  const bid = view.bids[0]?.price;
+  const ask = view.asks[0]?.price;
+  if (bid === undefined || ask === undefined) return null;
+  return (bid + ask) / 2;
+};
 
 /** Content equality for watermark maps (per-node value, not identity). */
 const watermarksEqual = (a: WatermarksByNode = {}, b: WatermarksByNode = {}): boolean => {
@@ -80,6 +94,16 @@ export interface RuleEvaluatorManager {
   onPrice(tokenId: string, price: number, tMs: number): void;
   onReconnect(): void;
   onTickSizeChange(tokenId: string): void;
+  /**
+   * Real upstream market status (Gamma poller). "closed"/"resolved" →
+   * INVALIDATED for watching rules; "paused" resets accumulating windows;
+   * "open" clears a previous override. Without this, a resolved market was
+   * indistinguishable from a stale feed — rules sat in DATA_STALE forever
+   * and the UI said "no fresh data" about a market that no longer exists.
+   */
+  onMarketStatus(tokenId: string, status: MarketStatus): void;
+  /** Tokens currently watched, with their condition ids (status poller input). */
+  watched(): ReadonlyArray<{ tokenId: string; conditionId: string }>;
   stop(): void;
 }
 
@@ -93,7 +117,13 @@ export interface BookLevelDelta {
 export interface RuleEvaluatorOptions {
   logger: Logger;
   ruleStore: RuleStore;
-  triggerStore: TriggerStore;
+  /**
+   * Atomic trigger commit (packages/db/src/trigger-commit.ts): CAS + trigger
+   * row + outbox row + event-bus NOTIFY in one transaction. The ONLY path
+   * that records a trigger — its all-or-nothing semantics are what guarantee
+   * a fired condition always yields something to sign.
+   */
+  commitTrigger: CommitTrigger;
   auditStore: AuditStore;
   subscribe: (tokenIds: string[]) => void;
   unsubscribe: (tokenIds: string[]) => void;
@@ -121,10 +151,25 @@ export interface RuleEvaluatorOptions {
    */
   fetchOrderbook?: (tokenId: string) => Promise<MarketDataView | null>;
   /**
-   * WS transport liveness. REST verification runs ONLY while this returns
-   * true — a real disconnect must still fail closed (DATA_STALE resets).
+   * Normalized trailing price history (oldest-first, ms timestamps, prices in
+   * (0,1)) for seeding price_move windows at arm/restart and healing reconnect
+   * gaps. Without it a price_move strategy is blind for its full windowMs
+   * after every arm, worker restart, and WS reconnect — the incident class.
+   * Absent → windows fill from live ticks only (legacy behavior).
    */
-  isFeedConnected?: () => boolean;
+  fetchPriceHistory?: (
+    tokenId: string,
+    lookbackMs: number,
+  ) => Promise<readonly PriceSample[] | null>;
+  /**
+   * Persist the evaluator's patched book view (rate-limited to 1 write/s per
+   * token). WS `price_change` deltas and heartbeats refresh ONLY the
+   * in-memory view — without this, an actively-trading market's DB snapshot
+   * ages out and every snapshot reader (dashboard overview, action center)
+   * shows "no fresh data" while the worker's own view is perfectly fresh.
+   * The evaluator owns the only correctly-patched book, so it is the writer.
+   */
+  persistSnapshot?: (view: MarketDataView) => void;
   /** Cadence of the REST freshness-verify pass. Default 10 s. */
   refreshIntervalMs?: number;
   /** Max tokens re-fetched per verify pass (CLOB load bound). Default 8. */
@@ -170,7 +215,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const {
     logger,
     ruleStore,
-    triggerStore,
+    commitTrigger,
     auditStore,
     subscribe,
     unsubscribe,
@@ -188,6 +233,15 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const tokenSubs = new Map<string, Set<string>>();
   const latestView = new Map<string, MarketDataView>();
   const priceWindows = createPriceWindowStore();
+  /**
+   * Seed lookback per price_move token (max across watching rules). Presence
+   * marks a token as feeding move windows — those get seeded at arm and
+   * gap-healed after reconnects instead of going dark for a full windowMs.
+   */
+  const moveLookbackMs = new Map<string, number>();
+  const seeder = opts.fetchPriceHistory
+    ? createPriceSeeder({ logger, priceWindows, fetchPriceHistory: opts.fetchPriceHistory })
+    : null;
   /** Last audited churn event per `${ruleId}:${reason}` (rate limit). */
   const churnAuditAt = new Map<string, number>();
   let reloadTimer: ReturnType<typeof setInterval> | undefined;
@@ -198,6 +252,24 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const refreshInFlightTokens = new Set<string>();
   /** Per-token error backoff: skip a failing token until this timestamp. */
   const refreshBackoffUntil = new Map<string, number>();
+  /** Rate limit for delta/heartbeat-driven snapshot writes (1/s per token). */
+  const lastSnapshotWriteMs = new Map<string, number>();
+  /** tokenId → conditionId for every watched market (status-poller input). */
+  const tokenConditionIds = new Map<string, string>();
+  /** Upstream status overrides (Gamma poller) applied over cached views. */
+  const statusOverride = new Map<string, MarketStatus>();
+
+  const maybePersistSnapshot = (view: MarketDataView): void => {
+    if (!opts.persistSnapshot) return;
+    const last = lastSnapshotWriteMs.get(view.tokenId) ?? 0;
+    if (view.receivedAtMs - last < 1_000) return;
+    lastSnapshotWriteMs.set(view.tokenId, view.receivedAtMs);
+    try {
+      opts.persistSnapshot(view);
+    } catch (e) {
+      logger.warn({ err: e, tokenId: view.tokenId }, "Snapshot persist hook failed");
+    }
+  };
 
   const addRule = (row: ConditionalRuleRow): void => {
     let def: StrategyDefinition;
@@ -211,12 +283,18 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     // does not apply to them (ADR-0014).
     if (def.action.kind === "quote_loop") return;
     const tokens = referencedTokenIds(def);
-    const moveTokens = new Set<string>(
-      conditionLeaves(def.expr)
-        .filter((l) => l.condition.kind === "price_move")
-        .map((l) => (l.condition.kind === "price_move" ? l.condition.market.tokenId : ""))
-        .filter((t) => t !== ""),
-    );
+    const moveWindowByToken = new Map<string, number>();
+    for (const leaf of conditionLeaves(def.expr)) {
+      if (leaf.condition.kind === "time_window") continue;
+      tokenConditionIds.set(leaf.condition.market.tokenId, leaf.condition.market.conditionId);
+      if (leaf.condition.kind !== "price_move") continue;
+      const t = leaf.condition.market.tokenId;
+      moveWindowByToken.set(t, Math.max(moveWindowByToken.get(t) ?? 0, leaf.condition.windowMs));
+    }
+    if (def.action.kind === "order" && def.action.rollingSeries === undefined) {
+      tokenConditionIds.set(def.action.market.tokenId, def.action.market.conditionId);
+    }
+    const moveTokens = new Set<string>(moveWindowByToken.keys());
     // Restart policy: resume a mid-accumulation hold window ONLY when the
     // downtime still fits the rule's stale budget (maxDataAgeMs + stale
     // grace) — the same tolerance a live pause gets. A longer gap means we
@@ -281,6 +359,14 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       }
       set.add(row.id);
     }
+    // Seed move windows immediately: without history the strategy would be
+    // blind (fail-closed, but silently) for its full windowMs after arming —
+    // longer than a 5-minute instant market's whole life.
+    for (const [token, windowMs] of moveWindowByToken) {
+      const lookback = Math.max(moveLookbackMs.get(token) ?? 0, windowMs + SEED_LOOKBACK_MARGIN_MS);
+      moveLookbackMs.set(token, lookback);
+      void seeder?.seedToken(token, lookback);
+    }
   };
 
   const removeRule = (id: string): void => {
@@ -298,6 +384,9 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
         tokenSubs.delete(token);
         latestView.delete(token);
         priceWindows.drop(token);
+        moveLookbackMs.delete(token);
+        tokenConditionIds.delete(token);
+        statusOverride.delete(token);
         unsubscribe([token]);
       }
     }
@@ -323,8 +412,14 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   const viewsFor = (ar: ActiveRule): ViewsByToken => {
     const views: Record<string, MarketDataView> = {};
     for (const token of ar.tokens) {
-      const v = latestView.get(token);
-      if (!v) continue;
+      const cached = latestView.get(token);
+      if (!cached) continue;
+      // Upstream status (Gamma poller) outranks the view's hard-coded "open".
+      const override = statusOverride.get(token);
+      const v =
+        override && cached.marketStatus !== override
+          ? { ...cached, marketStatus: override }
+          : cached;
       if (ar.moveTokens.has(token)) {
         const priceHistory = priceWindows.history(token);
         views[token] = priceHistory ? { ...v, priceHistory } : v;
@@ -416,6 +511,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     ar: ActiveRule,
     incoming: TransitionResultV2,
     nowMs: number,
+    feedReceivedAtMs: number | null,
   ): Promise<void> => {
     let result = incoming;
 
@@ -438,7 +534,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       }
     }
 
-    const updated = await ruleStore.updateEvaluationState(ar.id, {
+    const stateUpdate = {
       status: result.runtime.status,
       trueSinceMs: result.runtime.trueSinceMs,
       lastEvaluatedAt: new Date(nowMs),
@@ -446,90 +542,151 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       cooldownUntilMs: result.runtime.cooldownUntilMs,
       watermarks: result.runtime.watermarks ?? {},
       staleSinceMs: result.runtime.staleSinceMs ?? null,
-    });
-    if (!updated) {
-      // The rule was concurrently controlled (paused/cancelled) — user wins.
-      removeRule(ar.id);
-      return;
-    }
+    };
 
-    if (result.trigger) {
-      // Defensive single-trigger guard (once-recurrence only; repeat strategies
-      // legitimately produce one trigger per repetition).
-      const duplicate = ar.def.recurrence.kind === "once" && (await triggerStore.hasForRule(ar.id));
-      if (!duplicate) {
-        const action = ar.def.action;
-        // For a rolling strategy the definition's action still points at the
-        // stale anchor window; the trigger's prepared action is the resolved,
-        // executable one. Everything user-facing below reads `prepared`.
-        const prepared = result.trigger.preparedAction;
-        const isAuto =
-          autoExecutor !== undefined && action.kind === "order" && action.execution === "auto";
-        const trig = await triggerStore.create({
-          ruleId: ar.id,
+    if (!result.trigger) {
+      const updated = await ruleStore.updateEvaluationState(ar.id, stateUpdate);
+      if (!updated) {
+        // The rule was concurrently controlled (paused/cancelled) — user wins.
+        removeRule(ar.id);
+        return;
+      }
+    } else {
+      const action = ar.def.action;
+      // For a rolling strategy the definition's action still points at the
+      // stale anchor window; the trigger's prepared action is the resolved,
+      // executable one. Everything user-facing below reads `prepared`.
+      const prepared = result.trigger.preparedAction;
+      const trigger = result.trigger;
+      const isAuto =
+        autoExecutor !== undefined && action.kind === "order" && action.execution === "auto";
+      const wantsOutbox =
+        outbox !== undefined &&
+        (action.kind === "alert" ||
+          (action.kind === "order" && !isAuto && prepared.kind === "order"));
+
+      // State CAS + trigger row + outbox row + event-bus NOTIFY: one
+      // transaction. Whatever happens, the DB can never say TRIGGERED with
+      // nothing to sign, or hold a signing proposal nobody gets notified for.
+      const commit = await commitTrigger({
+        ruleId: ar.id,
+        stateUpdate,
+        trigger: {
           walletAddress: ar.walletAddress,
-          evidence: result.trigger,
-          reasonCodes: result.trigger.reasonCodes,
+          evidence: trigger,
+          reasonCodes: trigger.reasonCodes,
           status: action.kind === "alert" ? "notified" : "awaiting_user",
-        });
-        await auditStore.emit({
-          actor: ar.walletAddress,
-          action: "rule.triggered",
-          subject: `rule:${ar.id}`,
-          metadata: {
-            triggerId: trig.id,
-            actionKind: action.kind,
-            executionMode: isAuto ? "auto" : action.kind === "order" ? "manual" : "alert",
-            triggerNumber: result.trigger.triggerNumber,
-            windowStartMs: result.trigger.windowStartMs,
-            triggeredAtMs: result.trigger.triggeredAtMs,
-            bestAsk: result.trigger.bestAsk,
-            bestBid: result.trigger.bestBid,
-          },
-        });
+        },
+        outboxItem: wantsOutbox
+          ? (triggerId) =>
+              action.kind === "alert"
+                ? {
+                    walletAddress: ar.walletAddress,
+                    kind: "rule_alert",
+                    dedupeKey: `trigger:${triggerId}:alert`,
+                    payload: {
+                      triggerId,
+                      ruleId: ar.id,
+                      ruleName: ar.name,
+                      bestBid: trigger.bestBid ?? null,
+                      bestAsk: trigger.bestAsk ?? null,
+                    },
+                  }
+                : {
+                    walletAddress: ar.walletAddress,
+                    kind: "order_awaiting_signature",
+                    dedupeKey: `trigger:${triggerId}:sign`,
+                    payload: {
+                      triggerId,
+                      ruleId: ar.id,
+                      ruleName: ar.name,
+                      // Prepared, not defined: for a rolling strategy these
+                      // are the resolved window's terms, not the anchor's.
+                      ...(prepared.kind === "order"
+                        ? {
+                            side: prepared.side,
+                            price: prepared.price,
+                            size: prepared.size,
+                            orderType: prepared.orderType,
+                          }
+                        : {}),
+                      bestBid: trigger.bestBid ?? null,
+                      bestAsk: trigger.bestAsk ?? null,
+                    },
+                  }
+          : null,
+        notify: (triggerId) => ({
+          kind: "rule.triggered",
+          walletAddress: ar.walletAddress,
+          ruleId: ar.id,
+          triggerId,
+        }),
+      });
 
-        // External notification (FEATURE_NOTIFICATIONS). Idempotent by dedupe
-        // key; failures never block the trigger — the row already exists and
-        // the in-app surface still shows it.
-        if (outbox && (action.kind === "alert" || (action.kind === "order" && !isAuto))) {
-          try {
-            if (action.kind === "alert") {
-              await outbox.enqueue({
-                walletAddress: ar.walletAddress,
-                kind: "rule_alert",
-                dedupeKey: `trigger:${trig.id}:alert`,
-                payload: {
-                  triggerId: trig.id,
-                  ruleId: ar.id,
-                  ruleName: ar.name,
-                  bestBid: result.trigger.bestBid ?? null,
-                  bestAsk: result.trigger.bestAsk ?? null,
-                },
-              });
-            } else if (prepared.kind === "order") {
-              await outbox.enqueue({
-                walletAddress: ar.walletAddress,
-                kind: "order_awaiting_signature",
-                dedupeKey: `trigger:${trig.id}:sign`,
-                payload: {
-                  triggerId: trig.id,
-                  ruleId: ar.id,
-                  ruleName: ar.name,
-                  // Prepared, not defined: for a rolling strategy these are
-                  // the resolved window's terms, not the stale anchor's.
-                  side: prepared.side,
-                  price: prepared.price,
-                  size: prepared.size,
-                  orderType: prepared.orderType,
-                  bestBid: result.trigger.bestBid ?? null,
-                  bestAsk: result.trigger.bestAsk ?? null,
-                },
-              });
-            }
-          } catch (e) {
-            logger.warn({ err: e, triggerId: trig.id }, "notification enqueue failed");
-          }
+      if (commit.outcome === "cas_lost") {
+        // The user's pause/cancel wins — but a discarded trigger must be
+        // visible in the timeline, never silent.
+        try {
+          await auditStore.emit({
+            actor: ar.walletAddress,
+            action: "rule.trigger_dropped",
+            subject: `rule:${ar.id}`,
+            metadata: {
+              reason: "cas_lost",
+              triggerNumber: trigger.triggerNumber,
+              windowStartMs: trigger.windowStartMs,
+              triggeredAtMs: trigger.triggeredAtMs,
+            },
+          });
+        } catch (e) {
+          logger.warn({ err: e, ruleId: ar.id }, "trigger_dropped audit failed");
         }
+        removeRule(ar.id);
+        return;
+      }
+
+      if (commit.outcome === "duplicate") {
+        logger.warn(
+          { ruleId: ar.id, triggerNumber: trigger.triggerNumber },
+          "Duplicate trigger suppressed by unique index",
+        );
+      } else {
+        const trig = commit.trigger;
+        const persistedAtMs = Date.now();
+        // Audit + latency record are outside the transaction on purpose: an
+        // audit hiccup must never roll back a signing proposal. Wrapped so a
+        // failure can't bounce the writeChain into a retry of a committed tx.
+        try {
+          await auditStore.emit({
+            actor: ar.walletAddress,
+            action: "rule.triggered",
+            subject: `rule:${ar.id}`,
+            metadata: {
+              triggerId: trig.id,
+              actionKind: action.kind,
+              executionMode: isAuto ? "auto" : action.kind === "order" ? "manual" : "alert",
+              triggerNumber: trigger.triggerNumber,
+              windowStartMs: trigger.windowStartMs,
+              triggeredAtMs: trigger.triggeredAtMs,
+              bestAsk: trigger.bestAsk,
+              bestBid: trigger.bestBid,
+              feedReceivedAtMs,
+              evaluatedAtMs: nowMs,
+              persistedAtMs,
+            },
+          });
+        } catch (e) {
+          logger.warn({ err: e, triggerId: trig.id }, "rule.triggered audit failed");
+        }
+        logger.info(
+          {
+            ruleId: ar.id,
+            triggerId: trig.id,
+            feedToEvalMs: feedReceivedAtMs !== null ? nowMs - feedReceivedAtMs : null,
+            evalToPersistMs: persistedAtMs - nowMs,
+          },
+          "trigger.latency",
+        );
 
         if (action.kind === "stop_strategy") {
           // The strategy's whole purpose is stopping another one — do it now,
@@ -560,7 +717,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
               def: ar.def,
             },
             triggerId: trig.id,
-            evidence: result.trigger,
+            evidence: trigger,
             nowMs,
           });
         } else if (action.kind === "order") {
@@ -570,7 +727,7 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
           );
         } else {
           logger.info(
-            { ruleId: ar.id, triggerId: trig.id, triggerNumber: result.trigger.triggerNumber },
+            { ruleId: ar.id, triggerId: trig.id, triggerNumber: trigger.triggerNumber },
             "Conditional rule triggered — alert recorded",
           );
         }
@@ -640,16 +797,22 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
   };
 
   /**
-   * Background freshness verification: while the WS transport is healthy,
-   * re-fetch the book for subscribed tokens whose view is aging past half the
-   * tightest maxDataAgeMs of the rules watching them. On a quiet market the WS
-   * legitimately sends nothing (deltas only on change), so without this pass
-   * long hold windows would keep resetting as "stale". A real disconnect
-   * skips the pass entirely — staleness then fails closed as before.
+   * Background freshness verification: re-fetch the book for subscribed
+   * tokens whose view is aging past half the tightest maxDataAgeMs of the
+   * rules watching them. On a quiet market the WS legitimately sends nothing
+   * (deltas only on change), so without this pass long hold windows would
+   * keep resetting as "stale".
+   *
+   * Deliberately NOT gated on WS health: a just-fetched REST book is fresh
+   * data regardless of the socket's state, and the old gate disabled the
+   * fallback exactly when it was most needed (reconnect storms, boot before
+   * the first subscribe). Fail-closed still holds — if REST is ALSO down,
+   * views age out and staleness suppresses triggering as before. Load is
+   * bounded by refreshMaxPerPass + the per-token error backoff.
    */
   const refreshQuietTokens = async (): Promise<void> => {
-    const { fetchOrderbook, isFeedConnected } = opts;
-    if (!fetchOrderbook || isFeedConnected?.() !== true) return;
+    const { fetchOrderbook } = opts;
+    if (!fetchOrderbook) return;
     const now = Date.now();
     // Two-tier priority: a token whose rule is mid-dwell (ACTIVE_ACCUMULATING)
     // must never lose its hold window to the per-pass fetch bound — those
@@ -691,6 +854,13 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
           // Never regress: WS may have delivered newer data mid-fetch.
           if (current && current.sourceTimeMs >= view.sourceTimeMs) return;
           latestView.set(token, view);
+          // A REST-verified book is a price observation too — without this,
+          // a market whose data arrives only over REST keeps a fresh book
+          // but a permanently incomplete (→ suppressed) move window.
+          if (moveLookbackMs.has(token)) {
+            const mid = midOf(view);
+            if (mid !== null) priceWindows.push(token, mid, view.sourceTimeMs);
+          }
           reevaluateToken(token);
         } catch (e) {
           refreshBackoffUntil.set(token, Date.now() + 15_000);
@@ -715,9 +885,55 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       !watermarksEqual(result.runtime.watermarks, ar.runtime.watermarks);
     ar.runtime = result.runtime;
     if (!result.transition && !result.trigger && !runtimeChanged) return;
+    // Trigger latency provenance: the newest feed receipt among the views the
+    // decision was made on (null for events that carry no views).
+    let feedReceivedAtMs: number | null = null;
+    if (result.trigger && (event.type === "book" || event.type === "tick") && event.views) {
+      for (const v of Object.values(event.views)) {
+        if (feedReceivedAtMs === null || v.receivedAtMs > feedReceivedAtMs) {
+          feedReceivedAtMs = v.receivedAtMs;
+        }
+      }
+    }
     ar.writeChain = ar.writeChain
-      .then(() => persist(ar, result, event.nowMs))
-      .catch((e: unknown) => logger.warn({ err: e, ruleId: ar.id }, "Rule persist failed"));
+      .then(() => persist(ar, result, event.nowMs, feedReceivedAtMs))
+      .catch(async (e: unknown) => {
+        // One bounded retry, then resync from DB truth. Without this, a
+        // transient DB error left an in-memory zombie: memory says TRIGGERED
+        // (absorbing), the DB row stays ACTIVE, and reload never re-adds the
+        // rule because its id is still registered — the strategy looks armed
+        // and is never evaluated again. The atomic commit makes the retry
+        // safe: a replay of a committed transaction lands as "duplicate".
+        logger.warn({ err: e, ruleId: ar.id }, "Rule persist failed — retrying once");
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        try {
+          await persist(ar, result, event.nowMs, feedReceivedAtMs);
+        } catch (e2: unknown) {
+          logger.error(
+            { err: e2, ruleId: ar.id },
+            "Rule persist failed twice — dropping in-memory state to resync from DB",
+          );
+          if (result.trigger) {
+            auditStore
+              .emit({
+                actor: ar.walletAddress,
+                action: "rule.trigger_dropped",
+                subject: `rule:${ar.id}`,
+                metadata: {
+                  reason: "persist_failed",
+                  triggerNumber: result.trigger.triggerNumber,
+                  triggeredAtMs: result.trigger.triggeredAtMs,
+                },
+              })
+              .catch((e3: unknown) =>
+                logger.warn({ err: e3, ruleId: ar.id }, "trigger_dropped audit failed"),
+              );
+          }
+          // The reload pass re-adds the rule from the DB row (still ACTIVE_*)
+          // and evaluation resumes from persisted truth.
+          removeRule(ar.id);
+        }
+      });
   };
 
   return {
@@ -759,21 +975,41 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
       const view = latestView.get(tokenId);
       // No cached snapshot → never fabricate a book from deltas alone.
       if (!view) return;
-      latestView.set(tokenId, applyDeltas(view, deltas, tMs));
+      const patched = applyDeltas(view, deltas, tMs);
+      latestView.set(tokenId, patched);
+      maybePersistSnapshot(patched);
+      // The PATCHED book's mid is the honest price observation for deltas
+      // whose items carry no best bid/ask (market-feed pushes no sample for
+      // those — a raw level price is never a price).
+      if (moveLookbackMs.has(tokenId)) {
+        const mid = midOf(patched);
+        if (mid !== null) priceWindows.push(tokenId, mid, tMs);
+      }
       reevaluateToken(tokenId);
     },
 
     onHeartbeat(tokenId, tMs) {
       const view = latestView.get(tokenId);
       if (!view || view.sourceTimeMs >= tMs) return;
-      latestView.set(tokenId, { ...view, sourceTimeMs: tMs, receivedAtMs: tMs });
+      const refreshed = { ...view, sourceTimeMs: tMs, receivedAtMs: tMs };
+      latestView.set(tokenId, refreshed);
+      maybePersistSnapshot(refreshed);
+      // "Book unchanged at a newer time" — the unchanged mid is an honest
+      // price sample that keeps a quiet tape's move window covered.
+      if (moveLookbackMs.has(tokenId)) {
+        const mid = midOf(view);
+        if (mid !== null) priceWindows.push(tokenId, mid, tMs);
+      }
       // No re-evaluation: nothing changed but the clock; the 1 s tick covers it.
     },
 
     onPrice(tokenId, price, tMs) {
-      priceWindows.push(tokenId, price, tMs);
+      // One market-channel subscription delivers BOTH outcome tokens' frames
+      // (verified live 2026-08-06) — ignore tokens nothing watches, or their
+      // buffers would grow unread and unbounded.
       const set = tokenSubs.get(tokenId);
       if (!set) return;
+      priceWindows.push(tokenId, price, tMs);
       const now = Date.now();
       for (const id of [...set]) {
         const ar = rules.get(id);
@@ -790,10 +1026,16 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
     },
 
     onReconnect() {
-      // Continuity is broken: accumulating hold-windows reset AND rolling
-      // price windows are wiped (they must refill before price_move can hold).
-      priceWindows.clear();
+      // Continuity is broken: accumulating hold-windows pause via the state
+      // machine, and each move token discards its pre-gap samples (a carry-in
+      // must never silently span a dark period) — then heals from upstream
+      // history, which is authoritative for what the market did while we were
+      // dark, instead of going blind for a full windowMs.
       const now = Date.now();
+      for (const [token, lookback] of moveLookbackMs) {
+        priceWindows.markGap(token, now);
+        void seeder?.seedToken(token, lookback, { force: true });
+      }
       for (const ar of rules.values()) applyEvent(ar, { type: "reconnect", nowMs: now });
     },
 
@@ -805,6 +1047,29 @@ export const createRuleEvaluatorManager = (opts: RuleEvaluatorOptions): RuleEval
         const ar = rules.get(id);
         if (ar) applyEvent(ar, { type: "tick_size_change", nowMs: now });
       }
+    },
+
+    onMarketStatus(tokenId, status) {
+      const prev = statusOverride.get(tokenId);
+      const cleared = status === "open" || status === "unknown";
+      if (cleared) statusOverride.delete(tokenId);
+      else statusOverride.set(tokenId, status);
+      // Only a real change dispatches events (the poller repeats every pass).
+      if (prev === status || (prev === undefined && cleared)) return;
+      const set = tokenSubs.get(tokenId);
+      if (!set) return;
+      const now = Date.now();
+      for (const id of [...set]) {
+        const ar = rules.get(id);
+        if (ar) applyEvent(ar, { type: "market_status", tokenId, status, nowMs: now });
+      }
+    },
+
+    watched() {
+      return [...tokenConditionIds.entries()].map(([tokenId, conditionId]) => ({
+        tokenId,
+        conditionId,
+      }));
     },
 
     stop() {

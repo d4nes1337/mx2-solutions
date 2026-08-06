@@ -430,7 +430,18 @@ export interface OverviewResponse {
   generatedAt: string;
   strategies: StrategyOverviewItem[];
   sparklines: Record<string, SparkPoint[]>;
-  books: Record<string, { bestBid: number | null; bestAsk: number | null; stale: boolean }>;
+  books: Record<
+    string,
+    {
+      bestBid: number | null;
+      bestAsk: number | null;
+      stale: boolean;
+      /** REAL snapshot age at generation time — the UI must never fake this. */
+      dataAgeMs: number | null;
+      /** Upstream status stamp: "resolved" | "closed" | "paused" | null=open. */
+      marketStatus: string | null;
+    }
+  >;
 }
 
 const SPARKLINE_TTL_MS = 60_000;
@@ -661,9 +672,17 @@ export const registerStrategiesRoutes = (
             // The stored flag only moves while the worker runs — age-bound it
             // so a snapshot from before a downtime can't pose as live.
             stale: snapshot.isStale || nowMs - view.receivedAtMs > BOOK_FRESH_MS,
+            dataAgeMs: Math.max(0, nowMs - view.receivedAtMs),
+            marketStatus: snapshot.marketStatus ?? null,
           };
         } else {
-          books[tokenId] = { bestBid: null, bestAsk: null, stale: true };
+          books[tokenId] = {
+            bestBid: null,
+            bestAsk: null,
+            stale: true,
+            dataAgeMs: null,
+            marketStatus: null,
+          };
         }
         const series = sparklineCache.get(tokenId)?.series ?? [];
         sparklines[tokenId] = series;

@@ -1,8 +1,36 @@
 # Project Status
 
-_Last updated: 2026-07-31_
+_Last updated: 2026-08-06_
 
 ## Recent
+
+- **Trigger reliability overhaul (owner-directed 2026-08-06; D-061–D-064, ADR-0030,
+  docs/TRIGGER_RELIABILITY_AUDIT.md).** Root-caused the owner's missed-trigger incident (a
+  real 10¢-in-1m drop on a 5-minute market produced no signing prompt while the panel said
+  "met"): the worker's price_move window started empty at arm/restart, was wiped for every
+  token on any WS reconnect, and was never backfilled — structurally blind for its full
+  lookback. Fixed by seeding windows from CLOB `/prices-history` with merge semantics that
+  never let a seed outrank live data, per-token gap-heal on reconnect, and REST-verify
+  mids feeding windows. Trigger persistence is now ONE transaction (status CAS + trigger
+  row + outbox + `pg_notify`) with a DB unique index on (rule, triggerNumber) and audited
+  drops (`rule.trigger_dropped`) — "TRIGGERED with nothing to sign", silent trigger loss,
+  and duplicate prompts are structurally impossible. Signing prompts now push over
+  Postgres LISTEN/NOTIFY → per-wallet SSE (measured commit→browser ≈ 30 ms vs 4–9 s
+  polling; all polling kept as fallback). Live verification caught and fixed two further
+  pre-existing bugs the blindness had masked: upstream book levels arrive WORST-first, so
+  the raw-`[0]` mid computation had been writing phantom ~0.50 mids (two reproduced FALSE
+  triggers on a flat 12.5¢ market — now impossible; mids always use best levels), and
+  bestless price_change items fed raw deep-book level prices into windows (now never).
+  Also: mandated client WS `PING`/10 s implemented (its absence explains historical
+  reconnect churn), documented `operation: subscribe/unsubscribe` frames, per-token
+  staleness, Gamma market-status polling (resolved markets now INVALIDATE with "market
+  resolved" copy instead of eternal "no fresh data"), and UI truthfulness fixes (real data
+  ages, named quiet markets, Review & sign no longer hostage to a single endpoint).
+  Failing-first scenario suite reproduces the incident end-to-end (raw WS frames →
+  evaluator → trigger row); real-Postgres integration tests prove the transaction, unique
+  index, and NOTIFY-on-commit. Full E2E on the live stack: feed→eval 1 ms, eval→commit
+  12 ms, commit→SSE ≈ 30 ms; a fresh price_move strategy is evaluable ~2 s after arming.
+  Root suite 962 green (+4 env-gated pg tests), web 427 green, `pnpm run check` clean.
 
 - **Blank signing error root-caused; allowlist removed (owner-directed 2026-07-31; D-058,
   D-059, D-060).** The reported empty (`""`) error when signing a ready strategy was not a

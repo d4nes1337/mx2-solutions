@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { AuditStore, ConditionalRuleRow, RuleStore, TriggerStore } from "@mx2/db";
+import type {
+  AuditStore,
+  CommitTrigger,
+  ConditionalRuleRow,
+  RuleStore,
+  RuleTriggerRow,
+} from "@mx2/db";
 import type {
   MarketDataView,
   ResolvedSeriesWindow,
@@ -189,14 +195,33 @@ const makeHarness = (row: ConditionalRuleRow, windowFor: () => ResolvedSeriesWin
     cancel: async () => null,
   } as unknown as RuleStore;
 
-  const triggerStore = {
-    create: async (o: { evidence: Record<string, unknown> }) => {
-      const trig = { id: `trig-${triggers.length + 1}`, ...o };
-      triggers.push(trig);
-      return trig;
-    },
-    hasForRule: async () => false,
-  } as unknown as TriggerStore;
+  // Atomic-commit fake with the same CAS + unique-(rule, triggerNumber)
+  // semantics as packages/db/src/trigger-commit.ts.
+  const commitTrigger: CommitTrigger = async (o) => {
+    const r = rows.find((x) => x.id === o.ruleId);
+    if (!r || !EVALUABLE.has(r.status)) return { outcome: "cas_lost" };
+    r.status = o.stateUpdate.status;
+    r.trueSince = o.stateUpdate.trueSinceMs === null ? null : new Date(o.stateUpdate.trueSinceMs);
+    r.lastEvaluatedAt = o.stateUpdate.lastEvaluatedAt;
+    if (o.stateUpdate.triggerCount !== undefined) r.triggerCount = o.stateUpdate.triggerCount;
+    if (o.stateUpdate.cooldownUntilMs !== undefined) {
+      r.cooldownUntil =
+        o.stateUpdate.cooldownUntilMs === null ? null : new Date(o.stateUpdate.cooldownUntilMs);
+    }
+    const tn = (o.trigger.evidence as { triggerNumber?: number }).triggerNumber;
+    if (
+      tn !== undefined &&
+      triggers.some((t) => (t.evidence as { triggerNumber?: number }).triggerNumber === tn)
+    ) {
+      return { outcome: "duplicate", rule: r };
+    }
+    const trig = {
+      id: `trig-${triggers.length + 1}`,
+      evidence: o.trigger.evidence as unknown as Record<string, unknown>,
+    };
+    triggers.push(trig);
+    return { outcome: "committed", rule: r, trigger: trig as unknown as RuleTriggerRow };
+  };
 
   const auditStore = {
     emit: async (e: AuditRecord) => {
@@ -208,7 +233,7 @@ const makeHarness = (row: ConditionalRuleRow, windowFor: () => ResolvedSeriesWin
   const evaluator = createRuleEvaluatorManager({
     logger,
     ruleStore,
-    triggerStore,
+    commitTrigger,
     auditStore,
     subscribe: () => {},
     unsubscribe: () => {},

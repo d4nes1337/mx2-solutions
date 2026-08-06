@@ -185,6 +185,7 @@ const snapshotFor = (
   midPrice: "0.475",
   source: "ws",
   isStale: false,
+  marketStatus: null,
   receivedAt: new Date(),
   updatedAt: new Date(),
   ...over,
@@ -278,6 +279,7 @@ const buildSmartOrdersApp = (opts: {
     },
     findByTokenId: async (tokenId) => opts.snapshots?.[tokenId] ?? null,
     markStale: async () => {},
+    setMarketStatus: async () => {},
   };
   const gamma: GammaClient = {
     listEvents: async () => ok([]),
@@ -1409,7 +1411,13 @@ describe("GET /api/strategies/overview", () => {
     expect(item.proximity!.bindingTokenId).toBe("tok-1");
     expect(item.rank).toBeGreaterThan(0);
     expect(item.rank).toBeLessThan(1e6);
-    expect(body.books["tok-1"]).toEqual({ bestBid: 0.47, bestAsk: 0.48, stale: false });
+    expect(body.books["tok-1"]).toEqual({
+      bestBid: 0.47,
+      bestAsk: 0.48,
+      stale: false,
+      dataAgeMs: expect.any(Number) as number,
+      marketStatus: null,
+    });
     await app.close();
   });
 
@@ -1420,7 +1428,13 @@ describe("GET /api/strategies/overview", () => {
     const item = body.strategies.find((s) => s.id === id)!;
     expect(item.proximity!.bindingDistance).toBeNull();
     expect(item.rank).toBeGreaterThanOrEqual(2e6);
-    expect(body.books["tok-1"]).toEqual({ bestBid: null, bestAsk: null, stale: true });
+    expect(body.books["tok-1"]).toEqual({
+      bestBid: null,
+      bestAsk: null,
+      stale: true,
+      dataAgeMs: null,
+      marketStatus: null,
+    });
     await app.close();
   });
 

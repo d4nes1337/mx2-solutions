@@ -65,6 +65,12 @@ export const marketSnapshots = pgTable(
     midPrice: text("mid_price"),
     source: text("source").notNull().default("rest"),
     isStale: boolean("is_stale").notNull().default(false),
+    /**
+     * Real upstream market status (migration 0025): "resolved" | "closed" |
+     * "paused"; NULL = open/unknown. Lets the UI distinguish "market resolved"
+     * from "no fresh data".
+     */
+    marketStatus: text("market_status"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -445,6 +451,12 @@ export const ruleTriggers = pgTable(
     index("rule_triggers_auto_unacked_idx")
       .on(t.walletAddress)
       .where(sql`"auto_executed_at" IS NOT NULL AND "acknowledged_at" IS NULL`),
+    // DB-level trigger idempotency (migration 0025): at most one row per
+    // (rule_id, evidence triggerNumber). Expression index — declared here so
+    // schema readers know it exists; the DDL lives in 0025.
+    uniqueIndex("rule_triggers_rule_trigger_number_uidx")
+      .on(t.ruleId, sql`(((evidence->>'triggerNumber'))::int)`)
+      .where(sql`evidence ? 'triggerNumber'`),
   ],
 );
 

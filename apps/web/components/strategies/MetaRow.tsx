@@ -50,7 +50,14 @@ export function MetaRow({ row }: { row: StrategyRow }) {
           {marketLabel(doc, m)}
         </span>
       ))}
-      <span>last check {timeAgo(row.lastEvaluatedAt)}</span>
+      {/* lastEvaluatedAt only advances when state CHANGES — for a healthy,
+          quietly-monitoring strategy an old timestamp reads as "the engine
+          stopped looking", which is exactly wrong. Show the honest thing. */}
+      {row.status === "ACTIVE_WAITING" || row.status === "ACTIVE_ACCUMULATING" ? (
+        <span>monitoring live</span>
+      ) : (
+        <span>last update {timeAgo(row.lastEvaluatedAt)}</span>
+      )}
       {row.triggerCount > 0 ? <span>triggered {row.triggerCount}×</span> : null}
       {exposure(row) ? <span>exposure {exposure(row)}</span> : null}
       {row.expiresAt !== null && new Date(row.expiresAt).getTime() > now ? (

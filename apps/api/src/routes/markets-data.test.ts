@@ -157,6 +157,7 @@ const buildHarness = (dataOverrides: Partial<DataClient> = {}) => {
     },
     findByTokenId: async () => null,
     markStale: async () => {},
+    setMarketStatus: async () => {},
   };
 
   const app = Fastify({ logger: false });

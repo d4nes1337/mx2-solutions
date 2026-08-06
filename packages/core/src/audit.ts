@@ -31,6 +31,13 @@ export const AUDIT_ACTIONS = [
   "rule.created",
   "rule.state_changed",
   "rule.triggered",
+  /**
+   * A computed trigger was NOT recorded: "cas_lost" (a concurrent user
+   * pause/cancel won — correct, but must be visible) or "persist_failed"
+   * (two write attempts failed; the rule was resynced from DB truth and will
+   * re-evaluate). Silent trigger loss is how the incident stayed invisible.
+   */
+  "rule.trigger_dropped",
   "rule.trigger.confirmed",
   "rule.trigger.dismissed",
   /** User dismissed an auto-executed card from the bell (seen, not undone). */

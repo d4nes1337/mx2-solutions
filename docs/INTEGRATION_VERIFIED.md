@@ -61,12 +61,29 @@ Relayer operations (wallet deploy, approvals) are only available in TS/Python SD
 
 ## 5. WebSocket
 
-- Market channel subscribe: `{ "type": "market", "assets_ids": ["<TOKEN_ID>"], ... }`.
+- Market channel initial subscribe: `{ "type": "market", "assets_ids": ["<TOKEN_ID>"], ... }`.
+- **Dynamic membership (re-verified against docs 2026-08-06):** on the OPEN socket, use
+  `{ "assets_ids": [...], "operation": "subscribe" }` to add and
+  `{ "assets_ids": [...], "operation": "unsubscribe" }` to remove tokens. Re-sending the
+  initial-subscription shape for additions is undocumented behavior — do not rely on it.
 - User channel subscribe: `{ "type": "user", "markets": [<market_ids>] }` + auth.
-- Heartbeat: server pings ~every 5s; respond with pong within ~10s or the socket closes.
+- **Heartbeat (re-verified against docs + live 2026-08-06, supersedes the earlier note):**
+  the CLIENT must send the text frame `PING` every 10 s; the server replies with the text
+  frame `PONG`. A client that never pings is dropped by the server — observed live as
+  unexplained reconnect churn before `MarketWsClient` implemented it.
+- **Book level ordering (verified live 2026-08-06):** `book` frames list levels
+  WORST-first (e.g. raw `bids[0]` = 0.01, `asks[0]` = 0.99 on a 12.5¢ market). Never read
+  `[0]` for a best level — sort or scan. A raw-`[0]` mid poisoned price windows with
+  ~0.50 phantoms (false price_move triggers).
+- **Frame fan-out (verified live 2026-08-06):** subscribing ONE outcome token delivers
+  `price_change` items for BOTH of the market's outcome tokens (per-item `asset_id`);
+  consumers must key strictly by item asset id and ignore unwatched tokens.
+- `price_change` items MAY omit `best_bid`/`best_ask`; the raw `price` field is a LEVEL
+  price (possibly deep in the book) — never a price observation.
 - Market channel delivers: orderbook snapshots, price changes, last-trade price, tick-size changes.
 - **Reconnect strategy required:** REST snapshot + WS deltas; on gap/reconnect, re-snapshot and
-  mark data stale until reconciled (see conditional-engine fail-closed policy).
+  mark data stale until reconciled (see conditional-engine fail-closed policy). Price-move
+  windows additionally gap-mark + reseed from `/prices-history` (ADR-0030).
 
 ## 6. Gamma data model
 

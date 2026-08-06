@@ -10,7 +10,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createLogger } from "@mx2/observability";
-import type { AuditStore, ConditionalRuleRow, RuleStore, TriggerStore } from "@mx2/db";
+import type {
+  AuditStore,
+  CommitTrigger,
+  ConditionalRuleRow,
+  RuleStore,
+  RuleTriggerRow,
+} from "@mx2/db";
 import type { MarketDataView, StrategyDefinition } from "@mx2/rules";
 import { createRuleEvaluatorManager, type RuleEvaluatorOptions } from "./rule-evaluator.js";
 
@@ -121,6 +127,16 @@ const makeHarness = (
   const audits: AuditRecord[] = [];
   const h: Harness = { evaluator: null as never, triggers, audits, rows, fetches: 0 };
 
+  const applyUpdate = (
+    row: ConditionalRuleRow,
+    update: { status: string; trueSinceMs: number | null; lastEvaluatedAt: Date },
+  ): ConditionalRuleRow => {
+    row.status = update.status;
+    row.trueSince = update.trueSinceMs === null ? null : new Date(update.trueSinceMs);
+    row.lastEvaluatedAt = update.lastEvaluatedAt;
+    return row;
+  };
+
   const ruleStore = {
     listEvaluable: async () => rows.filter((r) => EVALUABLE.has(r.status)),
     updateEvaluationState: async (
@@ -129,22 +145,37 @@ const makeHarness = (
     ) => {
       const row = rows.find((r) => r.id === id);
       if (!row || !EVALUABLE.has(row.status)) return null;
-      row.status = update.status;
-      row.trueSince = update.trueSinceMs === null ? null : new Date(update.trueSinceMs);
-      row.lastEvaluatedAt = update.lastEvaluatedAt;
-      return row;
+      return applyUpdate(row, update);
     },
     cancel: async () => null,
   } as unknown as RuleStore;
 
-  const triggerStore = {
-    create: async (o: Record<string, unknown>) => {
-      const trig = { id: `trig-${triggers.length + 1}`, ...o };
-      triggers.push(trig);
-      return trig;
-    },
-    hasForRule: async () => false,
-  } as unknown as TriggerStore;
+  // Atomic-commit fake with the trigger-commit.ts contract (CAS + unique
+  // (rule, triggerNumber) index).
+  const commitTrigger: CommitTrigger = async (o) => {
+    const row = rows.find((r) => r.id === o.ruleId);
+    if (!row || !EVALUABLE.has(row.status)) return { outcome: "cas_lost" };
+    applyUpdate(row, o.stateUpdate);
+    const tn = (o.trigger.evidence as { triggerNumber?: number }).triggerNumber;
+    if (
+      tn !== undefined &&
+      triggers.some(
+        (t) =>
+          (t as { ruleId?: string }).ruleId === o.ruleId &&
+          ((t as { evidence: { triggerNumber?: number } }).evidence.triggerNumber ?? null) === tn,
+      )
+    ) {
+      return { outcome: "duplicate", rule: row };
+    }
+    const trig = {
+      id: `trig-${triggers.length + 1}`,
+      ruleId: o.ruleId,
+      evidence: o.trigger.evidence,
+      status: o.trigger.status,
+    };
+    triggers.push(trig);
+    return { outcome: "committed", rule: row, trigger: trig as unknown as RuleTriggerRow };
+  };
 
   const auditStore = {
     emit: async (e: AuditRecord) => {
@@ -156,7 +187,7 @@ const makeHarness = (
   h.evaluator = createRuleEvaluatorManager({
     logger,
     ruleStore,
-    triggerStore,
+    commitTrigger,
     auditStore,
     subscribe: () => {},
     unsubscribe: () => {},
@@ -220,13 +251,12 @@ describe("rule evaluator freshness & dwell", () => {
     h.evaluator.stop();
   });
 
-  it("REST verification keeps a totally silent book fresh while the feed is connected", async () => {
+  it("REST verification keeps a totally silent book fresh", async () => {
     const h = makeHarness([makeRow(defV2({ holdsForMs: 60_000 }))], {
       fetchOrderbook: async () => {
         h.fetches++;
         return view(0.59, Date.now());
       },
-      isFeedConnected: () => true,
     });
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
@@ -239,20 +269,23 @@ describe("rule evaluator freshness & dwell", () => {
     h.evaluator.stop();
   });
 
-  it("fails closed when the feed is disconnected: pause, then reset past the grace", async () => {
+  it("fails closed when WS AND REST are both dark: pause, then reset past the grace", async () => {
+    // Policy change (trigger-reliability overhaul): REST verification is no
+    // longer gated on WS health — REST-fresh data is fresh data. Fail-closed
+    // now requires BOTH paths dead, which this simulates with a failing
+    // fetchOrderbook.
     const h = makeHarness([makeRow(defV2({ holdsForMs: 60_000 }))], {
       fetchOrderbook: async () => {
         h.fetches++;
-        return view(0.59, Date.now());
+        throw new Error("REST down too");
       },
-      isFeedConnected: () => false,
     });
     h.evaluator.start();
     await vi.advanceTimersByTimeAsync(1);
     h.evaluator.onBook(view(0.59, Date.now()));
     // Inside maxDataAge + grace the window only PAUSES (no trigger either way).
     await vi.advanceTimersByTimeAsync(70_000);
-    expect(h.fetches).toBe(0);
+    expect(h.fetches).toBeGreaterThan(0); // it TRIED — the fallback runs now
     expect(h.triggers).toHaveLength(0);
     expect(h.rows[0]!.status).toBe("ACTIVE_ACCUMULATING");
     expect(churnReasons(h.audits, "STALE_PAUSED").length).toBeGreaterThan(0);

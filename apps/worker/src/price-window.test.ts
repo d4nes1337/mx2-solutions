@@ -48,6 +48,57 @@ describe("price window store", () => {
     expect(store.history("tok")!.length).toBeLessThanOrEqual(7_200);
   });
 
+  it("merge() backfills behind live data; a seed never becomes the newest sample", () => {
+    const store = createPriceWindowStore();
+    store.push("tok", 0.5, 100_000);
+    store.push("tok", 0.42, 160_000);
+    store.merge("tok", [
+      { t: 40_000, p: 0.55 }, // older gap — inserted
+      { t: 100_000, p: 0.99 }, // timestamp collision — live wins
+      { t: 130_000, p: 0.54 }, // between live samples — inserted
+      { t: 200_000, p: 0.6 }, // newer than newest live — REJECTED
+      { t: 50_000, p: 1.5 }, // junk price — rejected
+    ]);
+    expect(store.history("tok")).toEqual([
+      { t: 40_000, p: 0.55 },
+      { t: 100_000, p: 0.5 },
+      { t: 130_000, p: 0.54 },
+      { t: 160_000, p: 0.42 },
+    ]);
+  });
+
+  it("merge() into an empty buffer seeds everything (arm-time backfill)", () => {
+    const store = createPriceWindowStore();
+    store.merge("tok", [
+      { t: 60_000, p: 0.55 },
+      { t: 120_000, p: 0.54 },
+    ]);
+    expect(store.history("tok")).toHaveLength(2);
+    // A later live push still appends normally.
+    store.push("tok", 0.42, 150_000);
+    expect(store.history("tok")!.at(-1)).toEqual({ t: 150_000, p: 0.42 });
+  });
+
+  it("markGap() discards everything at/before the gap; merge() heals it", () => {
+    const store = createPriceWindowStore();
+    store.push("tok", 0.55, 60_000);
+    store.push("tok", 0.55, 120_000);
+    store.markGap("tok", 120_000); // reconnect: pre-gap carry-in must die
+    expect(store.history("tok")).toBeUndefined();
+    store.push("tok", 0.42, 125_000); // first post-gap live tick
+    expect(store.history("tok")).toHaveLength(1);
+    // Seed heals the gap (upstream history is authoritative for the dark span).
+    store.merge("tok", [
+      { t: 60_000, p: 0.55 },
+      { t: 120_000, p: 0.55 },
+    ]);
+    expect(store.history("tok")).toEqual([
+      { t: 60_000, p: 0.55 },
+      { t: 120_000, p: 0.55 },
+      { t: 125_000, p: 0.42 },
+    ]);
+  });
+
   it("clear() wipes everything (reconnect fail-closed)", () => {
     const store = createPriceWindowStore();
     store.push("a", 0.5, 1_000);

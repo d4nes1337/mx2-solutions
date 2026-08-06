@@ -43,6 +43,7 @@ import { createTradingSignerFromConfig } from "./trade/signer-factory.js";
 import { createDepositWalletRelayerFromConfig } from "./trade/deposit-wallet-relayer-factory.js";
 import { createAnthropicAiClient } from "./ai/client.js";
 import { createDiscordOauthClient } from "./lib/discord-oauth.js";
+import { createPgEventBus } from "./lib/event-bus.js";
 
 /** Process entrypoint: wire real dependencies, start serving, shut down cleanly. */
 const main = async (): Promise<void> => {
@@ -117,6 +118,11 @@ const main = async (): Promise<void> => {
         })
       : null;
 
+  // Realtime signing-prompt fast path: LISTEN on the worker's NOTIFY channel
+  // and fan out to SSE clients. Failures degrade to polling.
+  const eventBus = createPgEventBus({ databaseUrl: config.databaseUrl, logger });
+  eventBus.start();
+
   const app = buildApp({
     config,
     logger,
@@ -158,10 +164,12 @@ const main = async (): Promise<void> => {
     geoblockClient,
     bridgeClient,
     aiClient,
+    eventBus,
   });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, "Shutting down");
+    await eventBus.stop();
     await app.close();
     await dbHandle.close();
     process.exit(0);

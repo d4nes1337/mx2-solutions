@@ -6,6 +6,7 @@ import { Header } from "@/components/Header";
 import { TerminalDock } from "@/components/terminal/TerminalDock";
 import { FundsHost } from "@/components/profile/funds/FundsHost";
 import { ActionCenterHost } from "@/components/action-center/ActionCenterHost";
+import { RealtimeSync } from "@/components/RealtimeSync";
 
 /**
  * Global chrome switch. Routes under /m/* are the mobile companion surface
@@ -41,6 +42,9 @@ export function AppChrome({ children }: { children: ReactNode }) {
       {/* Global Action Center — one host for the whole signed-in app, never on
           /m/* restricted routes (this branch already excludes them). */}
       <ActionCenterHost />
+      {/* SSE fast path: pushes trigger events into the query cache instantly;
+          all polling remains as the fallback. */}
+      <RealtimeSync />
     </>
   );
 }

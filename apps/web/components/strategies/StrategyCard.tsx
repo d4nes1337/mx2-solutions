@@ -27,7 +27,7 @@ import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { LiveCaption } from "@/components/charts/LiveCaption";
 import { FlashOnChange } from "@/components/motion";
 import { cents as centsFine, signedUsd } from "@/lib/format";
-import { useDismissTrigger } from "@/lib/queries";
+import { useDismissTrigger, useTriggers } from "@/lib/queries";
 import {
   conditionLeavesOf,
   docFromDefinition,
@@ -68,10 +68,15 @@ function HeroMetric({
   row,
   item,
   now,
+  books,
+  marketTitles,
 }: {
   row: StrategyRow;
   item: StrategyOverviewItem | undefined;
   now: number;
+  books?: OverviewResponse["books"] | undefined;
+  /** tokenId → display title, for naming the market a message is about. */
+  marketTitles?: Map<string, string> | undefined;
 }) {
   const section = sectionOf(row, item);
 
@@ -161,8 +166,31 @@ function HeroMetric({
         </div>
       );
     }
-    if (prox.leaves.some((l) => l.stale)) {
-      return <div className="text-[11px] text-faint">no fresh data</div>;
+    const staleLeaves = prox.leaves.filter((l) => l.stale);
+    if (staleLeaves.length > 0) {
+      // A resolved/closed market is a terminal fact, not a data problem —
+      // saying "no fresh data" about it sent users chasing a feed issue.
+      const ended = staleLeaves.find((l) => {
+        const st = l.tokenId !== null ? books?.[l.tokenId]?.marketStatus : null;
+        return st === "resolved" || st === "closed";
+      });
+      if (ended) {
+        const title = ended.tokenId !== null ? marketTitles?.get(ended.tokenId) : undefined;
+        return (
+          <div className="text-[11px] font-medium text-warn">
+            market resolved{title ? ` — ${title}` : ""}
+          </div>
+        );
+      }
+      // Name WHICH market is quiet instead of a blanket "no fresh data" —
+      // fresh-market leaves on the same card keep rendering their live chart.
+      const first = staleLeaves[0]!;
+      const title = first.tokenId !== null ? marketTitles?.get(first.tokenId) : undefined;
+      return (
+        <div className="text-[11px] text-faint">
+          {title ? `waiting for data — ${title}` : "waiting for fresh data"}
+        </div>
+      );
     }
   }
   return null;
@@ -244,8 +272,12 @@ export function StrategyCard({
     (p) => ({ t: p.t, v: p.p }),
   );
   const book = chartToken !== null ? books?.[chartToken] : undefined;
+  // REAL server-side snapshot age — the previous hardcoded 0 rendered a
+  // 59-second-old book as "updated 1s ago".
   const bookQuote: LiveQuote | null =
-    book && !book.stale ? { bestBid: book.bestBid, bestAsk: book.bestAsk, dataAgeMs: 0 } : null;
+    book && !book.stale
+      ? { bestBid: book.bestBid, bestAsk: book.bestAsk, dataAgeMs: book.dataAgeMs ?? 0 }
+      : null;
   const { series, spliced } = spliceLive(rawSeries, bookQuote, Date.now());
   const chartThreshold =
     chartToken !== null
@@ -288,7 +320,15 @@ export function StrategyCard({
     router.push(`/strategies/new?draft=${id}`);
   };
 
-  const triggerId = overview?.actionability?.triggerId ?? null;
+  // Signing must never hinge on a single data path: when the overview poll is
+  // late/capped and carries no actionability, fall back to the awaiting-
+  // triggers list (same 4s poll the bell uses, invalidated instantly by SSE).
+  const awaitingTriggers = useTriggers();
+  const triggerId =
+    overview?.actionability?.triggerId ??
+    (row.status === "TRIGGERED_AWAITING_USER"
+      ? (awaitingTriggers.data?.triggers.find((t) => t.ruleId === row.id)?.id ?? null)
+      : null);
 
   // Everything the card can do, most urgent first: [0] is THE button, the
   // rest fold into the ⋯ menu. Same handlers as before — this is a re-layout.
@@ -539,7 +579,13 @@ export function StrategyCard({
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <HeroMetric row={row} item={overview} now={now} />
+          <HeroMetric
+            row={row}
+            item={overview}
+            now={now}
+            books={books}
+            marketTitles={new Map(markets.map((m) => [m.tokenId, marketLabel(doc, m)]))}
+          />
           <div className="flex items-center justify-end gap-1.5">
             {primary ? (
               primary.href ? (

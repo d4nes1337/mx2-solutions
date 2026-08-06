@@ -198,6 +198,7 @@ const mockMarketSnapshots: MarketSnapshotStore = {
   },
   findByTokenId: async () => null,
   markStale: async () => {},
+  setMarketStatus: async () => {},
 };
 
 const makeSessRow = (): SessionRow => ({

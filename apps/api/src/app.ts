@@ -46,6 +46,8 @@ import type { TradingSigner } from "@mx2/trading-signer";
 import { createViemAllowanceReader, type AllowanceReader } from "./trade/allowance-bootstrap.js";
 import type { DiscordOauthClient } from "./lib/discord-oauth.js";
 import { registerEventsRoutes } from "./routes/events.js";
+import { registerRealtimeRoutes } from "./routes/realtime.js";
+import { createInProcessEventBus, type EventBus } from "./lib/event-bus.js";
 import { registerBrowseRoutes } from "./routes/browse.js";
 import { registerFeedRoutes } from "./routes/feed.js";
 import { registerMarketsRoutes } from "./routes/markets.js";
@@ -133,6 +135,12 @@ export interface AppDeps {
   allowanceReader?: AllowanceReader | null;
   /** Null/omitted when FEATURE_AI_CHAT is off — the AI route then 503s. */
   aiClient?: AiClient | null;
+  /**
+   * Realtime event bus (SSE fast path for signing prompts). Omitted → an
+   * in-process bus: API-side mutations still push to this instance's SSE
+   * clients, but worker NOTIFYs are not received (tests, no-DB setups).
+   */
+  eventBus?: EventBus;
 }
 
 /**
@@ -157,6 +165,7 @@ export const buildApp = (deps: AppDeps) => {
   // next request — hiding buttons is not access control (brief §4.2). Access
   // is otherwise open; an unknown wallet is not a revoked one.
   const sessions = enforceAccessRevocationOnSessions(deps.sessions, deps.allowlist);
+  const eventBus = deps.eventBus ?? createInProcessEventBus(deps.logger);
   const tradingAccounts =
     deps.tradingAccounts ??
     ({
@@ -418,7 +427,9 @@ export const buildApp = (deps: AppDeps) => {
     runtimeFlags: deps.runtimeFlags,
     tradingAccounts,
     accountClobCredentials,
+    publishEvent: (e) => eventBus.publish(e),
   });
+  registerRealtimeRoutes(fastifyApp, { sessions, eventBus });
   registerStrategiesRoutes(fastifyApp, {
     config: deps.config,
     sessions,
