@@ -437,10 +437,7 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
 
   removeWatchCard: (cardKey) =>
     set((s) => {
-      const expr = removeConditionsWhere(
-        s.doc.expr,
-        (c) => cardKeyForCondition(c) === cardKey,
-      );
+      const expr = removeConditionsWhere(s.doc.expr, (c) => cardKeyForCondition(c) === cardKey);
       const watchedMarkets = s.doc.watchedMarkets.filter((m) => m.tokenId !== cardKey);
       const droppedConditions =
         conditionLeavesOf(expr).length !== conditionLeavesOf(s.doc.expr).length;

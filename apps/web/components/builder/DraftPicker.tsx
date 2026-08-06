@@ -62,7 +62,9 @@ export function DraftPicker({ onOpenDraft }: { onOpenDraft: (id: string) => void
     });
 
   const startBlank = () =>
-    guarded("start a blank strategy", () => onOpenDraft(spawnDraft(undefined, { origin: "blank" })));
+    guarded("start a blank strategy", () =>
+      onOpenDraft(spawnDraft(undefined, { origin: "blank" })),
+    );
 
   const label = (d: DraftMeta) => (d.name.trim() === "" ? "Untitled draft" : d.name);
 
@@ -113,9 +115,7 @@ export function DraftPicker({ onOpenDraft }: { onOpenDraft: (id: string) => void
                   <span className="block truncate text-[12px] font-medium text-fg">
                     {/* The open canvas's live name beats the stored index copy. */}
                     {current && docName.trim() !== "" ? docName : label(d)}
-                    {current ? (
-                      <span className="ml-1.5 text-[10px] text-accent">open</span>
-                    ) : null}
+                    {current ? <span className="ml-1.5 text-[10px] text-accent">open</span> : null}
                   </span>
                   <span className="block text-[10px] text-faint">
                     saved {timeAgo(d.updatedAt / 1000)}

@@ -266,9 +266,7 @@ describe("StrategyGrid (edit mode) — transient state hygiene", () => {
     );
 
     fireEvent.click(screen.getByLabelText("Delete condition: YES price above 67¢"));
-    await waitFor(() =>
-      expect(screen.queryByText("YES price above 67¢")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByText("YES price above 67¢")).toBeNull());
     // Only that row went — its sibling on the same card stays.
     expect(screen.getAllByText("YES price above 60¢").length).toBeGreaterThan(0);
     expect(useBuilderStore.getState().doc.expr.children).toHaveLength(4);

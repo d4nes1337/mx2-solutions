@@ -53,7 +53,11 @@ function BalanceBlock({ onNavigate }: { onNavigate: () => void }) {
             Arima Wallet
             <Badge tone="neutral">Beta</Badge>
           </span>
-          <Link href="/wallet" className="text-[11px] text-muted hover:text-fg" onClick={onNavigate}>
+          <Link
+            href="/wallet"
+            className="text-[11px] text-muted hover:text-fg"
+            onClick={onNavigate}
+          >
             Optional →
           </Link>
         </div>
