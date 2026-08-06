@@ -131,6 +131,9 @@ export function AiPanel({
     // fork). Later turns iterate on the AI's own output in place.
     const s = useBuilderStore.getState();
     if (s.aiHistory.length === 0 && s.dirty && docHasContent(s.doc)) {
+      // Autosave is gone, so the fork has to file the manual version itself —
+      // otherwise the first AI turn would eat the hand-built canvas.
+      useBuilderStore.getState().saveDraftNow();
       spawnDraft(next, { origin: "ai", carryChat: true });
     } else {
       // In-place apply: snapshot for one-tap undo and mark the rows the AI

@@ -28,10 +28,16 @@ import type { MarketFreshness } from "@/lib/strategies/queries";
 import { cents } from "@/lib/strategies/summaries";
 import { computePayoff } from "@/lib/strategies/projection";
 import type { OrderActionV2 } from "@mx2/rules";
+import { DeleteCardButton } from "./DeleteCardButton";
 
 export interface ActCardEdit {
   /** Opens the shared action editor (kind switch + order params). */
   onEditAction: () => void;
+  /**
+   * Resets the action to a blank prepared order — the ACT side's "delete".
+   * A strategy always has an action, so this clears it rather than removing it.
+   */
+  onClearAction: () => void;
   /** Clones this strategy so another market can be traded on the same logic. */
   onDuplicateForMarket?: (() => void) | undefined;
 }
@@ -98,6 +104,13 @@ function OrderTarget({
             ) : (
               <Badge tone="neutral">You sign</Badge>
             )}
+            {edit ? (
+              <DeleteCardButton
+                label="the order"
+                title="Clear the order — back to an empty action"
+                onConfirm={edit.onClearAction}
+              />
+            ) : null}
           </span>
         }
       >
@@ -208,9 +221,16 @@ export function ActTargetCard({
 }) {
   const action = doc.action;
   const editButton = edit ? (
-    <Button variant="ghost" size="sm" onClick={edit.onEditAction}>
-      <Pencil size={11} aria-hidden /> Edit action
-    </Button>
+    <span className="flex items-center gap-1">
+      <Button variant="ghost" size="sm" onClick={edit.onEditAction}>
+        <Pencil size={11} aria-hidden /> Edit action
+      </Button>
+      <DeleteCardButton
+        label="this action"
+        title="Clear the action — back to an empty order"
+        onConfirm={edit.onClearAction}
+      />
+    </span>
   ) : null;
   const ring = selected ? "ring-1 ring-brand/50" : undefined;
 

@@ -77,7 +77,9 @@ export function StrategyGrid({
   const setCardOp = useBuilderStore((s) => s.setCardOp);
   const setRootOp = useBuilderStore((s) => s.setRootOp);
   const select = useBuilderStore((s) => s.select);
-  const removeWatchedMarket = useBuilderStore((s) => s.removeWatchedMarket);
+  const removeNode = useBuilderStore((s) => s.removeNode);
+  const removeWatchCard = useBuilderStore((s) => s.removeWatchCard);
+  const clearAction = useBuilderStore((s) => s.clearAction);
   const lastAiChangedIds = useBuilderStore((s) => s.lastAiChangedIds);
   const selectedNodeId = useBuilderStore((s) => s.doc.selectedNodeId);
 
@@ -159,6 +161,7 @@ export function StrategyGrid({
                     edit
                       ? {
                           onEditRow: openRow,
+                          onDeleteRow: removeNode,
                           onAddCondition: () => {
                             const id = addCondition(
                               defaultCondition(
@@ -170,17 +173,21 @@ export function StrategyGrid({
                             openRow(id);
                           },
                           onSetOp: (op) => setCardOp(card.key, op),
-                          onRemove:
-                            card.placeholder && card.market
-                              ? () => removeWatchedMarket(card.market!.tokenId)
-                              : undefined,
+                          // Takes the card's conditions AND the watched market
+                          // with it — a card is a projection, not a node.
+                          onRemove: () => removeWatchCard(card.key),
                         }
                       : undefined
                   }
                 />
               </div>
             ))}
-            <ComplexLogicStrip doc={doc} complex={projection.complex} onOpenCanvas={onOpenCanvas} />
+            <ComplexLogicStrip
+              doc={doc}
+              complex={projection.complex}
+              onOpenCanvas={onOpenCanvas}
+              onRemoveGroup={edit ? removeNode : undefined}
+            />
             {edit ? (
               <AddMarketBar />
             ) : projection.watch.length === 0 && projection.complex.length === 0 ? (
@@ -221,6 +228,10 @@ export function StrategyGrid({
                       onEditAction: () => {
                         select("action");
                         setSheet({ kind: "action" });
+                      },
+                      onClearAction: () => {
+                        clearAction();
+                        setSheet(null);
                       },
                       onDuplicateForMarket,
                     }

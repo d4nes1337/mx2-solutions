@@ -72,17 +72,39 @@ describe("docHasContent persistence gate", () => {
 });
 
 describe("spawnDraft / loadDraft", () => {
-  it("forks dirty work: the outgoing draft is flushed intact (draft-loss fix)", () => {
+  // Autosave was removed (2026-07-31): drafts are written when the USER says
+  // so. Spawning must therefore persist nothing on its own — callers that
+  // fork deliberately (AI fork, duplicate-for-market) save first.
+  it("spawning persists nothing implicitly", () => {
     const a = useBuilderStore.getState().spawnDraft();
     useBuilderStore.getState().setName("My custom play");
     useBuilderStore.getState().addCondition(priceCondition);
 
     const b = useBuilderStore.getState().spawnDraft({ ...emptyDoc(), name: "Preset" });
     expect(b).not.toBe(a);
+    expect(loadDraftLocal(a)).toBeNull();
+    expect(useBuilderStore.getState().doc.name).toBe("Preset");
+  });
+
+  it("saveDraftNow files the open canvas intact, and a fork then keeps both", () => {
+    const a = useBuilderStore.getState().spawnDraft();
+    useBuilderStore.getState().setName("My custom play");
+    useBuilderStore.getState().addCondition(priceCondition);
+
+    expect(useBuilderStore.getState().saveDraftNow()?.id).toBe(a);
+    expect(useBuilderStore.getState().dirty).toBe(false); // saved = nothing to prompt about
+
+    const b = useBuilderStore.getState().spawnDraft({ ...emptyDoc(), name: "Preset" });
+    expect(b).not.toBe(a);
     const rec = loadDraftLocal(a);
     expect(rec?.doc.name).toBe("My custom play");
     expect(rec?.doc.expr.children).toHaveLength(1);
-    expect(useBuilderStore.getState().doc.name).toBe("Preset");
+  });
+
+  it("saveDraftNow refuses an untouched canvas (no junk drafts)", () => {
+    useBuilderStore.getState().spawnDraft();
+    expect(useBuilderStore.getState().saveDraftNow()).toBeNull();
+    expect(listDraftsLocal()).toHaveLength(0);
   });
 
   it("replaces a pristine spawn in place — cycling presets doesn't spray drafts", () => {
@@ -97,6 +119,7 @@ describe("spawnDraft / loadDraft", () => {
     useBuilderStore.getState().setName("Draft A");
     useBuilderStore.getState().pushAiMessage({ role: "user", content: "hello from A" });
     useBuilderStore.getState().pushAiHistory([{ role: "user", content: "hello from A" }]);
+    useBuilderStore.getState().saveDraftNow();
 
     useBuilderStore.getState().spawnDraft();
     expect(useBuilderStore.getState().aiMessages).toHaveLength(0);

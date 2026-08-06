@@ -249,6 +249,103 @@ describe("StrategyGrid (edit mode) — transient state hygiene", () => {
     await waitFor(() => expect(screen.queryByText("Edit condition")).toBeNull());
   });
 
+  // Everything in the builder must be deletable from the grid: the canvas is
+  // the escape hatch for complex LOGIC, never a requirement for housekeeping.
+  it("deletes a single condition row from the grid", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset(doc);
+    const Live = () => {
+      const live = useBuilderStore((s) => s.doc);
+      return <StrategyGrid doc={live} edit evaluation={evaluation} />;
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Delete condition: YES price above 67¢"));
+    await waitFor(() =>
+      expect(screen.queryByText("YES price above 67¢")).toBeNull(),
+    );
+    // Only that row went — its sibling on the same card stays.
+    expect(screen.getAllByText("YES price above 60¢").length).toBeGreaterThan(0);
+    expect(useBuilderStore.getState().doc.expr.children).toHaveLength(4);
+  });
+
+  it("deletes a whole market card — conditions and the watched market together", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset({ ...doc, watchedMarkets: [m1] });
+    const Live = () => {
+      const live = useBuilderStore((s) => s.doc);
+      return <StrategyGrid doc={live} edit evaluation={evaluation} />;
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
+
+    // Two-click confirm — the first click only arms it.
+    fireEvent.click(screen.getByLabelText("Delete Fed cuts in March"));
+    expect(screen.getByText("Fed cuts in March")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Confirm delete Fed cuts in March"));
+
+    await waitFor(() => expect(screen.queryByText("Fed cuts in March")).toBeNull());
+    const live = useBuilderStore.getState().doc;
+    expect(live.watchedMarkets).toHaveLength(0);
+    expect(JSON.stringify(live.expr)).not.toContain("tok-1");
+    // Untouched markets survive.
+    expect(screen.getByText("BTC above 100k")).toBeInTheDocument();
+  });
+
+  it("clears the action from the ACT card without touching the conditions", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset(doc);
+    const Live = () => {
+      const live = useBuilderStore((s) => s.doc);
+      return <StrategyGrid doc={live} edit evaluation={evaluation} />;
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Delete the order"));
+    fireEvent.click(screen.getByLabelText("Confirm delete the order"));
+
+    await waitFor(() => {
+      const action = useBuilderStore.getState().doc.action;
+      expect(action.kind === "order" && action.market.tokenId).toBe("");
+    });
+    // The conditions on that market are the IF side — they stay put.
+    expect(useBuilderStore.getState().doc.expr.children).toHaveLength(4);
+  });
+
+  it("deletes a grouped-logic block the grid can only render read-only", async () => {
+    mockApis();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useBuilderStore.getState().reset(doc);
+    const Live = () => {
+      const live = useBuilderStore((s) => s.doc);
+      return <StrategyGrid doc={live} edit evaluation={evaluation} />;
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("Grouped logic")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Delete the NOT group"));
+    fireEvent.click(screen.getByLabelText("Confirm delete the NOT group"));
+    await waitFor(() => expect(screen.queryByText("Grouped logic")).toBeNull());
+  });
+
   it("stops flashing AI-changed rows after the cue window", async () => {
     vi.useFakeTimers();
     try {

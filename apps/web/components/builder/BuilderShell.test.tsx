@@ -116,19 +116,13 @@ describe("BuilderShell deep links", () => {
     );
   });
 
-  // THE draft-loss regression: entering via a homepage preset used to reset()
-  // the module-level store, silently wiping a custom strategy in progress.
-  it("?template= forks into a new draft instead of overwriting dirty work", async () => {
+  it("?template= lands on a fresh draft and canonicalizes the URL", async () => {
     searchParams = new URLSearchParams({ template: "anything" });
-    // In-progress custom work from a previous visit lives in the module store.
-    const customId = useBuilderStore.getState().spawnDraft();
+    const previousId = useBuilderStore.getState().spawnDraft();
     useBuilderStore.getState().setName("My custom play");
     renderShell();
 
-    await waitFor(() => expect(useBuilderStore.getState().draftId).not.toBe(customId));
-    // The custom draft survived, flushed to localStorage, unchanged.
-    expect(loadDraftLocal(customId)?.doc.name).toBe("My custom play");
-    // The template landed on a fresh draft and the URL was canonicalized.
+    await waitFor(() => expect(useBuilderStore.getState().draftId).not.toBe(previousId));
     expect(useBuilderStore.getState().doc.name).not.toBe("My custom play");
     expect(replace).toHaveBeenCalledWith(
       expect.stringContaining("/strategies/new?draft="),
@@ -136,19 +130,36 @@ describe("BuilderShell deep links", () => {
     );
   });
 
-  it("bare /strategies/new keeps this session's live canvas", async () => {
+  // Owner decision 2026-07-31: entering the builder is always a fresh start.
+  // It used to resume the live canvas (and, failing that, the most recent
+  // draft, and failing THAT scaffold a default template) — so a bare visit
+  // dropped the user inside a strategy they hadn't asked to open.
+  it("bare /strategies/new opens blank, not the session's last canvas", async () => {
     searchParams = new URLSearchParams();
     const liveId = useBuilderStore.getState().spawnDraft();
     useBuilderStore.getState().setName("Still working on this");
     renderShell();
 
-    await waitFor(() =>
-      expect(replace).toHaveBeenCalledWith(`/strategies/new?draft=${liveId}`, {
-        scroll: false,
-      }),
-    );
-    expect(useBuilderStore.getState().draftId).toBe(liveId);
-    expect(useBuilderStore.getState().doc.name).toBe("Still working on this");
+    await waitFor(() => expect(useBuilderStore.getState().doc.name).toBe(""));
+    expect(useBuilderStore.getState().draftId).not.toBe(liveId);
+    expect(useBuilderStore.getState().doc.expr.children).toHaveLength(0);
+    expect(useBuilderStore.getState().draftOrigin).toBe("blank");
+  });
+
+  it("does not resume the most recent saved draft on a bare visit", async () => {
+    const savedId = useBuilderStore.getState().spawnDraft();
+    useBuilderStore.getState().setName("Saved yesterday");
+    useBuilderStore.getState().saveDraftNow();
+    useBuilderStore.setState({ draftId: null, dirty: false, pristine: true });
+    useBuilderStore.getState().reset(emptyDoc());
+    searchParams = new URLSearchParams();
+    renderShell();
+
+    await waitFor(() => expect(useBuilderStore.getState().draftId).not.toBeNull());
+    expect(useBuilderStore.getState().draftId).not.toBe(savedId);
+    expect(useBuilderStore.getState().doc.name).toBe("");
+    // …but it is still there to reopen from the picker.
+    expect(loadDraftLocal(savedId)?.doc.name).toBe("Saved yesterday");
   });
 });
 

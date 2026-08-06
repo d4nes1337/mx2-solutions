@@ -18,6 +18,8 @@ export function Popover({
   align = "end",
   label,
   panelClassName,
+  autoFocus = true,
+  className,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -28,19 +30,27 @@ export function Popover({
   /** Accessible dialog name. */
   label: string;
   panelClassName?: string;
+  /**
+   * Focus (and select) the panel's first control on open. Right for quick-edit
+   * popovers; wrong for menus, where it would land on whatever button happens
+   * to be first (e.g. "Sign out").
+   */
+  autoFocus?: boolean;
+  /** Wrapper classes — the positioned ancestor outside-click is measured against. */
+  className?: string;
 }) {
   const wrapRef = useOutsideClick<HTMLSpanElement>(open, () => onOpenChange(false));
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !autoFocus) return;
     const first = panelRef.current?.querySelector<HTMLElement>("input, select, textarea, button");
     first?.focus();
     if (first instanceof HTMLInputElement) first.select();
-  }, [open]);
+  }, [open, autoFocus]);
 
   return (
-    <span ref={wrapRef} className="relative inline-flex">
+    <span ref={wrapRef} className={cn("relative inline-flex", className)}>
       {trigger}
       {open ? (
         <div

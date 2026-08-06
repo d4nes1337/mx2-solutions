@@ -5,9 +5,11 @@
  * ("now 63¢") and an honest state chip. Wording and states intentionally
  * mirror the dashboard side panel so every surface describes a condition
  * with the same words. In edit mode the row is a button that opens the
- * shared condition editor; rows the AI just touched flash briefly.
+ * shared condition editor, with a delete control beside it — deleting a
+ * condition must not require opening the canvas; rows the AI just touched
+ * flash briefly.
  */
-import { Pencil } from "lucide-react";
+import { Pencil, X } from "lucide-react";
 import { Badge, cn } from "@/components/ui";
 import { conditionSummary, formatActual } from "@/lib/strategies/summaries";
 import type { StrategyDoc } from "@/lib/strategies/doc";
@@ -19,6 +21,7 @@ export function ConditionRow({
   result,
   showMarketDetail = false,
   onClick,
+  onDelete,
   highlight = false,
 }: {
   doc: StrategyDoc;
@@ -28,6 +31,8 @@ export function ConditionRow({
   showMarketDetail?: boolean;
   /** Edit mode: opens this row's editor. */
   onClick?: (() => void) | undefined;
+  /** Edit mode: removes this condition from the strategy. */
+  onDelete?: (() => void) | undefined;
   /** Flash treatment for rows the AI just added or changed. */
   highlight?: boolean;
 }) {
@@ -64,16 +69,35 @@ export function ConditionRow({
     "flex w-full items-center justify-between gap-3 px-3 py-2",
     highlight && "animate-pulse bg-brand-soft",
   );
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(rowClass, "transition-colors hover:bg-surface-2")}
-      >
-        {body}
-      </button>
-    );
-  }
-  return <div className={rowClass}>{body}</div>;
+  if (!onClick && !onDelete) return <div className={rowClass}>{body}</div>;
+  // The delete control can't nest inside the edit button (invalid HTML and
+  // one swallows the other's click), so the row is a flex pair instead.
+  return (
+    <div className={cn("group/row flex items-center", highlight && "animate-pulse bg-brand-soft")}>
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          className="flex min-w-0 flex-1 items-center justify-between gap-3 py-2 pl-3 pr-1 text-left transition-colors hover:bg-surface-2"
+        >
+          {body}
+        </button>
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 py-2 pl-3 pr-1">
+          {body}
+        </div>
+      )}
+      {onDelete ? (
+        <button
+          type="button"
+          aria-label={`Delete condition: ${summary}`}
+          title="Delete this condition"
+          onClick={onDelete}
+          className="mr-1.5 shrink-0 rounded p-1.5 text-faint opacity-60 transition-all hover:bg-surface-2 hover:text-neg focus-visible:opacity-100 group-hover/row:opacity-100"
+        >
+          <X size={13} aria-hidden />
+        </button>
+      ) : null}
+    </div>
+  );
 }

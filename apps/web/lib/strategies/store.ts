@@ -15,6 +15,7 @@ import type {
   StrategyLimits,
 } from "@mx2/rules";
 import {
+  conditionLeavesOf,
   docHasContent,
   emptyDoc,
   freshNodeId,
@@ -22,6 +23,7 @@ import {
   isBound,
   isTokenReferenced,
   moveNodeInTree,
+  removeConditionsWhere,
   removeNodeFromTree,
   replaceNodeInTree,
   tightenedExpiry,
@@ -97,13 +99,20 @@ export interface BuilderState {
 
   reset: (doc?: StrategyDoc) => void;
   /**
-   * Switch the canvas to a fresh draft. The outgoing draft is flushed to
-   * localStorage first when it has unsaved user work, so no entry point can
-   * overwrite in-progress state. Returns the new draft id.
+   * Switch the canvas to a fresh draft. Nothing is persisted implicitly
+   * (owner decision, 2026-07-31: drafts are saved when the user says so, on
+   * the way out of the editor) — callers that must not lose the outgoing
+   * canvas call `saveDraftNow` first. Returns the new draft id.
    */
   spawnDraft: (doc?: StrategyDoc, opts?: SpawnDraftOptions) => string;
   /** Restore a persisted draft (doc + AI chat). False when missing/unreadable. */
   loadDraft: (id: string) => boolean;
+  /**
+   * Explicitly persist the open canvas as a draft (local index + record) and
+   * mark it clean. Returns the stored record so callers can push it to the
+   * account, or null when there is nothing worth keeping.
+   */
+  saveDraftNow: () => DraftRecord | null;
   /**
    * Start from scratch: wipe the current canvas AND its AI chat, deleting the
    * persisted record. Keeps the draft id so ?draft= URLs stay stable.
@@ -136,6 +145,15 @@ export interface BuilderState {
   addGroup: (op: "and" | "or") => string;
   updateCondition: (id: string, condition: ConditionV2) => void;
   removeNode: (id: string) => void;
+  /**
+   * Delete a whole grid card: every condition on it AND the watched-market
+   * entry behind it, in one step. The grid needs this because a card is not a
+   * node — it is a projection over N sibling conditions plus (maybe) a
+   * watched-market ref, and deleting them piecemeal leaves half a card behind.
+   */
+  removeWatchCard: (cardKey: string) => void;
+  /** Reset the action to a blank prepared order (the ACT card's "delete"). */
+  clearAction: () => void;
   toggleNot: (id: string) => void;
   /** Reparent a condition/group (canvas edge gestures). No-op when refused. */
   moveNode: (id: string, newParentId: string) => void;
@@ -195,6 +213,14 @@ export const draftRecordFromState = (s: BuilderState): DraftRecord => ({
 export const draftNeedsSave = (s: BuilderState): boolean =>
   s.draftId !== null && docHasContent(s.doc) && (s.dirty || s.aiMessages.length > 0);
 
+/**
+ * Work the user would lose by leaving right now. Drives the "save this draft?"
+ * prompt on the way out of the editor — `dirty` is cleared by an explicit save,
+ * so a just-saved canvas never prompts.
+ */
+export const hasUnsavedWork = (s: BuilderState): boolean =>
+  s.draftId !== null && s.dirty && docHasContent(s.doc);
+
 export const useBuilderStore = create<BuilderState>((set, get) => ({
   doc: emptyDoc(),
   revision: 0,
@@ -218,7 +244,6 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
   spawnDraft: (doc, opts) => {
     const s = get();
     const reuse = !opts?.id && s.pristine && s.draftId !== null;
-    if (!reuse && draftNeedsSave(s)) saveDraftLocal(draftRecordFromState(s));
     const id = opts?.id ?? (reuse ? s.draftId! : newDraftId());
     set({
       draftId: id,
@@ -243,7 +268,6 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
     if (s.draftId === id) return true;
     const rec = loadDraftLocal(id);
     if (!rec) return false;
-    if (draftNeedsSave(s)) saveDraftLocal(draftRecordFromState(s));
     set({
       draftId: rec.id,
       draftOrigin: rec.origin,
@@ -259,6 +283,18 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       aiStatus: "idle",
     });
     return true;
+  },
+
+  saveDraftNow: () => {
+    const s = get();
+    if (s.draftId === null) return null;
+    // An untouched canvas is not a draft — saving one would file junk under
+    // the user's drafts every time they glance at the builder.
+    if (!docHasContent(s.doc) && s.aiMessages.length === 0) return null;
+    const record = draftRecordFromState(s);
+    saveDraftLocal(record);
+    set({ dirty: false, pristine: false });
+    return record;
   },
 
   clearCanvas: () => {
@@ -394,6 +430,45 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
           ...s.doc,
           expr: removeNodeFromTree(s.doc.expr, id),
           selectedNodeId: s.doc.selectedNodeId === id ? null : s.doc.selectedNodeId,
+        },
+        s,
+      ),
+    ),
+
+  removeWatchCard: (cardKey) =>
+    set((s) => {
+      const expr = removeConditionsWhere(
+        s.doc.expr,
+        (c) => cardKeyForCondition(c) === cardKey,
+      );
+      const watchedMarkets = s.doc.watchedMarkets.filter((m) => m.tokenId !== cardKey);
+      const droppedConditions =
+        conditionLeavesOf(expr).length !== conditionLeavesOf(s.doc.expr).length;
+      if (!droppedConditions && watchedMarkets.length === s.doc.watchedMarkets.length) return s;
+      // Selection may have pointed at a row (or the market node) that just went.
+      const selected = s.doc.selectedNodeId;
+      const selectedNodeId =
+        selected === null ||
+        selected === `market:${cardKey}` ||
+        (selected !== "action" && !selected.startsWith("market:") && !findNode(expr, selected))
+          ? null
+          : selected;
+      return {
+        ...bump({ ...s.doc, expr, watchedMarkets, selectedNodeId }, s),
+        focusedMarketToken: s.focusedMarketToken === cardKey ? null : s.focusedMarketToken,
+      };
+    }),
+
+  // The doc always HAS an action (ActionV2 isn't optional), so "delete the
+  // action" means reset it to the same blank prepared order a fresh canvas
+  // starts with — including dropping any rolling-series binding.
+  clearAction: () =>
+    set((s) =>
+      bump(
+        {
+          ...s.doc,
+          action: emptyDoc().action,
+          selectedNodeId: s.doc.selectedNodeId === "action" ? null : s.doc.selectedNodeId,
         },
         s,
       ),

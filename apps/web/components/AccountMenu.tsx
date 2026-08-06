@@ -7,6 +7,7 @@
  * status, trading-wallet balance with one-click top-up, portfolio/wallet
  * links, sign out, disconnect.
  */
+import { useState } from "react";
 import Link from "next/link";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useDisconnect } from "wagmi";
@@ -14,23 +15,32 @@ import { ArrowUpRight, LogOut, Unplug } from "lucide-react";
 import { useSession, useSignIn, useSignOut } from "@/lib/auth";
 import { useTradingWallet, useTradingWalletBalance } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
-import { Badge, Button } from "@/components/ui";
+import { Badge, Button, cn } from "@/components/ui";
+import { Popover } from "@/components/ui/Popover";
 
 const short = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 
-function MenuLink({ href, children }: { href: string; children: React.ReactNode }) {
+function MenuLink({
+  href,
+  onNavigate,
+  children,
+}: {
+  href: string;
+  onNavigate: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <Link
       href={href}
       className="block rounded-md px-2 py-1.5 text-sm text-fg hover:bg-surface-2"
-      onClick={(e) => e.currentTarget.closest("details")?.removeAttribute("open")}
+      onClick={onNavigate}
     >
       {children}
     </Link>
   );
 }
 
-function BalanceBlock() {
+function BalanceBlock({ onNavigate }: { onNavigate: () => void }) {
   const walletStatus = useTradingWallet(true);
   const balance = useTradingWalletBalance(walletStatus.data?.provisioned === true);
   if (!walletStatus.data?.provisioned) {
@@ -43,11 +53,7 @@ function BalanceBlock() {
             Arima Wallet
             <Badge tone="neutral">Beta</Badge>
           </span>
-          <Link
-            href="/wallet"
-            className="text-[11px] text-muted hover:text-fg"
-            onClick={(e) => e.currentTarget.closest("details")?.removeAttribute("open")}
-          >
+          <Link href="/wallet" className="text-[11px] text-muted hover:text-fg" onClick={onNavigate}>
             Optional →
           </Link>
         </div>
@@ -69,7 +75,7 @@ function BalanceBlock() {
         <Link
           href="/wallet?topup=1"
           className="inline-flex items-center gap-1 rounded-md border border-brand bg-brand px-2 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-brand-strong"
-          onClick={(e) => e.currentTarget.closest("details")?.removeAttribute("open")}
+          onClick={onNavigate}
         >
           <ArrowUpRight size={11} aria-hidden />
           Add funds
@@ -84,6 +90,9 @@ export function AccountMenu() {
   const signIn = useSignIn();
   const signOut = useSignOut();
   const { disconnect } = useDisconnect();
+  // Was a <details>: it stayed open until its own summary was clicked again.
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
 
   const signInError =
     signIn.error instanceof ApiError || signIn.error instanceof Error ? signIn.error.message : null;
@@ -124,74 +133,100 @@ export function AccountMenu() {
               </div>
             ) : null}
 
-            <details className="group relative">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:border-border-strong [&::-webkit-details-marker]:hidden">
-                <span
-                  aria-hidden
-                  className={`h-1.5 w-1.5 rounded-full ${session.data ? "bg-pos" : "bg-warn"}`}
-                />
-                <span className="tabular">{account.ensName ?? short(account.address)}</span>
-                <span className="text-[10px] text-faint transition-transform group-open:rotate-180">
-                  ▾
-                </span>
-              </summary>
-
-              <div className="absolute right-0 top-full z-40 mt-1.5 w-64 space-y-1.5 rounded-lg border border-border bg-surface p-2 shadow-pop">
-                <div className="flex items-center justify-between gap-2 px-2 py-1">
-                  <span className="tabular text-[12px] font-medium text-fg">
-                    {short(account.address)}
+            <Popover
+              open={open}
+              onOpenChange={setOpen}
+              label="Account"
+              autoFocus={false}
+              panelClassName="z-40 w-64 space-y-1.5 p-2"
+              trigger={
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  aria-label="Account menu"
+                  onClick={() => setOpen((o) => !o)}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:border-border-strong"
+                >
+                  <span
+                    aria-hidden
+                    className={`h-1.5 w-1.5 rounded-full ${session.data ? "bg-pos" : "bg-warn"}`}
+                  />
+                  <span className="tabular">{account.ensName ?? short(account.address)}</span>
+                  <span
+                    className={cn(
+                      "text-[10px] text-faint transition-transform",
+                      open && "rotate-180",
+                    )}
+                  >
+                    ▾
                   </span>
-                  {session.data ? (
-                    <Badge tone="pos" dot>
-                      signed in
-                    </Badge>
-                  ) : (
-                    <Badge tone="warn" dot>
-                      not signed in
-                    </Badge>
-                  )}
-                </div>
-
-                {session.data ? <BalanceBlock /> : null}
-
+                </button>
+              }
+            >
+              <div className="flex items-center justify-between gap-2 px-2 py-1">
+                <span className="tabular text-[12px] font-medium text-fg">
+                  {short(account.address)}
+                </span>
                 {session.data ? (
-                  <div className="space-y-0.5">
-                    <MenuLink href="/portfolio">Portfolio &amp; analytics</MenuLink>
-                    <MenuLink href="/wallet">Wallet settings</MenuLink>
-                    <MenuLink href="/strategies">My strategies</MenuLink>
-                  </div>
+                  <Badge tone="pos" dot>
+                    signed in
+                  </Badge>
                 ) : (
-                  <p className="px-2 py-1 text-[12px] leading-relaxed text-muted">
-                    Sign the message in your wallet to unlock your portfolio and trading.
-                  </p>
+                  <Badge tone="warn" dot>
+                    not signed in
+                  </Badge>
                 )}
+              </div>
 
-                <div className="space-y-0.5 border-t border-border pt-1.5">
-                  {session.data ? (
-                    <button
-                      type="button"
-                      onClick={() => signOut.mutate()}
-                      disabled={signOut.isPending}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-fg"
-                    >
-                      <LogOut size={13} aria-hidden />
-                      Sign out
-                    </button>
-                  ) : null}
+              {session.data ? <BalanceBlock onNavigate={close} /> : null}
+
+              {session.data ? (
+                <div className="space-y-0.5">
+                  <MenuLink href="/portfolio" onNavigate={close}>
+                    Portfolio &amp; analytics
+                  </MenuLink>
+                  <MenuLink href="/wallet" onNavigate={close}>
+                    Wallet settings
+                  </MenuLink>
+                  <MenuLink href="/strategies" onNavigate={close}>
+                    My strategies
+                  </MenuLink>
+                </div>
+              ) : (
+                <p className="px-2 py-1 text-[12px] leading-relaxed text-muted">
+                  Sign the message in your wallet to unlock your portfolio and trading.
+                </p>
+              )}
+
+              <div className="space-y-0.5 border-t border-border pt-1.5">
+                {session.data ? (
                   <button
                     type="button"
                     onClick={() => {
-                      if (session.data) signOut.mutate();
-                      disconnect();
+                      signOut.mutate();
+                      close();
                     }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-neg"
+                    disabled={signOut.isPending}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-fg"
                   >
-                    <Unplug size={13} aria-hidden />
-                    Disconnect wallet
+                    <LogOut size={13} aria-hidden />
+                    Sign out
                   </button>
-                </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (session.data) signOut.mutate();
+                    disconnect();
+                    close();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-surface-2 hover:text-neg"
+                >
+                  <Unplug size={13} aria-hidden />
+                  Disconnect wallet
+                </button>
               </div>
-            </details>
+            </Popover>
           </div>
         );
       }}

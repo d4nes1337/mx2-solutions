@@ -26,14 +26,13 @@ import {
   docMarketRefs,
   type StrategyDoc,
 } from "@/lib/strategies/doc";
-import { listDraftsLocal, markDraftConsumedLocal } from "@/lib/strategies/drafts";
+import { markDraftConsumedLocal } from "@/lib/strategies/drafts";
 import { saveLimitPrefs } from "@/lib/strategies/limit-prefs";
 import { importServerDrafts, markDraftConsumedOnServer } from "@/lib/strategies/drafts-sync";
 import { computePayoff, payoffInputFromDoc } from "@/lib/strategies/projection";
 import { compileDoc, validateDoc } from "@/lib/strategies/compile";
 import { layoutDoc } from "@/lib/strategies/layout";
 import { useBuilderStore } from "@/lib/strategies/store";
-import { useDraftAutosave } from "@/lib/strategies/use-draft-autosave";
 import {
   useAutoReadiness,
   useCreateStrategy,
@@ -53,7 +52,8 @@ import { StrategyGrid } from "@/components/strategies/grid/StrategyGrid";
 import { GridComposer } from "@/components/strategies/grid/GridComposer";
 import { CanvasStrip } from "@/components/strategies/grid/CanvasStrip";
 import { ArmSheet } from "@/components/strategies/ArmSheet";
-import { DraftSwitcher } from "./DraftSwitcher";
+import { DraftPicker } from "./DraftPicker";
+import { UnsavedDraftPrompt } from "./UnsavedDraftPrompt";
 import { SentenceBar } from "./SentenceBar";
 
 /**
@@ -170,9 +170,10 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       canvasRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" }),
     );
   };
-  useDraftAutosave();
-  // Pull the account's drafts into localStorage once per mount (fail-soft when
-  // signed out) — cross-device drafts then show up in the switcher/resume.
+  // Nothing autosaves any more: the canvas is in-memory until the user says
+  // to keep it (UnsavedDraftPrompt asks on the way out). Account drafts are
+  // still imported once per mount (fail-soft when signed out) so the picker
+  // lists what was saved on another device.
   useEffect(() => {
     void importServerDrafts();
   }, []);
@@ -213,13 +214,17 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   // Entry modes: resume a draft (?draft=…), edit an existing strategy, a
   // backtested showcase deep link (?showcase=…), a cockpit entry-scenario deep
   // link (?scenarioMarket=&scenario=…), AI prompt deep link (landing hero,
-  // ?prompt=…), or template-first creation. A ?conditionId=&tokenId=&outcome=
+  // ?prompt=…), or a template deep link. A ?conditionId=&tokenId=&outcome=
   // &title= set pre-binds the template to a market (the cockpit's deep link).
   //
-  // Every path SPAWNS a draft instead of resetting in place: in-progress work
-  // is flushed to its own draft first, so no preset/AI/deep-link entry can
-  // overwrite a custom strategy. The URL is then canonicalized to ?draft=<id>
-  // so remounts resume the same draft instead of re-running the entry.
+  // A BARE /strategies/new always opens blank (owner decision, 2026-07-31):
+  // the builder no longer resumes the last canvas or scaffolds a default
+  // template, so entering it is never "landing inside someone's strategy".
+  // Earlier work is reopened deliberately, through the draft picker.
+  //
+  // Every path SPAWNS a draft instead of resetting in place. The URL is then
+  // canonicalized to ?draft=<id> so a remount resumes the same in-memory
+  // canvas instead of re-running the entry.
   useEffect(() => {
     if (initializedRef.current) return;
     const finish = (draftId?: string) => {
@@ -294,28 +299,11 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
       }
       // Flag off → fall through to the template path (graceful degradation).
     }
-    if (entry.start === "blank") {
-      // Start blank (brief §8.1.6/7): an empty canvas the user builds up
-      // market → condition → action → execution via the Add-a-block palette,
-      // rather than a pre-filled template.
+    // Bare /strategies/new — including ?start=blank (brief §8.1.6/7): an empty
+    // canvas the user builds up market → condition → action → execution.
+    if (!entry.template && !(entry.tokenId && entry.conditionId)) {
       finish(spawnDraft(undefined, { origin: "blank" }));
       return;
-    }
-    const explicitTemplate = Boolean(entry.template || (entry.tokenId && entry.conditionId));
-    if (!explicitTemplate) {
-      // Bare /strategies/new: keep this session's live canvas, else resume
-      // the most recent draft. A first-ever visit falls through to the
-      // default template scaffold.
-      const live = useBuilderStore.getState().draftId;
-      if (live) {
-        finish(live);
-        return;
-      }
-      const recent = listDraftsLocal()[0];
-      if (recent && loadDraft(recent.id)) {
-        finish(recent.id);
-        return;
-      }
     }
     const template = (entry.template ? templateById(entry.template) : null) ?? TEMPLATES[0]!;
     const market =
@@ -434,6 +422,9 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
   const duplicateForMarket = () => {
     const source = useBuilderStore.getState().doc;
     if (source.action.kind !== "order") return;
+    // Duplicating means "keep this one AND start another": with autosave gone,
+    // the source has to be filed explicitly or the fork would eat it.
+    useBuilderStore.getState().saveDraftNow();
     const next: StrategyDoc = {
       ...source,
       name: source.name ? `${source.name} (2nd market)` : "",
@@ -542,31 +533,16 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
           className="min-w-[220px] flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-semibold tracking-tight text-fg outline-none transition-colors placeholder:text-faint hover:border-border focus:border-brand"
           aria-label="Strategy name"
         />
-        <div className="no-scrollbar flex min-w-0 max-w-full items-center gap-2 overflow-x-auto">
-          <DraftSwitcher
+        {/* The preset pills are gone with the Drafts switcher: the builder
+            starts blank, and the only thing to reopen from here is the
+            user's OWN saved work. The pills' overflow-x-auto scroller went
+            with them — it clipped the picker's dropdown. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <DraftPicker
             onOpenDraft={(id) => {
               if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
             }}
           />
-          {TEMPLATES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => {
-                // Spawn (not reset): edited work survives as its own draft.
-                const id = spawnDraft(t.build(), { origin: `template:${t.id}` });
-                if (!editOf) router.replace(`/strategies/new?draft=${id}`, { scroll: false });
-              }}
-              className={cn(
-                "shrink-0 rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
-                doc.templateId === t.id
-                  ? "border-brand/50 bg-brand-soft text-accent"
-                  : "border-border bg-surface text-muted hover:text-fg",
-              )}
-            >
-              {t.name}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -631,6 +607,8 @@ export function BuilderShell({ editOf }: { editOf?: string }) {
         saveError={saveError}
         autoReadiness={autoReadiness.data}
       />
+
+      <UnsavedDraftPrompt />
     </div>
   );
 }

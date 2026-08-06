@@ -1,13 +1,16 @@
 "use client";
 
 /**
- * Draft switcher in the builder header: every canvas the user touched is a
- * draft, and this is where they jump between them — recent drafts with
- * relative time, open/duplicate/delete per row, and "New draft". The list is
- * read from localStorage on open (autosave keeps it current to ~500ms).
+ * "Open a draft" in the builder header — the only way back into earlier work,
+ * now that the builder always opens blank and nothing is autosaved. Replaces
+ * the old Drafts switcher AND the preset-template pills: the user picks from
+ * their own saved strategies, not from someone else's starting points.
+ *
+ * Every switch that would throw the open canvas away goes through the leave
+ * guard, so an unsaved canvas can't vanish behind a click in this menu.
  */
 import { useState } from "react";
-import { ChevronDown, Copy, FileText, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Copy, FilePlus2, FolderOpen, Trash2 } from "lucide-react";
 import { Button, cn } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 import {
@@ -16,14 +19,16 @@ import {
   listDraftsLocal,
   type DraftMeta,
 } from "@/lib/strategies/drafts";
-import { useBuilderStore } from "@/lib/strategies/store";
+import { useLeaveGuard } from "@/lib/strategies/leave-guard";
+import { hasUnsavedWork, useBuilderStore } from "@/lib/strategies/store";
 import { useOutsideClick } from "@/lib/use-outside-click";
 
-export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => void }) {
+export function DraftPicker({ onOpenDraft }: { onOpenDraft: (id: string) => void }) {
   const draftId = useBuilderStore((s) => s.draftId);
   const docName = useBuilderStore((s) => s.doc.name);
   const loadDraft = useBuilderStore((s) => s.loadDraft);
   const spawnDraft = useBuilderStore((s) => s.spawnDraft);
+  const requestLeave = useLeaveGuard((s) => s.request);
 
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState<DraftMeta[]>([]);
@@ -41,25 +46,31 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
     setOpen((o) => !o);
   };
 
-  const openDraft = (id: string) => {
-    if (loadDraft(id)) onOpenDraft(id);
+  /** Run `swap` now, or after the user decides what to do with the open canvas. */
+  const guarded = (because: string, swap: () => void) => {
     setOpen(false);
+    if (!hasUnsavedWork(useBuilderStore.getState())) {
+      swap();
+      return;
+    }
+    requestLeave({ because, run: swap });
   };
 
-  const newDraft = () => {
-    // Force a fresh id even from a pristine canvas — "New draft" is explicit.
-    const id = spawnDraft(undefined, { origin: "blank" });
-    onOpenDraft(id);
-    setOpen(false);
-  };
+  const openDraft = (id: string) =>
+    guarded("open another draft", () => {
+      if (loadDraft(id)) onOpenDraft(id);
+    });
+
+  const startBlank = () =>
+    guarded("start a blank strategy", () => onOpenDraft(spawnDraft(undefined, { origin: "blank" })));
 
   const label = (d: DraftMeta) => (d.name.trim() === "" ? "Untitled draft" : d.name);
 
   return (
     <div ref={wrapRef} className="relative">
       <Button size="sm" variant="ghost" onClick={toggle} aria-expanded={open}>
-        <FileText size={13} aria-hidden />
-        Drafts
+        <FolderOpen size={13} aria-hidden />
+        Open a draft
         <ChevronDown
           size={12}
           aria-hidden
@@ -68,18 +79,19 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
       </Button>
 
       {open ? (
-        <div className="absolute right-0 top-full z-30 mt-1.5 w-[320px] rounded-lg border border-border bg-surface p-1.5 shadow-pop">
+        <div className="absolute right-0 top-full z-30 mt-1.5 max-h-[70vh] w-[320px] overflow-y-auto rounded-lg border border-border bg-surface p-1.5 shadow-pop">
           <button
             type="button"
-            onClick={newDraft}
+            onClick={startBlank}
             className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-2 text-left text-[12px] font-medium text-accent transition-colors hover:bg-brand-soft"
           >
-            <Plus size={13} aria-hidden /> New draft
+            <FilePlus2 size={13} aria-hidden /> Start blank
           </button>
 
-          {drafts.length === 0 && !draftId ? (
-            <p className="px-2.5 py-2 text-[12px] text-faint">
-              No drafts yet — everything you build is saved here automatically.
+          {drafts.length === 0 ? (
+            <p className="px-2.5 py-2 text-[12px] leading-snug text-faint">
+              No saved drafts yet — build something, then choose{" "}
+              <span className="text-muted">Save draft</span> when you leave the builder.
             </p>
           ) : null}
 
@@ -99,14 +111,14 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
                   className="min-w-0 flex-1 px-1.5 py-2 text-left"
                 >
                   <span className="block truncate text-[12px] font-medium text-fg">
-                    {/* The current draft's live name beats the (≤500ms stale) index copy. */}
+                    {/* The open canvas's live name beats the stored index copy. */}
                     {current && docName.trim() !== "" ? docName : label(d)}
                     {current ? (
-                      <span className="ml-1.5 text-[10px] text-accent">current</span>
+                      <span className="ml-1.5 text-[10px] text-accent">open</span>
                     ) : null}
                   </span>
                   <span className="block text-[10px] text-faint">
-                    {timeAgo(d.updatedAt / 1000)}
+                    saved {timeAgo(d.updatedAt / 1000)}
                   </span>
                 </button>
                 <button
@@ -134,10 +146,9 @@ export function DraftSwitcher({ onOpenDraft }: { onOpenDraft: (id: string) => vo
                     }
                     deleteDraftLocal(d.id);
                     setArmedDelete(null);
-                    if (d.id === draftId) {
-                      // Deleting the open draft: move to a fresh blank canvas.
-                      onOpenDraft(useBuilderStore.getState().spawnDraft());
-                    }
+                    // Deleting the OPEN draft only drops the stored copy; the
+                    // canvas stays put (and is now unsaved work again).
+                    if (d.id === draftId) useBuilderStore.setState({ dirty: true });
                     refresh();
                   }}
                   className={cn(

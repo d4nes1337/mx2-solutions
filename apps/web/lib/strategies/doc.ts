@@ -177,6 +177,26 @@ export const removeNodeFromTree = (root: GroupNode, id: string): GroupNode => {
 };
 
 /**
+ * Remove every condition leaf the predicate matches, collapsing groups the
+ * removal emptied. Used by the grid's "delete this whole card" affordance,
+ * where one click drops N condition nodes at once (removing them one by one
+ * would re-walk the tree N times and can't be expressed as a single undo).
+ */
+export const removeConditionsWhere = (
+  root: GroupNode,
+  matches: (condition: ConditionV2) => boolean,
+): GroupNode => {
+  const strip = (node: ExprNode): ExprNode | null => {
+    if (node.type === "condition") return matches(node.condition) ? null : node;
+    const children = node.children.map(strip).filter((c): c is ExprNode => c !== null);
+    if (node.id !== "root" && children.length === 0) return null;
+    return { ...node, children };
+  };
+  const out = strip(root);
+  return out && out.type === "group" ? out : { ...root, children: [] };
+};
+
+/**
  * Move a node under a new parent, preserving its identity (id, and therefore
  * canvas positions/selection/eval-result identity). Returns the SAME root
  * reference when the move is refused, so callers can detect a no-op.

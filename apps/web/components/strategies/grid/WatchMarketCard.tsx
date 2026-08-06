@@ -10,7 +10,7 @@
  * governed the whole strategy. The header only carries identity: market name,
  * live price, and a "also traded" tag when this market is the order target.
  */
-import { Clock, Plus, RefreshCw, Target, X } from "lucide-react";
+import { Clock, Plus, RefreshCw, Target } from "lucide-react";
 import { Badge, Card, CardHeader, Skeleton, cn } from "@/components/ui";
 import { AreaChart, type ChartPoint } from "@/components/charts/AreaChart";
 import { LiveCaption } from "@/components/charts/LiveCaption";
@@ -22,13 +22,15 @@ import type { MarketFreshness } from "@/lib/strategies/queries";
 import { cents } from "@/lib/strategies/summaries";
 import type { ConditionLiveResult, WatchCard } from "@/lib/strategies/grid-projection";
 import { ConditionRow } from "./ConditionRow";
+import { DeleteCardButton } from "./DeleteCardButton";
 
 export interface WatchCardEdit {
   onEditRow: (nodeId: string) => void;
+  onDeleteRow: (nodeId: string) => void;
   onAddCondition: () => void;
   onSetOp: (op: "and" | "or") => void;
-  /** Placeholder cards only: remove the unreferenced watched market. */
-  onRemove?: (() => void) | undefined;
+  /** Drop the whole card: its conditions AND the watched market behind it. */
+  onRemove: () => void;
 }
 
 /** Threshold reference lines for the price-shaped conditions on this card. */
@@ -148,6 +150,7 @@ export function WatchMarketCard({
             row={row}
             result={results.get(row.nodeId)}
             onClick={edit ? () => edit.onEditRow(row.nodeId) : undefined}
+            onDelete={edit ? () => edit.onDeleteRow(row.nodeId) : undefined}
             highlight={highlightIds?.has(row.nodeId) ?? false}
           />
         </div>
@@ -174,7 +177,16 @@ export function WatchMarketCard({
   if (tokenId === null) {
     return (
       <Card className={ring}>
-        <CardHeader>
+        <CardHeader
+          right={
+            edit ? (
+              <DeleteCardButton
+                label={card.key === "time" ? "the schedule" : "the unbound conditions"}
+                onConfirm={edit.onRemove}
+              />
+            ) : undefined
+          }
+        >
           <span className="inline-flex items-center gap-1.5">
             {card.key === "time" ? <Clock size={12} aria-hidden /> : null}
             {card.key === "time" ? "Schedule" : "Pick a market"}
@@ -209,15 +221,11 @@ export function WatchMarketCard({
               <span className="tabular text-[12px] text-muted">{cents(last)}</span>
             ) : null}
             <PolymarketLink conditionId={card.market?.conditionId} iconOnly />
-            {edit?.onRemove ? (
-              <button
-                type="button"
-                aria-label="Remove market"
-                onClick={edit.onRemove}
-                className="text-faint transition-colors hover:text-neg"
-              >
-                <X size={13} aria-hidden />
-              </button>
+            {edit ? (
+              <DeleteCardButton
+                label={card.market ? marketLabel(doc, card.market) : "this market"}
+                onConfirm={edit.onRemove}
+              />
             ) : null}
           </span>
         }
